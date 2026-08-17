@@ -54,7 +54,7 @@ class LLMGateway:
 
     def _request(self, messages: list[dict], tools: list[dict] | None, stream: bool) -> tuple[str, dict, dict]:
         """构造 POST /chat/completions 的 url / payload / headers（chat 与 chat_stream 共用）。"""
-        if not self.base_url:
+        if not self.base_url and self.provider != "mock":
             raise ValueError("AI 网关未配置 base_url（provider 非 mock 时必填）")
         url = self.base_url + "/chat/completions"
         payload: dict = {"messages": messages, "temperature": self.temperature, "stream": stream}
@@ -63,18 +63,14 @@ class LLMGateway:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # 推理开关：按模型供应商选择参数形态（Unknown 端点不传，走模型默认）
-        if self.reasoning is not None and self.reasoning_supports_param():
-            if self.reasoning:
-                if "o1" in self.model or "o3" in self.model or "o4" in self.model:
-                    payload["reasoning_effort"] = "high"
-                else:
-                    payload["thinking"] = {"type": "enabled"}
+        # 思考强度（OpenAI 兼容统一用 reasoning_effort）：off/None/空 → 不追加参数
+        if self.reasoning not in (None, "", "off") and self.reasoning_supports_param():
+            effort = {"low": "low", "medium": "medium", "high": "high"}.get(self.reasoning)
+            if effort:
+                payload["reasoning_effort"] = effort
             else:
-                if "o1" in self.model or "o3" in self.model or "o4" in self.model:
-                    payload["reasoning_effort"] = "low"
-                else:
-                    payload["thinking"] = {"type": "disabled"}
+                # 不支持 effort 档位的推理模型：仅启用思考
+                payload["thinking"] = {"type": "enabled"}
         headers: dict = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -158,14 +154,8 @@ class LLMGateway:
             yield StreamChunk(tool_calls=calls)
 
     def reasoning_supports_param(self) -> bool:
-        """仅对已知支持推理参数形态的模型/端点注入参数，避免未知端点拒参。"""
-        name = self.model.lower()
-        params = ["deepseek", "o1", "o3", "o4", "reasoning", "r1", "qwen", "glm", "thinking"]
-        if any(k in name for k in params):
-            return True
-        if "volces.com" in self.base_url or "dashscope" in self.base_url or "ollama" in self.base_url:
-            return True
-        return False
+        """本项目仅走 OpenAI 兼容协议；非 mock 模型即视为可接收 reasoning_effort/thinking 参数。"""
+        return self.provider != "mock"
 
 
 class MockProvider:
