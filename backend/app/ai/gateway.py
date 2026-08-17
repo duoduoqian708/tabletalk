@@ -49,7 +49,7 @@ class LLMGateway:
         self.model = cfg.get("model") or ""
         self.temperature = cfg.get("temperature", 0.2)
         self.timeout = cfg.get("timeout", 120)
-        # 推理开关：True 显式开启 · False 显式关闭 · None 跟随模型默认
+        # 推理强度：off/low/medium/high（None/空/False 视为 off；True 视为 high）
         self.reasoning = cfg.get("reasoning")
 
     def _request(self, messages: list[dict], tools: list[dict] | None, stream: bool) -> tuple[str, dict, dict]:
@@ -63,9 +63,15 @@ class LLMGateway:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # 思考强度（OpenAI 兼容统一用 reasoning_effort）：off/None/空 → 不追加参数
-        if self.reasoning not in (None, "", "off") and self.reasoning_supports_param():
-            effort = {"low": "low", "medium": "medium", "high": "high"}.get(self.reasoning)
+        # 思考强度（OpenAI 兼容统一用 reasoning_effort）
+        # 归一：布尔能力标志也兼容（True→high, False→off）；off/None/空 → 不追加参数
+        r = self.reasoning
+        if r is True:
+            r = "high"
+        elif r is False or r in (None, ""):
+            r = "off"
+        if r != "off" and self.reasoning_supports_param():
+            effort = {"low": "low", "medium": "medium", "high": "high"}.get(r)
             if effort:
                 payload["reasoning_effort"] = effort
             else:

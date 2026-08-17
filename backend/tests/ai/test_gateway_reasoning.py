@@ -36,3 +36,11 @@ def test_mock_never_sends_effort():
     gw = LLMGateway({"provider": "mock", "model": "mock", "reasoning": "high"})
     _, payload, _ = gw._request([], None, False)
     assert "reasoning_effort" not in payload
+
+
+def test_bool_false_no_param():
+    assert "reasoning_effort" not in _payload(False)
+
+
+def test_bool_true_maps_to_high():
+    assert _payload(True).get("reasoning_effort") == "high"
