@@ -10,7 +10,8 @@ import {
   setSessionTitle,
   type AiCard,
   type AiEvent,
-  type ReportSectionResult
+  type ReportSectionResult,
+  type ReasoningEffort
 } from '@renderer/api/ai'
 import { toastMsg } from '@renderer/utils/toast'
 import { useChat, generateTitle, relTime, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
@@ -314,10 +315,10 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     void getSettings().then((s) => alive && setSettings(s)).catch(() => undefined)
     return () => { alive = false }
   }, [])
-  // 默认模型是否支持推理 → 决定是否显示「推理思考」开关
+  // 默认模型是否支持推理 → 决定是否显示「思考强度」控件
   const defaultModel = settings?.ai_models.find((m) => m.id === settings.default_ai_model)
   const supportsReasoning = !!defaultModel?.reasoning
-  const [wantThink, setWantThink] = useState(true)
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
   // 按对话选模型：null=跟随默认模型；否则用选中的 ai_models id
   const [modelId, setModelId] = useState<string | null>(null)
   // 报告模式：点击「报告」按钮下一句发送 mode=report（绕过意图分类）
@@ -562,7 +563,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
           session_id: activeId,
           title: activeConv?.title ?? null,
           mode: mode ?? null,
-          reasoning: supportsReasoning ? wantThink : null,
+          reasoning: supportsReasoning ? reasoningEffort : null,
           model_id: modelId ?? undefined,
         },
         (ev: AiEvent) => {
@@ -1018,14 +1019,18 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
             报告{forceReport ? ' ✓' : ''}
           </button>
           {supportsReasoning && (
-            <button
-              className={`rpt-btn think${wantThink ? ' on' : ''}`}
-              title={wantThink ? '推理思考开启：模型先思考再回答' : '推理思考关闭'}
+            <select
+              className="rpt-btn think"
+              value={reasoningEffort}
               disabled={busy}
-              onClick={() => setWantThink((v) => !v)}
+              title="思考强度：关闭 / 低 / 中 / 高（仅支持推理的模型）"
+              onChange={(e) => setReasoningEffort(e.target.value as ReasoningEffort)}
             >
-              推理{wantThink ? ' ✓' : ''}
-            </button>
+              <option value="off">思考：关</option>
+              <option value="low">思考：低</option>
+              <option value="medium">思考：中</option>
+              <option value="high">思考：高</option>
+            </select>
           )}
           <input
             className="a-field"

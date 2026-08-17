@@ -1,5 +1,7 @@
 import { getRuntime, request } from './client'
 
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
 export interface AiChatMsg {
   role: string
   content: string
@@ -72,8 +74,8 @@ export interface ChatParams {
   title?: string | null
   /** 模式：query 单查询（默认）| report 分析报告。前端「报告」按钮显式传 report */
   mode?: 'query' | 'report' | null
-  /** 推理思考开关：显式传 True/False 覆盖本次对话；None 跟随模型配置 */
-  reasoning?: boolean | null
+  /** 思考强度（对话级）：off=关闭 | low | medium | high；仅支持推理的模型可用 */
+  reasoning?: ReasoningEffort | null
   /** 按对话选模型：命中 ai_models 时优先；缺省走默认模型 */
   model_id?: string | null
 }
