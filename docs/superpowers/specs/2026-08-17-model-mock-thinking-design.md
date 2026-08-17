@@ -42,7 +42,7 @@
 - 显示门控不变：仅当 `defaultModel?.reasoning === true`（检测到推理能力）时显示；`provider === 'mock'` 仍禁用。
 - 发送字段：`reasoning` 由 `bool | null` 改为 `str | null`，取值：
   - `"off"`（关闭，默认） / `"low"` / `"medium"` / `"high"`
-  - 关闭时不发思考参数（或发 `"off"`，由后端归一）。
+  - 前端始终发送该字段；后端将 `"off"` 与 `None`/空 归一为"不追加任何思考参数"。
 - 向后兼容：`wantThink` 旧语义（on = high）由新控件 "高" 覆盖。
 
 ### 后端
