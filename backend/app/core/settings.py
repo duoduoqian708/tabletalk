@@ -217,10 +217,6 @@ def _builtin_deepseek() -> dict[str, Any]:
     ))
 
 
-def _builtin_mock() -> dict[str, Any]:
-    return asdict(ModelConfig(id="llm_mock", name="Mock（内置）", provider="mock", builtin=True))
-
-
 def _migrate_from_legacy(data: dict[str, Any]) -> None:
     """如果有旧单组字段但没有 ai_models，自动迁移为列表第一条。"""
     if not data.get("ai_models"):
@@ -236,7 +232,7 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
         )
         data["ai_models"] = [asdict(m)]
         # 默认切到内置 deepseek（用户默认 deepseek 的产品设定），旧模型保留可切回
-        data["ai_models"].extend([_builtin_deepseek(), _builtin_mock()])
+        data["ai_models"].extend([_builtin_deepseek()])
         data["default_ai_model"] = "llm_deepseek"
 
     if not data.get("embedding_models"):
@@ -276,7 +272,7 @@ class SettingsStore:
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
         }
-        # 从 env 初始化默认模型：内置 deepseek-v4-flash（有 key 即可用）+ mock（无 key demo）
+        # 从 env 初始化默认模型：内置 deepseek-v4-flash（有 key 即可用）
         if env.ai_provider != "mock" and env.ai_model:
             env_ai = ModelConfig(
                 id=_new_id("llm"),
@@ -289,10 +285,10 @@ class SettingsStore:
                 timeout=env.ai_timeout,
                 reasoning=env.ai_reasoning,
             )
-            self._data["ai_models"] = [asdict(env_ai), _builtin_deepseek(), _builtin_mock()]
+            self._data["ai_models"] = [asdict(env_ai), _builtin_deepseek()]
             self._data["default_ai_model"] = env_ai.id
         else:
-            self._data["ai_models"] = [_builtin_deepseek(), _builtin_mock()]
+            self._data["ai_models"] = [_builtin_deepseek()]
             self._data["default_ai_model"] = "llm_deepseek"
 
         env_emb = EmbeddingModelConfig(
@@ -330,8 +326,6 @@ class SettingsStore:
         ids = {m.get("id") for m in models}
         if "llm_deepseek" not in ids:
             models.insert(0, _builtin_deepseek())
-        if "llm_mock" not in ids:
-            models.append(_builtin_mock())
         if not self._data.get("default_ai_model"):
             self._data["default_ai_model"] = (
                 "llm_deepseek" if any(m.get("id") == "llm_deepseek" for m in models) else models[0]["id"]

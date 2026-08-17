@@ -12,9 +12,13 @@ async def test_settings_has_ai_models_list(client):
     assert isinstance(body["ai_models"], list)
     assert len(body["ai_models"]) >= 1
     assert "default_ai_model" in body
-    # 默认有 mock 模型
+    # 默认列表不应含内置 mock 模型
+    ids = {m["id"] for m in body["ai_models"]}
+    assert "llm_mock" not in ids
+    # 默认应有 cloud(deepseek) 内置模型
+    assert "llm_deepseek" in ids
     providers = {m["provider"] for m in body["ai_models"]}
-    assert "mock" in providers
+    assert "cloud" in providers
     # api_key 脱敏
     for m in body["ai_models"]:
         assert m["api_key"] in ("", "•••")  # 空或打码
