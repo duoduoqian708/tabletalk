@@ -315,12 +315,14 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     void getSettings().then((s) => alive && setSettings(s)).catch(() => undefined)
     return () => { alive = false }
   }, [])
-  // 默认模型是否支持推理 → 决定是否显示「思考强度」控件
-  const defaultModel = settings?.ai_models.find((m) => m.id === settings.default_ai_model)
-  const supportsReasoning = !!defaultModel?.reasoning
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
   // 按对话选模型：null=跟随默认模型；否则用选中的 ai_models id
   const [modelId, setModelId] = useState<string | null>(null)
+  // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
+  const effectiveModel = settings?.ai_models.find(
+    (m) => m.id === (modelId ?? settings.default_ai_model),
+  )
+  const supportsReasoning = !!effectiveModel?.reasoning
   // 报告模式：点击「报告」按钮下一句发送 mode=report（绕过意图分类）
   const [forceReport, setForceReport] = useState(false)
   // 澄清挂起：报告中等待用户回答澄清问题时渲染内联输入
