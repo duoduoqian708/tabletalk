@@ -1,0 +1,66 @@
+:root {
+  --bg: #fbfbfc;
+  --bg-2: #f5f6f8;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --card-hi: #f5f6f8;
+  --rail: #ffffff;
+  --ink: #14181d;
+  --ink-dim: #5c6675;
+  --ink-faint: #9aa3b1;
+  --line: #f0f1f4;
+  --line-strong: #e0e3e9;
+  --teal: #0a6dff;
+  --teal-dim: rgba(10, 109, 255, 0.07);
+  --amber: #c8871e;
+  --amber-dim: rgba(200, 135, 30, 0.07);
+  --red: #d4453a;
+  --red-dim: rgba(212, 69, 58, 0.06);
+  --green: #0a9d6a;
+  --green-dim: rgba(10, 157, 106, 0.08);
+  --blue: #0a6dff;
+  --blue-dim: rgba(10, 109, 255, 0.07);
+  --ease: cubic-bezier(0.2, 0.8, 0.24, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family:
+    'Hanken Grotesk', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  background:
+    radial-gradient(1100px 500px at 88% -8%, rgba(10, 109, 255, 0.04), transparent 60%),
+    radial-gradient(900px 460px at -6% 108%, rgba(10, 109, 255, 0.03), transparent 55%),
+    var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+::selection {
+  background: rgba(10, 109, 255, 0.16);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+}

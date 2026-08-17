@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C · 仪表盘 Hub · CLEARED</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fafbfc;--surface:#ffffff;--surface-2:#f3f4f7;--surface-3:#eceef2;
+  --line:#e8eaef;--line-strong:#d8dce4;
+  --ink:#171b23;--ink-dim:#5c6675;--ink-faint:#9aa3b1;
+  --teal:#0a9d6a;--teal-dim:rgba(10,157,106,.08);
+  --amber:#b4760e;--amber-dim:rgba(180,118,14,.08);
+  --red:#d4453a;--red-dim:rgba(212,69,58,.07);
+  --blue:#2f6fd0;--blue-dim:rgba(47,111,208,.07);
+  --mono:'JetBrains Mono',monospace;
+  --sans:'Instrument Sans','PingFang SC','Microsoft YaHei',sans-serif;
+  --ease:cubic-bezier(.2,.8,.24,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;overflow:hidden;height:100vh}
+button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+.mono{font-family:var(--mono)}.num{font-variant-numeric:tabular-nums}
+.app{display:grid;grid-template-columns:64px 1fr;grid-template-rows:56px 1fr 28px;height:100vh}
+/* rail */
+.rail{grid-row:1/3;border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px}
+.rail .rl-logo{width:34px;height:34px;border-radius:10px;background:var(--teal);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:600;font-size:13px;margin-bottom:18px}
+.rail .rl-i{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--ink-faint);transition:all .14s;position:relative}
+.rail .rl-i:hover{background:var(--surface-2);color:var(--ink)}
+.rail .rl-i.on{background:var(--teal-dim);color:var(--teal)}
+.rail .rl-i.on::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--teal)}
+.rail .rl-sep{flex:1}
+.rail .rl-u{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#2f6fd0,#7d5cf0);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;font-weight:600}
+/* topbar */
+.appbar{display:flex;align-items:center;gap:14px;padding:0 20px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.85);backdrop-filter:blur(12px);position:relative;z-index:20}
+.abar-title{font-size:13px;color:var(--ink-faint)}
+.abar-title b{color:var(--ink)}
+.spacer{flex:1}
+/* 数据源切换（全局锚，顶栏中央偏左，最大元素） */
+.ds{position:relative}
+.ds-btn{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:12.5px;padding:8px 16px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface);box-shadow:0 1px 3px rgba(20,30,60,.05);transition:all .16s}
+.ds-btn:hover{border-color:var(--teal);box-shadow:0 0 0 4px var(--teal-dim)}
+.ds-btn .d{width:8px;height:8px;border-radius:50%}
+.ds-btn .chev{font-size:9px;color:var(--ink-faint);transition:transform .2s}
+.ds.open .ds-btn .chev{transform:rotate(180deg)}
+.ds-btn .ds-sub{font-size:9px;color:var(--ink-faint);margin-left:2px}
+.ds-menu{position:absolute;top:calc(100% + 9px);left:0;min-width:250px;background:var(--surface);border:1px solid var(--line-strong);border-radius:14px;padding:6px;box-shadow:0 24px 60px -24px rgba(20,30,60,.35);opacity:0;pointer-events:none;transform:translateY(-6px);transition:all .2s var(--ease);z-index:50}
+.ds.open .ds-menu{opacity:1;pointer-events:auto;transform:none}
+.ds-mt{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;color:var(--ink-faint);text-transform:uppercase;padding:8px 12px 5px}
+.ds-mi{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 12px;border-radius:9px;transition:background .12s}
+.ds-mi:hover{background:var(--surface-2)}
+.ds-mi .d{width:8px;height:8px;border-radius:50%}
+.ds-mi .n{font-family:var(--mono);font-size:11.5px}
+.ds-mi .s{margin-left:auto;font-size:9.5px;color:var(--ink-faint)}
+.ds-mi .ck{color:var(--teal);font-size:11px;width:13px;text-align:center}
+.ds-mn{font-size:10px;color:var(--ink-faint);padding:8px 12px 4px;line-height:1.5}
+.tbtn{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);padding:6px 12px;border:1px solid var(--line-strong);border-radius:8px;transition:all .14s}
+.tbtn:hover{color:var(--ink);border-color:var(--ink-faint)}
+.gate-pill{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--teal);background:var(--teal-dim);border-radius:20px;padding:5px 12px}
+.gate-pill i{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(10,157,106,.4)}70%{box-shadow:0 0 0 6px rgba(10,157,106,0)}100%{box-shadow:0 0 0 0 rgba(10,157,106,0)}}
+/* main hub */
+.hub{grid-column:2;grid-row:2;overflow:auto;padding:24px 28px 32px}
+.hub-hero{margin-bottom:22px}
+.hub-hero h1{font-size:24px;font-weight:600;display:flex;align-items:center;gap:12px}
+.hub-hero .db-name{font-family:var(--mono);font-size:15px;color:var(--teal);font-weight:600}
+.hub-hero p{font-size:13px;color:var(--ink-dim);margin-top:6px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;transition:transform .16s var(--ease),box-shadow .16s}
+.kpi:hover{transform:translateY(-2px);box-shadow:0 14px 30px -18px rgba(20,30,60,.25)}
+.kpi .k-l{font-size:11px;color:var(--ink-faint);font-family:var(--mono);letter-spacing:.06em}
+.kpi .k-v{font-size:24px;font-weight:600;margin-top:6px;font-variant-numeric:tabular-nums}
+.kpi .k-v em{font-style:normal;font-size:13px;color:var(--ink-faint);font-weight:400}
+.kpi .k-d{font-size:10px;color:var(--teal);margin-top:4px;font-family:var(--mono)}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;transition:transform .16s var(--ease),box-shadow .16s;display:flex;flex-direction:column}
+.card:hover{transform:translateY(-3px);box-shadow:0 20px 44px -24px rgba(20,30,60,.3)}
+.card .c-h{display:flex;align-items:center;gap:8px;padding:14px 18px 0}
+.card .c-t{font-size:13px;font-weight:600}
+.card .c-s{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+.card .c-b{padding:12px 18px 16px;flex:1}
+.card .c-b .more{margin-top:10px;font-size:11px;color:var(--blue);font-family:var(--mono);cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.card .c-b .more:hover{text-decoration:underline}
+/* schema card */
+.trow{display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:8px;transition:background .12s;cursor:pointer}
+.trow:hover{background:var(--surface-2)}
+.trow .t-ic{width:22px;height:22px;border-radius:6px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--teal)}
+.trow .t-n{font-family:var(--mono);font-size:11px}
+.trow .t-r{font-size:9px;color:var(--ink-faint);margin-left:auto;font-family:var(--mono)}
+.trow .t-fk{font-size:8px;color:var(--blue);font-family:var(--mono)}
+/* quick query */
+.qq{display:flex;gap:8px}
+.qq input{flex:1;background:var(--surface-2);border:1px solid transparent;border-radius:10px;padding:9px 13px;font-size:13px;color:var(--ink);outline:none;transition:border-color .14s}
+.qq input:focus{border-color:var(--teal);background:var(--surface)}
+.qq button{background:var(--teal);color:#fff;border-radius:10px;padding:0 16px;font-family:var(--mono);font-size:11px;font-weight:600;transition:filter .14s}
+.qq button:hover{filter:brightness(1.08)}
+.qr{margin-top:12px;border-top:1px solid var(--line);padding-top:12px;font-family:var(--mono);font-size:10px;color:var(--ink-faint);display:none}
+.qr.show{display:block;animation:vin .3s var(--ease)}
+@keyframes vin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.qr .ok{color:var(--teal)}
+.qr .ms{float:right}
+.qr pre{white-space:pre-wrap;color:var(--ink-dim);margin-top:6px;font-size:9.5px;line-height:1.7}
+/* recent / ai */
+.recent{display:flex;flex-direction:column}
+.re-item{display:flex;align-items:center;gap:10px;padding:8px;border-radius:8px;transition:background .12s;cursor:pointer;font-size:12px}
+.re-item:hover{background:var(--surface-2)}
+.vtag{font-family:var(--mono);font-size:8px;padding:2px 7px;border-radius:10px;flex:none}
+.vtag.ok{color:var(--teal);background:var(--teal-dim)}
+.vtag.warn{color:var(--amber);background:var(--amber-dim)}
+.vtag.bad{color:var(--red);background:var(--red-dim)}
+.re-item .sql{font-family:var(--mono);font-size:10px;color:var(--ink-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.re-item .ms{font-size:9px;color:var(--ink-faint);font-family:var(--mono)}
+.ai-tag{font-size:12px;color:var(--ink-dim);line-height:1.7}
+.ai-tag b{color:var(--ink)}
+/* graph mini */
+.gmini{display:flex;justify-content:center;padding:6px 0}
+.gm-node{position:relative}
+.gm{font-family:var(--mono);font-size:9px;color:var(--ink-dim);background:var(--surface-2);border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;text-align:center}
+.gm.hot{border-color:var(--teal);background:var(--teal-dim);color:var(--ink)}
+.gm .g1{display:block;font-size:10px;color:var(--ink)}
+.gm .g2{font-size:7.5px;color:var(--ink-faint)}
+.gm-line{height:1.5px;background:var(--line-strong);margin:4px auto;width:40px}
+.gm-line.hot{background:var(--teal)}
+.gm-legend{margin-top:8px;display:flex;gap:14px;font-family:var(--mono);font-size:8.5px;color:var(--ink-faint)}
+.gm-legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+/* statusline */
+.statusline{grid-column:1/3;grid-row:3;display:flex;align-items:center;gap:20px;padding:0 20px;border-top:1px solid var(--line);font-family:var(--mono);font-size:9px;color:var(--ink-faint);background:var(--surface)}
+.sl-r{margin-left:auto;display:flex;gap:18px}
+.sl-r b{color:var(--ink-dim);font-weight:500}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- rail -->
+  <aside class="rail">
+    <div class="rl-logo">C</div>
+    <button class="rl-i on">⌂</button>
+    <button class="rl-i">▤</button>
+    <button class="rl-i">◈</button>
+    <button class="rl-i">▤</button>
+    <button class="rl-i">⚙</button>
+    <div class="rl-sep"></div>
+    <div class="rl-u">你</div>
+  </aside>
+
+  <!-- topbar -->
+  <header class="appbar">
+    <span class="abar-title"><b id="pageTitle">总览</b> · 数据源</span>
+    <div class="ds" id="ds">
+      <button class="ds-btn" id="dsBtn"><span class="d" id="dsDot" style="background:var(--teal)"></span><span id="dsName">demo.db</span><span class="ds-sub" id="dsDialect">sqlite</span><span class="chev">▼</span></button>
+      <div class="ds-menu">
+        <div class="ds-mt">数据源 · 全局跟随</div>
+        <button class="ds-mi" data-db="demo.db"><span class="d" style="background:var(--teal)"></span><span class="n">demo.db</span><span class="s">sqlite</span><span class="ck">✓</span></button>
+        <button class="ds-mi" data-db="prod-mysql"><span class="d" style="background:var(--blue)"></span><span class="n">prod-mysql</span><span class="s">mysql</span><span class="ck"></span></button>
+        <button class="ds-mi" data-db="analytics-pg"><span class="d" style="background:var(--amber)"></span><span class="n">analytics-pg</span><span class="s">postgres</span><span class="ck"></span></button>
+        <div class="ds-mn">切换后：schema 摘要 · 快速查询 · 最近结果 · 图谱 · AI 上下文 全部跟随</div>
+      </div>
+    </div>
+    <span class="spacer"></span>
+    <span class="gate-pill"><i></i>gate armed</span>
+    <button class="tbtn">设置</button>
+  </header>
+
+  <!-- hub -->
+  <main class="hub" id="hub">
+    <div class="hub-hero">
+      <h1><span class="db-name" id="heroName">demo.db</span> <span style="font-size:12px;color:var(--ink-faint);font-weight:400" id="heroDialect">sqlite · 演示库</span></h1>
+      <p>数据源总览 · 六个模块围绕当前数据源，切换数据源后全部刷新。</p>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="cards">
+      <!-- schema -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">Schema 摘要</span><span class="c-s" id="schCount"></span></div>
+        <div class="c-b" id="schList"></div>
+      </div>
+      <!-- quick query -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">快速查询</span><span class="c-s">走安全闸门</span></div>
+        <div class="c-b">
+          <div class="qq"><input id="qqInput" placeholder="输入 SQL 或自然语言…"><button id="qqBtn">运行</button></div>
+          <div class="qr" id="qqResult"></div>
+        </div>
+      </div>
+      <!-- recent -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">最近执行</span><span class="c-s" id="recentCount"></span></div>
+        <div class="c-b recent" id="recentList"></div>
+      </div>
+      <!-- ai -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">AI 副驾</span><span class="c-s">model: mock</span></div>
+        <div class="c-b">
+          <div class="ai-tag">问：<b id="aiQ">退货率最高的 10 个商品</b> → 已生成 SQL 卡片，读操作直接放行。</div>
+          <div class="qq" style="margin-top:12px"><input id="aiInput" placeholder="ask your database…"><button id="aiBtn">→</button></div>
+        </div>
+      </div>
+      <!-- graph mini -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">知识图谱</span><span class="c-s">FK 网络</span></div>
+        <div class="c-b">
+          <div class="gmini">
+            <div class="gm-node">
+              <div class="gm"><span class="g1">orders</span><span class="g2">订单 · 12.4k</span></div>
+              <div class="gm-line"></div>
+              <div class="gm"><span class="g1">customers</span><span class="g2">客户</span></div>
+            </div>
+            <div style="width:8px"></div>
+            <div class="gm-node">
+              <div class="gm"><span class="g1">order_items</span><span class="g2">明细</span></div>
+              <div class="gm-line"></div>
+              <div class="gm hot"><span class="g1">products</span><span class="g2">商品</span></div>
+            </div>
+          </div>
+          <div class="gm-legend"><span><i style="background:var(--teal)"></i>已确认标签</span><span><i style="border:1.5px solid var(--teal);background:transparent"></i>命中查询</span></div>
+        </div>
+      </div>
+      <!-- audit -->
+      <div class="card">
+        <div class="c-h"><span class="c-t">审计 · 今日</span><span class="c-s">JSONL</span></div>
+        <div class="c-b recent" id="auditList">
+          <div class="re-item"><span class="vtag ok">放行</span><span class="sql">SELECT p.name, COUNT(*) FROM products…</span><span class="ms">12ms</span></div>
+          <div class="re-item"><span class="vtag warn">确认</span><span class="sql">UPDATE products SET price=price*1.05…</span><span class="ms">48ms</span></div>
+          <div class="re-item"><span class="vtag bad">拦截</span><span class="sql">DELETE FROM orders</span><span class="ms">3ms</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="statusline">
+    <span>gate : <b style="color:var(--teal)">armed</b></span>
+    <span>model : mock</span>
+    <span>dialect : <b id="slD">sqlite</b></span>
+    <div class="sl-r"><span>audit <b>128</b></span><span>⌘K 聚焦</span></div>
+  </footer>
+</div>
+
+<script>
+const DBS={
+  'demo.db':{dot:'var(--teal)',dialect:'sqlite',desc:'演示库',kpi:[[6,2],['3.1k','客户'],['12.4k','订单'],['128','今日执行']],tables:[['orders','12.4k',''],['customers','3.1k',''],['products','1.2k',''],['categories','86',''],['order_items','31.8k','FK2'],['suppliers','54','']]},
+  'prod-mysql':{dot:'var(--blue)',dialect:'mysql',desc:'生产库',kpi:[['45k','用户'],['120k','支付'],['8.2k','库存 SKU'],['86','今日执行']],tables:[['inventory','8.2k',''],['users','45k',''],['payments','120k',''],['shipments','118k',''],['refunds','3.1k','']]},
+  'analytics-pg':{dot:'var(--amber)',dialect:'postgres',desc:'分析库',kpi:[['2.1M','事件'],['410k','会话'],['22k','漏斗步'],['34','今日执行']],tables:[['events','2.1M',''],['sessions','410k',''],['funnel_steps','22k',''],['cohorts','96','']]}
+}
+const RECENT={
+  'demo.db':[['ok','SELECT c.name, COUNT(o.id) FROM orders…','12ms'],['warn','UPDATE products SET price=price*1.05…','48ms'],['bad','DELETE FROM orders','3ms'],['ok','SELECT * FROM order_items LIMIT 50','7ms']],
+  'prod-mysql':[['ok','SELECT * FROM inventory WHERE qty < reorder','87ms'],['warn','UPDATE users SET status="active" WHERE id>1000','120ms'],['ok','SELECT method, SUM(amount) FROM payments…','210ms']],
+  'analytics-pg':[['ok','SELECT step, conversion FROM funnel_steps','34ms'],['ok','SELECT month, retention_d30 FROM cohorts','41ms']]
+}
+let CUR='demo.db'
+const V={"⌂":"总览","▤":"工作台","◈":"图谱","⚙":"设置"}
+function render(){
+  const db=DBS[CUR]
+  document.getElementById('dsDot').style.background=db.dot
+  document.getElementById('dsName').textContent=CUR
+  document.getElementById('dsDialect').textContent=db.dialect
+  document.getElementById('heroName').textContent=CUR
+  document.getElementById('heroDialect').textContent=`${db.dialect} · ${db.desc}`
+  document.getElementById('slD').textContent=db.dialect
+  document.querySelectorAll('.ds-mi').forEach(m=>m.querySelector('.ck').textContent=m.dataset.db===CUR?'✓':'')
+  // kpi
+  document.getElementById('kpis').innerHTML=db.kpi.map(([v,l])=>`<div class="kpi"><div class="k-l">${l}</div><div class="k-v">${v}</div><div class="k-d">▸ ${CUR}</div></div>`).join('')
+  // schema
+  document.getElementById('schCount').textContent=`${db.tables.length} 表`
+  document.getElementById('schList').innerHTML=db.tables.map(t=>`<div class="trow"><span class="t-ic">▚</span><span class="t-n">${t[0]}</span>${t[2]?`<span class="t-fk">FK ${t[2]}</span>`:''}<span class="t-r">${t[1]}</span></div>`).join('')
+  // recent
+  document.getElementById('recentCount').textContent=`${RECENT[CUR].length} 条`
+  document.getElementById('recentList').innerHTML=RECENT[CUR].map(r=>`<div class="re-item"><span class="vtag ${r[0]}">${r[0]==='ok'?'放行':r[0]==='warn'?'确认':'拦截'}</span><span class="sql">${r[1]}</span><span class="ms">${r[2]}</span></div>`).join('')
+}
+document.getElementById('dsBtn').addEventListener('click',()=>document.getElementById('ds').classList.toggle('open'))
+document.addEventListener('click',e=>{if(!e.target.closest('#ds'))document.getElementById('ds').classList.remove('open')})
+document.querySelectorAll('.ds-mi').forEach(m=>m.addEventListener('click',()=>{CUR=m.dataset.db;render();document.getElementById('ds').classList.remove('open')}))
+document.querySelectorAll('.rl-i').forEach(i=>i.addEventListener('click',()=>{
+  document.querySelectorAll('.rl-i').forEach(x=>x.classList.remove('on'));i.classList.add('on')
+  document.getElementById('pageTitle').textContent=V[i.textContent]||'总览'
+}))
+// quick query
+document.getElementById('qqBtn').addEventListener('click',()=>{
+  const q=document.getElementById('qqInput').value.trim();if(!q)return
+  const qr=document.getElementById('qqResult');qr.className='qr show'
+  qr.innerHTML=`<span class="ok">● ALLOW · 放行</span><span class="ms">12 ms · 返回 6 行</span><pre>${q.replace(/</g,'&lt;')}</pre>`
+})
+document.getElementById('aiBtn').addEventListener('click',()=>{
+  const q=document.getElementById('aiInput').value.trim();if(!q)return
+  document.getElementById('aiQ').textContent=q
+  document.getElementById('aiInput').value=''
+})
+render()
+</script>
+</body>
+</html>

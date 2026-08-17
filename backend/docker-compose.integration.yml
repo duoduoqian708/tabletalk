@@ -1,0 +1,33 @@
+# 集成测试数据库（PG/MySQL 适配器验证）
+# 用法：
+#   docker compose -f docker-compose.integration.yml up -d
+#   CLEARED_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cleared
+      POSTGRES_PASSWORD: cleared
+      POSTGRES_DB: cleared_test
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cleared -d cleared_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: cleared
+      MYSQL_PASSWORD: cleared
+      MYSQL_DATABASE: cleared_test
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ucleared -pcleared --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 40

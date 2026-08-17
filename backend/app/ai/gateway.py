@@ -1,0 +1,247 @@
+"""LLM 网关：统一 OpenAI 兼容协议（云端 API / 本地 Ollama / vLLM 私有网关）。
+
+内置 MockProvider：无 key 也能跑通全流程，复刻原型的读/写/DDL 意图。
+"""
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+
+import httpx
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+
+@dataclass
+class ChatResponse:
+    content: str | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+@dataclass
+class StreamChunk:
+    """流式增量：delta=文本增量；content=非流式最终文本（mock）；tool_calls=最终工具调用。"""
+    delta: str | None = None
+    content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+
+
+def build_provider(cfg: dict) -> "LLMGateway":
+    return LLMGateway(cfg)
+
+
+def is_effective_mock(cfg: dict) -> bool:
+    """是否实际走 mock 行为：显式 mock，或开箱默认 cloud 模型无 key 时的降级。"""
+    return cfg.get("provider") == "mock" or (cfg.get("provider") == "cloud" and not cfg.get("api_key"))
+
+
+class LLMGateway:
+    def __init__(self, cfg: dict) -> None:
+        self.provider = cfg.get("provider", "mock")
+        self.base_url = (cfg.get("base_url") or "").rstrip("/")
+        self.api_key = cfg.get("api_key") or ""
+        self.model = cfg.get("model") or ""
+        self.temperature = cfg.get("temperature", 0.2)
+        self.timeout = cfg.get("timeout", 120)
+        # 推理开关：True 显式开启 · False 显式关闭 · None 跟随模型默认
+        self.reasoning = cfg.get("reasoning")
+
+    def _request(self, messages: list[dict], tools: list[dict] | None, stream: bool) -> tuple[str, dict, dict]:
+        """构造 POST /chat/completions 的 url / payload / headers（chat 与 chat_stream 共用）。"""
+        if not self.base_url:
+            raise ValueError("AI 网关未配置 base_url（provider 非 mock 时必填）")
+        url = self.base_url + "/chat/completions"
+        payload: dict = {"messages": messages, "temperature": self.temperature, "stream": stream}
+        if self.model:
+            payload["model"] = self.model
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        # 推理开关：按模型供应商选择参数形态（Unknown 端点不传，走模型默认）
+        if self.reasoning is not None and self.reasoning_supports_param():
+            if self.reasoning:
+                if "o1" in self.model or "o3" in self.model or "o4" in self.model:
+                    payload["reasoning_effort"] = "high"
+                else:
+                    payload["thinking"] = {"type": "enabled"}
+            else:
+                if "o1" in self.model or "o3" in self.model or "o4" in self.model:
+                    payload["reasoning_effort"] = "low"
+                else:
+                    payload["thinking"] = {"type": "disabled"}
+        headers: dict = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return url, payload, headers
+
+    async def chat(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True) -> ChatResponse:
+        # 开箱默认 cloud 模型无 key 时静默降级 mock，保住无 key demo；
+        # 测试连接传 allow_fallback=False 保持真实（无 key/坏 URL 即真实报错）
+        if self.provider == "mock" or (allow_fallback and self.provider == "cloud" and not self.api_key):
+            return await MockProvider.chat(messages, tools)
+        url, payload, headers = self._request(messages, tools, stream=False)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            r = await client.post(url, json=payload, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+        msg = data["choices"][0]["message"]
+        content = msg.get("content")
+        # 带思考链的模型返回 reasoning_content（思考内容本身不展示，仅取正式回答）
+        tool_calls: list[ToolCall] = []
+        for tc in msg.get("tool_calls") or []:
+            try:
+                args = json.loads(tc["function"].get("arguments") or "{}")
+            except Exception:
+                args = {}
+            tool_calls.append(
+                ToolCall(
+                    id=tc.get("id") or f"call_{int(time.time()*1000)}",
+                    name=tc["function"].get("name", ""),
+                    arguments=args,
+                )
+            )
+        return ChatResponse(content=content, tool_calls=tool_calls)
+
+    async def chat_stream(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True) -> "AsyncIterator[StreamChunk]":
+        """SSE 流式：逐 token 产出 StreamChunk(delta)；工具调用在流末一次性产出。"""
+        if self.provider == "mock" or (allow_fallback and self.provider == "cloud" and not self.api_key):
+            resp = await MockProvider.chat(messages, tools)
+            if resp.tool_calls:
+                yield StreamChunk(tool_calls=resp.tool_calls)
+            else:
+                yield StreamChunk(content=resp.content)
+            return
+        url, payload, headers = self._request(messages, tools, stream=True)
+        acc: dict[int, dict] = {}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                    except Exception:
+                        continue
+                    choice = (obj.get("choices") or [{}])[0]
+                    delta = choice.get("delta", {})
+                    for t in delta.get("tool_calls") or []:
+                        idx = t.get("index", 0)
+                        slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                        if t.get("id"):
+                            slot["id"] = t["id"]
+                        fn = t.get("function", {})
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        slot["arguments"] += fn.get("arguments") or ""
+                    text = delta.get("content")
+                    if text:
+                        yield StreamChunk(delta=text)
+        if acc:
+            calls: list[ToolCall] = []
+            for i in sorted(acc):
+                slot = acc[i]
+                try:
+                    args = json.loads(slot["arguments"] or "{}")
+                except Exception:
+                    args = {}
+                calls.append(ToolCall(id=slot["id"] or f"call_{i}", name=slot["name"], arguments=args))
+            yield StreamChunk(tool_calls=calls)
+
+    def reasoning_supports_param(self) -> bool:
+        """仅对已知支持推理参数形态的模型/端点注入参数，避免未知端点拒参。"""
+        name = self.model.lower()
+        params = ["deepseek", "o1", "o3", "o4", "reasoning", "r1", "qwen", "glm", "thinking"]
+        if any(k in name for k in params):
+            return True
+        if "volces.com" in self.base_url or "dashscope" in self.base_url or "ollama" in self.base_url:
+            return True
+        return False
+
+
+class MockProvider:
+    """按意图关键词生成 tool call；收到 tool 结果后收尾。"""
+
+    @classmethod
+    async def chat(cls, messages: list[dict], tools: list[dict] | None = None) -> ChatResponse:
+        if messages and messages[-1].get("role") == "tool":
+            return cls._final_text(messages[-1])
+        q = cls._last_user(messages)
+        return cls._intent_tool_call(q)
+
+    @staticmethod
+    def _last_user(messages: list[dict]) -> str:
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                return m.get("content", "")
+        return ""
+
+    @staticmethod
+    def _intent_tool_call(q: str) -> ChatResponse:
+        ql = q.lower()
+        if any(k in ql for k in ("提价", "涨价", "10%", "库存为 0", "price")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_dml", name="run_dml",
+                arguments={"sql": "UPDATE products\nSET price = price * 1.1\nWHERE stock = 0;"},
+            )])
+        if any(k in ql for k in ("索引", "ddl", "建表", "删表", "改表", "alter", "drop", "create index")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_ddl", name="draft_ddl",
+                arguments={"sql": "CREATE INDEX idx_orders_order_date\nON orders (order_date);"},
+            )])
+        if any(k in ql for k in ("字段", "列", "结构", "describe", "有哪些")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_desc", name="describe_table", arguments={"table": "orders"},
+            )])
+        if any(k in ql for k in ("退货", "return_rate", "退款")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_q1", name="run_query",
+                arguments={"sql": "SELECT p.product_name,\n       COUNT(*) AS orders,\n       COUNT(r.id) AS returns,\n       ROUND(COUNT(r.id) * 100.0 / COUNT(*), 1) AS return_rate\nFROM products p\nJOIN order_items oi ON oi.product_id = p.id\nLEFT JOIN returns r ON r.order_item_id = oi.id\nGROUP BY p.product_name\nORDER BY return_rate DESC\nLIMIT 10;"},
+            )])
+        if any(k in ql for k in ("客户", "clv", "生命周期", "价值", "revenue")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_q3", name="run_query",
+                arguments={"sql": "SELECT c.name, c.region, COUNT(DISTINCT o.id) AS orders, SUM(oi.quantity * oi.unit_price) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nJOIN order_items oi ON oi.order_id = o.id\nGROUP BY c.id\nORDER BY revenue DESC\nLIMIT 6;"},
+            )])
+        if any(k in ql for k in ("周转", "积压", "滞销", "库存", "inventory")):
+            return ChatResponse(tool_calls=[ToolCall(
+                id="call_mock_q4", name="run_query",
+                arguments={"sql": "SELECT p.product_name, c.name AS category, i.qty AS stock, i.last_moved_at\nFROM inventory i\nJOIN products p ON p.id = i.product_id\nJOIN categories c ON c.id = p.category_id\nORDER BY i.last_moved_at ASC\nLIMIT 6;"},
+            )])
+        if any(k in ql for k in ("总结", "这堆", "最严重", "结果")):
+            return ChatResponse(content="我基于当前结果的列名与行数回答：明细数据未回传模型。想深入的话，告诉我按哪个维度重新聚合。")
+        # 通用兜底：mock 只内置了演示库（orders/products/...）的关键词，无法为任意真实库生成准确 SQL。
+        # 直接引导用户配置真实模型，而不是编造一张大概率不存在的表。
+        return ChatResponse(content="当前为 mock 模式（仅演示用），无法为你的实际数据生成准确 SQL。请在「系统设置 → 大模型接入」配置真实模型后再试。")
+
+    @staticmethod
+    def _final_text(tool_msg: dict) -> ChatResponse:
+        name = tool_msg.get("name") or ""
+        try:
+            content = json.loads(tool_msg.get("content") or "{}")
+        except Exception:
+            content = {}
+        if name == "run_query":
+            if content.get("ok"):
+                return ChatResponse(content=f"已生成只读查询并通过安全闸门放行，结果推送到左侧工作区（{content.get('row_count', 0)} 行）。明细未回传模型。")
+            return ChatResponse(content=f"该查询被安全闸门拦截：{content.get('reason', '未知原因')}")
+        if name == "run_dml":
+            if content.get("verdict") == "review":
+                return ChatResponse(content=f"这是写操作，安全闸门判定需确认，预估影响 {content.get('preview_rows', '?')} 行。请在卡片上确认后执行。")
+            return ChatResponse(content=f"写操作被拦截：{content.get('reason', '')}")
+        if name == "draft_ddl":
+            return ChatResponse(content="DDL 脚本已生成并发送到编辑器——我的工具集里没有 DDL 工具，改表结构需要你手动执行。")
+        if name == "describe_table":
+            return ChatResponse(content="已返回该表的列定义与注释（只读结构）。")
+        if name == "get_schema":
+            return ChatResponse(content="已返回连接的表结构摘要（只读结构）。")
+        return ChatResponse(content="完成。")

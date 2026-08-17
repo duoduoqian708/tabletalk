@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B · 命令流对话台 · CLEARED</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0e14;--surface:#11151d;--surface-2:#0e121a;--surface-3:#161b26;
+  --line:#1c2230;--line-strong:#2b3547;
+  --ink:#e7ebf3;--ink-dim:#8b94a6;--ink-faint:#5b6780;
+  --teal:#2fc38c;--teal-dim:rgba(47,195,140,.1);
+  --amber:#e0a347;--amber-dim:rgba(224,163,71,.09);
+  --red:#f0645a;--red-dim:rgba(240,100,90,.09);
+  --blue:#6d9cf0;--blue-dim:rgba(109,156,240,.09);
+  --mono:'JetBrains Mono','SFMono-Regular',Menlo,monospace;
+  --sans:'Instrument Sans','PingFang SC','Microsoft YaHei',sans-serif;
+  --ease:cubic-bezier(.2,.8,.24,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;overflow:hidden;height:100vh}
+button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+.mono{font-family:var(--mono)}.num{font-variant-numeric:tabular-nums}
+.app{display:grid;grid-template-rows:52px 1fr 58px;height:100vh;max-width:1100px;margin:0 auto}
+/* topbar */
+.appbar{display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid var(--line);background:rgba(11,14,20,.8);backdrop-filter:blur(10px);position:relative;z-index:20}
+.logo{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-weight:600;font-size:12px;letter-spacing:.18em}
+.logo .prompt{color:var(--teal);font-weight:500}
+.logo .path{color:var(--ink-dim)}
+.logo .cursor{display:inline-block;width:7px;height:13px;background:var(--teal);animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.spacer{flex:1}
+.ds-use{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
+.ds-use .kw{color:var(--teal)}
+.ds{position:relative}
+.ds-btn{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;padding:5px 11px;border:1px solid var(--line-strong);border-radius:6px;background:var(--surface);color:var(--ink);transition:border-color .14s}
+.ds-btn:hover{border-color:var(--teal)}
+.ds-btn .d{width:6px;height:6px;border-radius:50%;flex:none}
+.ds-menu{position:absolute;top:calc(100% + 8px);right:0;min-width:220px;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;padding:5px;box-shadow:0 22px 54px -18px rgba(0,0,0,.7);opacity:0;pointer-events:none;transform:translateY(-5px);transition:all .18s var(--ease);z-index:50}
+.ds.open .ds-menu{opacity:1;pointer-events:auto;transform:none}
+.ds-mi{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 10px;border-radius:7px;font-family:var(--mono);font-size:11px;transition:background .12s}
+.ds-mi:hover{background:var(--surface-3)}
+.ds-mi .d{width:6px;height:6px;border-radius:50%;flex:none}
+.ds-mi .s{margin-left:auto;font-size:9px;color:var(--ink-faint)}
+.ds-mi .ck{color:var(--teal);font-size:10px;width:12px;text-align:center}
+.gate-pill{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--teal);border:1px solid rgba(47,195,140,.35);background:var(--teal-dim);border-radius:20px;padding:4px 11px}
+.gate-pill i{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,195,140,.4)}70%{box-shadow:0 0 0 6px rgba(47,195,140,0)}100%{box-shadow:0 0 0 0 rgba(47,195,140,0)}}
+/* main stream */
+.stream{position:relative;overflow:auto;padding:26px 0 20px}
+.sch-drawer{position:absolute;left:0;top:14px;bottom:14px;width:210px;background:var(--surface);border-right:1px solid var(--line-strong);border-radius:0 10px 10px 0;transform:translateX(-100%);transition:transform .25s var(--ease);z-index:15;box-shadow:18px 0 40px -20px rgba(0,0,0,.5)}
+.sch-drawer.open{transform:none}
+.sch-toggle{position:absolute;left:0;top:14px;width:26px;height:26px;background:var(--surface);border:1px solid var(--line-strong);border-left:0;border-radius:0 6px 6px 0;color:var(--ink-dim);font-size:11px;z-index:16;transition:color .14s}
+.sch-toggle:hover{color:var(--teal)}
+.sch-drawer .sd-h{display:flex;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:9px;color:var(--ink-faint);letter-spacing:.1em}
+.sch-drawer .sd-h .c{margin-left:auto;color:var(--ink-faint)}
+.sd-it{display:flex;align-items:center;gap:7px;padding:6px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);cursor:pointer;transition:background .1s,color .1s}
+.sd-it:hover{background:var(--surface-3);color:var(--ink)}
+.sd-it .r{font-size:8px;color:var(--ink-faint);margin-left:auto}
+.stream-inner{max-width:720px;margin:0 auto;padding:0 22px;display:flex;flex-direction:column;gap:18px}
+.msg-user{align-self:flex-end;max-width:72%;font-size:14px;line-height:1.65;background:var(--surface);border:1px solid var(--line-strong);border-radius:12px 12px 3px 12px;padding:10px 14px;color:var(--ink)}
+.msg-ai{align-self:flex-start;width:100%;display:flex;flex-direction:column;gap:9px}
+.think{font-family:var(--mono);font-size:10px;color:var(--ink-faint);line-height:1.6;display:flex;gap:9px}
+.think .tn{color:var(--blue);letter-spacing:.1em;font-size:9px;flex:none}
+.think .tl{border-left:2px solid var(--line);padding-left:10px;color:var(--ink-faint)}
+.ai-txt{font-size:13.5px;color:var(--ink-dim);line-height:1.7}
+/* sql card */
+.sql{border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;background:var(--surface);box-shadow:0 14px 34px -20px rgba(0,0,0,.5)}
+.sql .c-h{display:flex;align-items:center;gap:8px;padding:8px 13px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:9px;color:var(--ink-faint);letter-spacing:.1em}
+.sql .c-h .v{font-weight:600;font-size:10px}
+.sql.allow .v{color:var(--teal)}.sql.review .v{color:var(--amber)}.sql.block .v{color:var(--red)}.sql.manual .v{color:var(--blue)}
+.sql .c-h .st{margin-left:auto;font-size:8.5px}
+.sql .c-s{font-family:var(--mono);font-size:11px;color:var(--ink-dim);padding:11px 13px;line-height:1.75;white-space:pre-wrap}
+.sql .c-f{display:flex;gap:8px;padding:9px 13px;border-top:1px solid var(--line);align-items:center}
+.sql .c-p{font-size:10px;color:var(--amber);margin-right:auto;font-family:var(--mono)}
+.sql .c-r{font-size:10px;color:var(--red);margin-right:auto;font-family:var(--mono)}
+.btn{font-family:var(--mono);font-size:10px;padding:6px 14px;border-radius:7px;border:1px solid transparent;transition:all .14s}
+.btn.pri{background:var(--teal);color:#04170e;font-weight:600}
+.btn.pri:hover{filter:brightness(1.12)}
+.btn.gho{color:var(--ink-dim);border-color:var(--line-strong)}
+.btn.gho:hover{color:var(--ink);border-color:var(--ink-faint)}
+.btn.warn{color:var(--amber);border-color:rgba(224,163,71,.5);background:var(--amber-dim)}
+.btn.danger{color:var(--red);border-color:rgba(240,100,90,.5);background:var(--red-dim)}
+/* result block embedded */
+.result-block{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface-2);animation:vin .3s var(--ease)}
+@keyframes vin{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+.rb-h{display:flex;align-items:center;gap:8px;padding:6px 11px;font-family:var(--mono);font-size:8.5px;color:var(--ink-faint);border-bottom:1px solid var(--line)}
+.rb-h .ok{color:var(--teal)}
+.rb-h .ms{margin-left:auto}
+table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10px}
+.t th{text-align:left;padding:5px 11px;color:var(--ink-faint);font-weight:500;font-size:8.5px;border-bottom:1px solid var(--line-strong);background:var(--surface)}
+.t td{padding:4.5px 11px;border-bottom:1px solid var(--line);color:var(--ink-dim);white-space:nowrap}
+.t td.num{text-align:right}
+/* input */
+.prompt-bar{display:flex;align-items:center;gap:11px;padding:11px 18px;border-top:1px solid var(--line);background:rgba(11,14,20,.85);backdrop-filter:blur(10px)}
+.prompt-bar .pfx{font-family:var(--mono);color:var(--teal);font-size:14px;font-weight:600}
+.p-field{flex:1;display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;padding:10px 14px;font-size:13.5px;color:var(--ink-faint);transition:border-color .14s;font-family:var(--sans)}
+.p-field:focus-within{border-color:var(--teal)}
+.p-field .kbd{margin-left:auto;font-size:8.5px;color:var(--ink-faint);border:1px solid var(--line-strong);border-radius:3px;padding:0 5px;font-family:var(--mono)}
+.send{width:38px;height:38px;border-radius:10px;background:var(--teal);color:#04170e;font-size:15px;flex:none;transition:filter .14s}
+.send:hover{filter:brightness(1.12)}
+.statusline{grid-column:1/-1;display:flex;align-items:center;gap:20px;padding:0 18px;font-family:var(--mono);font-size:9px;color:var(--ink-faint);border-top:1px solid var(--line)}
+.sl-r{margin-left:auto;display:flex;gap:18px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="appbar">
+    <span class="logo"><span class="prompt">~/cleared</span><span class="path"> » <span id="dbNameB">demo.db</span></span><span class="cursor"></span></span>
+    <span class="spacer"></span>
+    <span class="ds-use"><span class="kw">use</span></span>
+    <div class="ds" id="ds">
+      <button class="ds-btn" id="dsBtn"><span class="d" style="background:var(--teal)"></span><span id="dsName">demo.db</span> ▾</button>
+      <div class="ds-menu">
+        <button class="ds-mi" data-db="demo.db"><span class="d" style="background:var(--teal)"></span>demo.db<span class="s">sqlite</span><span class="ck">✓</span></button>
+        <button class="ds-mi" data-db="prod-mysql"><span class="d" style="background:var(--blue)"></span>prod-mysql<span class="s">mysql</span><span class="ck"></span></button>
+        <button class="ds-mi" data-db="analytics-pg"><span class="d" style="background:var(--amber)"></span>analytics-pg<span class="s">postgres</span><span class="ck"></span></button>
+      </div>
+    </div>
+    <span class="gate-pill"><i></i>gate armed</span>
+  </header>
+
+  <main class="stream" id="stream">
+    <button class="sch-toggle" id="schToggle">≡</button>
+    <aside class="sch-drawer" id="schDrawer">
+      <div class="sd-h">schema <span class="c" id="sdCount"></span></div>
+      <div id="sdList"></div>
+    </aside>
+    <div class="stream-inner" id="streamInner"></div>
+  </main>
+
+  <footer>
+    <div class="prompt-bar">
+      <span class="pfx">❯</span>
+      <div class="p-field" contenteditable="true" id="pField">ask your database…</div>
+      <button class="send" id="pSend">→</button>
+    </div>
+    <div class="statusline">
+      <span>gate : <b style="color:var(--teal)">armed</b></span>
+      <span>model : mock</span>
+      <span>dialect : <b id="slDialect" style="color:var(--ink-dim)">sqlite</b></span>
+      <div class="sl-r"><span>audit <b style="color:var(--ink-dim)">128</b></span><span>⌘⏎ 发送</span></div>
+    </div>
+  </footer>
+</div>
+
+<script>
+const DBS={
+  'demo.db':{dot:'var(--teal)',dialect:'sqlite',tables:['orders','customers','products','categories','order_items','suppliers']},
+  'prod-mysql':{dot:'var(--blue)',dialect:'mysql',tables:['inventory','users','payments','shipments','refunds']},
+  'analytics-pg':{dot:'var(--amber)',dialect:'postgres',tables:['events','sessions','funnel_steps','cohorts']}
+}
+const RESULT={
+  orders:['id','customer_id','status','total','created_at'],
+  customers:['id','name','region','level'],
+  products:['id','name','price','category_id'],
+  categories:['id','name'],order_items:['id','order_id','product_id','qty','price'],suppliers:['id','name','city'],
+  inventory:['sku','qty','reorder','warehouse'],users:['id','email','status','last_login'],payments:['id','order_id','amount','method'],
+  shipments:['id','order_id','status','carrier'],refunds:['id','order_id','amount','reason'],
+  events:['id','ts','event','user_id'],sessions:['id','start','end','pages'],funnel_steps:['step','conversion','dropoff'],cohorts:['month','retention_d30','n_users']
+}
+function aiReply(q){
+  const s=q.toLowerCase()
+  if(s.includes('delete')||s.includes('删'))return{tier:'block',think:'检测到无 WHERE 的 DELETE → 安全闸门判定 BLOCK',txt:'这条不会执行：',sql:"DELETE FROM orders",r:'无 WHERE 条件的 DELETE 被拦截。建议加条件：DELETE FROM orders WHERE status=&#39;cancelled&#39; AND created_at &lt; &#39;2026-01-01&#39;'}
+  if(s.includes('update')||s.includes('改价')||s.includes('更新'))return{tier:'review',think:'写操作：先预览影响行 → 交你确认',txt:'写操作，需确认：',sql:"UPDATE products SET price = price * 1.05 WHERE category_id = 3",p:'将影响约 24 行'}
+  if(s.includes('create')||s.includes('索引'))return{tier:'manual',think:'DDL 是手动边界：AI 只生成草稿',txt:'DDL 草稿（AI 不执行）：',sql:"CREATE INDEX idx_orders_status ON orders(status)"}
+  if(s.includes('退货'))return{tier:'allow',think:'按商品聚合退货占比 → 排序取前 10',txt:'读操作，直接放行：',sql:"SELECT p.name, COUNT(*) AS total, SUM(o.status='returned') AS ret\nFROM order_items oi\nJOIN orders o ON o.id=oi.order_id\nJOIN products p ON p.id=oi.product_id\nGROUP BY p.name ORDER BY ret/total DESC LIMIT 10",table:'products'}
+  if(s.includes('销售'))return{tier:'allow',think:'按品类关联聚合销售额，时间窗本季度',txt:'读操作，直接放行：',sql:"SELECT c.name, ROUND(SUM(oi.price*oi.qty),2) sales\nFROM categories c JOIN products p ON p.category_id=c.id\nJOIN order_items oi ON oi.product_id=p.id\nJOIN orders o ON o.id=oi.order_id\nGROUP BY c.name ORDER BY sales DESC",table:'categories'}
+  return{tier:'allow',think:'按客户聚合订单数',txt:'读操作，直接放行：',sql:"SELECT c.name, COUNT(o.id) AS orders\nFROM customers c JOIN orders o ON o.customer_id=c.id\nGROUP BY c.name ORDER BY orders DESC LIMIT 10",table:'customers'}
+}
+let CUR='demo.db'
+const inner=document.getElementById('streamInner')
+function addEl(html){const d=document.createElement('div');d.innerHTML=html;inner.appendChild(d);document.getElementById('stream').scrollTop=99999;return d}
+function send(q){
+  addEl(`<div class="msg-user">${q}</div>`)
+  setTimeout(()=>{
+    const r=aiReply(q)
+    const extra=r.tier==='review'?`<span class="c-p">${r.p}</span>`:r.tier==='block'?`<span class="c-r">${r.r}</span>`:''
+    const d=addEl(`<div class="msg-ai"><div class="think"><span class="tn">THINK</span><span class="tl">${r.think}</span></div><div class="ai-txt">${r.txt}</div><div class="sql ${r.tier}"><div class="c-h"><span class="v">${r.tier.toUpperCase()}</span><span class="st">${r.tier==='allow'?'read':r.tier==='review'?'dml':r.tier==='block'?'blocked':'ddl'}</span></div><div class="c-s">${r.sql}</div><div class="c-f">${extra}<button class="btn ${r.tier==='allow'?'pri':r.tier==='review'?'warn':r.tier==='manual'?'gho':'danger'}" data-t="${r.tier}" data-tab="${r.table||''}">${r.tier==='allow'?'▶ 运行':r.tier==='review'?'✓ 确认执行':r.tier==='manual'?'⇥ 发到编辑器':'已拦截'}</button></div></div></div>`)
+    d.querySelector('[data-t]').addEventListener('click',b=>{
+      const t=b.target.dataset.t
+      if(t==='allow'){const tab=b.target.dataset.tab;if(tab&&RESULT[tab])addResult(tab)}
+      if(t==='review'){b.target.textContent='已确认执行 ✓';b.target.style.color='var(--teal)';b.target.style.borderColor='var(--teal)';b.target.style.background='var(--teal-dim)'}
+      if(t==='manual'){b.target.textContent='已发到编辑器 ✓';b.target.style.color='var(--blue)'}
+    })
+  },500)
+}
+function addResult(tab){
+  const cols=RESULT[tab]
+  const row=()=>cols.map(()=>String(Math.floor(Math.random()*999)))
+  const data=[row(),row(),row()]
+  const el=addEl(`<div class="result-block"><div class="rb-h"><span class="ok">● READ · ALLOW</span><span>SELECT * FROM ${tab} LIMIT 500</span><span class="ms">12 ms · 预览</span></div><table class="t"><tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>${data.map(r=>'<tr>'+r.map((v,i)=>`<td${cols[i].match(/id|amount|qty|total|retention|conversion|pages/)?' class="num"':''}>${v}</td>`).join('')+'</tr>').join('')}</table></div>`)
+  el.scrollIntoView({behavior:'smooth',block:'nearest'})
+}
+function renderSchema(){
+  const t=DBS[CUR].tables
+  document.getElementById('sdList').innerHTML=t.map(x=>`<div class="sd-it">▚ ${x}<span class="r">—</span></div>`).join('')
+  document.getElementById('sdCount').textContent=`${t.length} 表`
+  document.querySelectorAll('.sd-it').forEach(it=>it.addEventListener('click',()=>{addResult(it.textContent.replace(/[▚\s—]/g,''))}))
+}
+function switchDb(k){
+  CUR=k;const db=DBS[k]
+  document.getElementById('dsName').textContent=k
+  document.getElementById('dbNameB').textContent=k
+  document.getElementById('slDialect').textContent=db.dialect
+  document.querySelectorAll('.ds-mi').forEach(m=>m.querySelector('.ck').textContent=m.dataset.db===k?'✓':'')
+  renderSchema()
+  addEl(`<div class="msg-ai"><div class="think"><span class="tn">INFO</span><span class="tl">已切换数据源 → <b style="color:var(--ink)">${k}</b>（${db.dialect}）· schema 与上下文已重置</span></div></div>`)
+}
+document.getElementById('dsBtn').addEventListener('click',()=>document.getElementById('ds').classList.toggle('open'))
+document.addEventListener('click',e=>{if(!e.target.closest('#ds'))document.getElementById('ds').classList.remove('open')})
+document.querySelectorAll('.ds-mi').forEach(m=>m.addEventListener('click',()=>{switchDb(m.dataset.db);document.getElementById('ds').classList.remove('open')}))
+document.getElementById('schToggle').addEventListener('click',()=>document.getElementById('schDrawer').classList.toggle('open'))
+document.getElementById('pSend').addEventListener('click',()=>{const f=document.getElementById('pField');const q=f.textContent.trim();if(q&&!q.startsWith('ask your')){f.textContent='ask your database…';send(q)}})
+document.getElementById('pField').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById('pSend').click()}})
+document.getElementById('pField').addEventListener('focus',()=>{if(document.getElementById('pField').textContent.startsWith('ask your'))document.getElementById('pField').textContent=''})
+document.getElementById('pField').addEventListener('blur',()=>{if(!document.getElementById('pField').textContent.trim())document.getElementById('pField').textContent='ask your database…'})
+renderSchema()
+addEl(`<div class="msg-ai"><div class="think"><span class="tn">BOOT</span><span class="tl">CLEARED 已就绪 · 安全闸门 armed · 数据源 ${CUR}（sqlite）</span></div><div class="ai-txt">这是一个<b style="color:var(--ink)">命令流对话台</b>：结果直接嵌进对话流。试试：<b style="color:var(--ink)">退货率最高的 10 个商品</b>、<span style="color:var(--red)">delete from orders</span>（看拦截）、<span style="color:var(--amber)">更新商品价格</span>（看确认）。左上角 ≡ 可展开 schema。</div></div>`)
+</script>
+</body>
+</html>

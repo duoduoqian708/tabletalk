@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLEARED · 前端 UI 设计稿</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ================= tokens ================= */
+:root{
+  --bg:#0b0d12;--bg-2:#0e1117;--panel:#10131b;--card:#121722;--card-hi:#161c29;--rail:#0d1017;
+  --ink:#e8ecf3;--ink-dim:#98a2b4;--ink-faint:#5f697c;
+  --line:rgba(152,162,180,.13);--line-strong:rgba(152,162,180,.24);
+  --teal:#38c99b;--teal-dim:rgba(56,201,155,.11);
+  --amber:#f0a84e;--amber-dim:rgba(240,168,78,.11);
+  --red:#ff6b5e;--red-dim:rgba(255,107,94,.10);
+  --blue:#79a0ff;--blue-dim:rgba(121,160,255,.10);
+  --sans:'IBM Plex Sans','PingFang SC','Microsoft YaHei',-apple-system,sans-serif;
+  --mono:'IBM Plex Mono','SFMono-Regular',Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.22,.9,.28,1);
+  --on-teal:#06281d;               /* teal 上的文字色 */
+  --bar-bg:rgba(11,13,18,.72);
+  --mask:rgba(5,7,10,.72);
+  --glow:rgba(121,160,255,.05);
+}
+/* ===== 多主题：亮度 × 强调色系。安全三色每套内保持可区分 ===== */
+/* 浅色 · 白底 teal 强调 */
+html[data-theme="light"]{
+  --bg:#f4f6fa;--bg-2:#edf0f5;--panel:#e9edf3;--card:#ffffff;--card-hi:#f6f8fb;--rail:#edf0f5;
+  --ink:#1a2233;--ink-dim:#48536a;--ink-faint:#8992a4;
+  --line:rgba(22,30,54,.11);--line-strong:rgba(22,30,54,.2);
+  --teal:#0c9a6c;--teal-dim:rgba(12,154,108,.1);
+  --amber:#ab6a14;--amber-dim:rgba(171,106,20,.1);
+  --red:#cf3d34;--red-dim:rgba(207,61,52,.09);
+  --blue:#3a63cf;--blue-dim:rgba(58,99,207,.09);
+  --on-teal:#ffffff;
+  --bar-bg:rgba(255,255,255,.78);--mask:rgba(15,20,35,.45);--glow:rgba(58,99,207,.06);
+}
+/* 薄荷绿 · 青白底 + 薄荷主强调 */
+html[data-theme="mint"]{
+  --bg:#f2faf6;--bg-2:#e8f4ee;--panel:#e2f0e9;--card:#ffffff;--card-hi:#f3faf6;--rail:#e8f4ee;
+  --ink:#10332c;--ink-dim:#3d6b60;--ink-faint:#7ba398;
+  --line:rgba(13,157,117,.13);--line-strong:rgba(13,157,117,.24);
+  --teal:#0c9c72;--teal-dim:rgba(12,156,114,.11);
+  --amber:#a97a2c;--amber-dim:rgba(169,122,44,.1);
+  --red:#cc4a41;--red-dim:rgba(204,74,65,.09);
+  --blue:#2e7fb8;--blue-dim:rgba(46,127,184,.09);
+  --on-teal:#ffffff;
+  --bar-bg:rgba(255,255,255,.8);--mask:rgba(12,44,36,.4);--glow:rgba(12,156,114,.09);
+}
+/* 海洋 · 深蓝底 + 青蓝强调 */
+html[data-theme="ocean"]{
+  --bg:#0a0e1a;--bg-2:#0d1322;--panel:#0f1628;--card:#111a30;--card-hi:#162040;--rail:#0b1220;
+  --ink:#e6ecf7;--ink-dim:#94a3c4;--ink-faint:#5a6b8f;
+  --line:rgba(140,170,230,.13);--line-strong:rgba(140,170,230,.24);
+  --teal:#42c6e0;--teal-dim:rgba(66,198,224,.12);
+  --amber:#f0b45a;--amber-dim:rgba(240,180,90,.1);
+  --red:#ff7268;--red-dim:rgba(255,114,104,.1);
+  --blue:#7ca3ff;--blue-dim:rgba(124,163,255,.12);
+  --on-teal:#032a35;
+  --bar-bg:rgba(10,14,26,.72);--mask:rgba(4,8,18,.75);--glow:rgba(66,198,224,.07);
+}
+/* 琥珀 · 暖棕底 + 琥珀金强调 */
+html[data-theme="ember"]{
+  --bg:#161009;--bg-2:#1a140d;--panel:#1f1810;--card:#241c13;--card-hi:#2e2317;--rail:#181209;
+  --ink:#f5efe4;--ink-dim:#c6b49b;--ink-faint:#8a7559;
+  --line:rgba(235,190,130,.14);--line-strong:rgba(235,190,130,.25);
+  --teal:#e3a354;--teal-dim:rgba(227,163,84,.12);
+  --amber:#b3802f;--amber-dim:rgba(179,128,47,.12);
+  --red:#e05a4e;--red-dim:rgba(224,90,78,.12);
+  --blue:#8fa8ff;--blue-dim:rgba(143,168,255,.12);
+  --on-teal:#241a08;
+  --bar-bg:rgba(22,16,9,.72);--mask:rgba(18,12,5,.75);--glow:rgba(227,163,84,.07);
+}
+html[data-theme="light"] .grain,html[data-theme="mint"] .grain{display:none}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--sans);background:
+  radial-gradient(1200px 600px at 20% -10%,var(--glow),transparent 55%),
+  var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;overflow:hidden}
+::selection{background:rgba(56,201,155,.22)}
+button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit}
+.mono{font-family:var(--mono)}
+
+/* ================= studio shell ================= */
+.studio{display:grid;grid-template-columns:240px 1fr;grid-template-rows:54px 1fr 34px;height:100vh}
+.studio-bar{grid-column:1/3;display:flex;align-items:center;gap:16px;padding:0 20px;border-bottom:1px solid var(--line);
+  background:var(--bar-bg);backdrop-filter:blur(10px);z-index:30}
+.wordmark{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:600;letter-spacing:.22em;font-size:13px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 0 rgba(56,201,155,.5);animation:armed 2.6s infinite}
+@keyframes armed{0%{box-shadow:0 0 0 0 rgba(56,201,155,.45)}70%{box-shadow:0 0 0 7px rgba(56,201,155,0)}100%{box-shadow:0 0 0 0 rgba(56,201,155,0)}}
+.wordmark small{font-weight:400;color:var(--ink-faint);letter-spacing:.08em;font-size:10px;margin-left:4px}
+.bar-note{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.05em}
+.bar-note b{color:var(--amber)}
+.studio-bar .spacer{flex:1}
+.badge{font-family:var(--mono);font-size:9px;letter-spacing:.1em;padding:3px 8px;border-radius:20px;border:1px solid var(--line)}
+.badge.done{color:var(--teal);border-color:rgba(56,201,155,.35);background:var(--teal-dim)}
+.badge.plan{color:var(--amber);border-color:rgba(240,168,78,.35);background:var(--amber-dim)}
+.badge.new{color:var(--blue);border-color:rgba(121,160,255,.35);background:var(--blue-dim)}
+
+/* ================= nav ================= */
+.studio-nav{border-right:1px solid var(--line);background:var(--rail);padding:14px 10px;overflow:auto}
+.nav-sec{font-family:var(--mono);font-size:9.5px;letter-spacing:.18em;color:var(--ink-faint);padding:6px 10px;text-transform:uppercase}
+.nav-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 10px;border-radius:9px;color:var(--ink-dim);
+  font-size:12.5px;transition:background .14s,color .14s}
+.nav-item:hover{background:rgba(152,162,180,.07);color:var(--ink)}
+.nav-item.on{background:var(--card-hi);color:var(--ink)}
+.nav-item.on .n-idx{color:var(--teal)}
+.n-idx{font-family:var(--mono);font-size:10px;color:var(--ink-faint);width:18px;flex:none}
+.nav-item .n-st{font-family:var(--mono);font-size:8.5px;margin-left:auto;padding:2px 6px;border-radius:10px}
+.n-st.done{color:var(--teal);background:var(--teal-dim)}
+.n-st.plan{color:var(--amber);background:var(--amber-dim)}
+
+/* ================= stage ================= */
+.studio-stage{overflow:auto;position:relative;padding:28px 32px 40px}
+.mod{display:none;max-width:1180px;margin:0 auto}
+.mod.on{display:block;animation:fade .3s var(--ease)}
+@keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.mod-head{margin-bottom:22px}
+.mod-head .crumb{font-family:var(--mono);font-size:10px;color:var(--ink-faint);letter-spacing:.14em}
+.mod-head h1{font-size:22px;font-weight:600;margin:6px 0 6px;display:flex;align-items:center;gap:12px}
+.mod-head .one-liner{color:var(--ink-dim);font-size:13px;line-height:1.6;max-width:720px}
+.mod-head .chips{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:10px;color:var(--ink-dim);border:1px solid var(--line);border-radius:6px;padding:3px 8px}
+.mod-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:18px;align-items:start}
+.grp{margin-bottom:22px}
+.grp-label{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--ink-faint);text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.grp-label::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* mockup frame */
+.mu{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 18px 40px -26px rgba(0,0,0,.8)}
+.mu-tag{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);background:var(--bg-2)}
+.mu-tag .tt{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);letter-spacing:.06em}
+.mu-tag .ts{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-left:auto}
+.mu-body{padding:14px;position:relative}
+.note{font-size:11.5px;color:var(--ink-faint);line-height:1.7;margin-top:10px;border-left:2px solid var(--line-strong);padding-left:10px}
+.note b{color:var(--ink-dim);font-weight:500}
+.note .k{color:var(--teal);font-family:var(--mono);font-size:10px}
+.note .k.am{color:var(--amber)}
+.note .k.rd{color:var(--red)}
+.note .k.bl{color:var(--blue)}
+
+/* ================= shared mock components ================= */
+.btn{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;padding:7px 13px;border-radius:8px;transition:all .16s;border:1px solid transparent}
+.btn.primary{color:var(--on-teal);background:var(--teal);font-weight:600}
+.btn.primary:hover{filter:brightness(1.1)}
+.btn.ghost{color:var(--ink-dim);border-color:var(--line);background:var(--bg-2)}
+.btn.ghost:hover{color:var(--ink);border-color:var(--line-strong)}
+.btn.warn{color:var(--amber);border-color:rgba(240,168,78,.4);background:var(--amber-dim)}
+.btn.danger{color:var(--red);border-color:rgba(255,107,94,.4);background:var(--red-dim)}
+.btn.mini{padding:4px 9px;font-size:10px;border-radius:6px}
+.input{width:100%;background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:9px 12px;color:var(--ink);font-size:12.5px;outline:none;transition:border-color .16s}
+.input:focus{border-color:var(--teal)}
+.input::placeholder{color:var(--ink-faint)}
+.tbl{width:100%;border-collapse:collapse;font-size:11.5px}
+.tbl th{font-family:var(--mono);font-size:9.5px;font-weight:500;color:var(--ink-faint);text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-strong);white-space:nowrap;cursor:default}
+.tbl th .ty{color:var(--ink-faint);font-weight:400;margin-left:5px;font-size:8.5px}
+.tbl th .arr{color:var(--teal);font-size:9px;margin-left:3px}
+.tbl td{padding:7px 10px;border-bottom:1px solid var(--line);color:var(--ink-dim);font-family:var(--mono);font-size:10.5px;white-space:nowrap}
+.tbl tr:hover td{background:rgba(152,162,180,.04);color:var(--ink)}
+.tbl td.num{text-align:right}
+.tbl tr.sel td{background:var(--teal-dim)}
+
+/* status line */
+.statusline{grid-column:1/3;display:flex;align-items:center;gap:18px;padding:0 20px;border-top:1px solid var(--line);
+  font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);background:var(--bg-2);letter-spacing:.04em}
+.statusline .s-dot{width:6px;height:6px;border-radius:50%;background:var(--teal);flex:none}
+.statusline b{color:var(--ink-dim);font-weight:500}
+.st-right{margin-left:auto;display:flex;gap:16px}
+
+/* ---------- module 1: boot / onboarding ---------- */
+.boot{background:var(--bg);border:1px solid var(--line);border-radius:14px;height:330px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.boot-bar{padding:14px 18px;border-bottom:1px solid var(--line)}
+.boot-body{flex:1;display:flex;align-items:center;justify-content:center;gap:64px}
+.spinner{display:flex;gap:6px;margin:18px auto 14px;justify-content:center}
+.spinner i{width:6px;height:6px;border-radius:50%;background:var(--teal);animation:sp 1.2s infinite var(--ease)}
+.spinner i:nth-child(2){animation-delay:.15s}.spinner i:nth-child(3){animation-delay:.3s}
+@keyframes sp{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(-5px);opacity:1}}
+.boot-card{text-align:center;min-width:260px}
+.boot-card .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-dim);text-transform:uppercase}
+.boot-card .hint{font-size:12px;color:var(--ink-faint);margin-top:6px}
+.boot-err{display:none;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--red);border:1px solid rgba(255,107,94,.3);background:var(--red-dim);border-radius:8px;padding:8px 12px}
+.onboard{background:var(--bg);border:1px solid var(--line);border-radius:14px;height:330px;display:flex;flex-direction:column}
+.onboard .ob-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;text-align:center;padding:30px}
+.ob-ring{width:74px;height:74px;border-radius:50%;border:1.5px solid var(--line-strong);position:relative;display:flex;align-items:center;justify-content:center}
+.ob-ring .db{width:30px;height:22px;border:2px solid var(--teal);border-radius:4px;opacity:.9}
+.ob-ring .pl{position:absolute;width:44px;height:2px;background:var(--line-strong);left:50%;top:50%}
+.ob-ring .pl::before{content:"";position:absolute;width:8px;height:8px;border-radius:50%;background:var(--blue);right:-4px;top:-3px;box-shadow:0 0 0 3px rgba(121,160,255,.18)}
+.ob-title{font-size:16px;font-weight:600}
+.ob-sub{font-size:12.5px;color:var(--ink-dim);max-width:360px;line-height:1.7}
+.ob-actions{display:flex;gap:12px}
+
+/* ---------- module 2: connection ---------- */
+.conn-row{display:flex;align-items:center;gap:12px}
+.dd{position:relative}
+.dd-trigger{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);border:1px solid var(--line);border-radius:7px;background:var(--bg-2);padding:6px 11px;transition:border-color .16s,color .16s}
+.dd-trigger:hover{color:var(--ink);border-color:var(--line-strong)}
+.sd{width:7px;height:7px;border-radius:50%;background:var(--teal);flex:none}
+.sd.mysql{background:var(--blue)}.sd.postgres{background:var(--amber)}
+.chev{color:var(--ink-faint);font-size:9px}
+.menu{position:absolute;top:calc(100% + 8px);right:0;min-width:260px;background:var(--card-hi);border:1px solid var(--line-strong);border-radius:12px;padding:6px;box-shadow:0 24px 60px -20px rgba(0,0,0,.85);z-index:60;max-height:70vh;overflow:auto}
+.m-title{font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);padding:8px 10px 6px}
+.mi{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border-radius:8px;padding:9px 10px;transition:background .14s}
+.mi:hover{background:rgba(152,162,180,.08)}
+.mi .m-name{font-family:var(--mono);font-size:11.5px;color:var(--ink)}
+.mi .m-sub{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-left:auto}
+.mi.check .m-check{color:var(--teal);font-size:11px;width:12px;text-align:center}
+.menu .sep{height:1px;background:var(--line);margin:5px 8px}
+.modal-mask{position:fixed;inset:0;background:var(--mask);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:70}
+.modal{width:440px;background:var(--card);border:1px solid var(--line-strong);border-radius:14px;box-shadow:0 30px 80px -30px rgba(0,0,0,.9);overflow:hidden}
+.modal .mh{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line)}
+.modal .mh .mt{font-size:14px;font-weight:600}
+.modal .mh .mx{margin-left:auto;color:var(--ink-faint);font-size:14px;width:24px;height:24px;border-radius:6px;display:flex;align-items:center;justify-content:center}
+.modal .mh .mx:hover{background:rgba(152,162,180,.1);color:var(--ink)}
+.modal .mb{padding:16px 18px}
+.frow{margin-bottom:12px}
+.frow .fl{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:6px}
+.frow .fl em{color:var(--red);font-style:normal;margin-left:2px}
+.frow2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:11.5px;color:var(--ink-dim)}
+.switch .knob{width:30px;height:16px;border-radius:20px;background:var(--teal);position:relative;transition:background .2s}
+.switch .knob::after{content:"";position:absolute;width:12px;height:12px;border-radius:50%;background:#fff;top:2px;left:2px}
+.test-res{display:none;font-family:var(--mono);font-size:10px;border-radius:8px;padding:8px 12px;margin-bottom:12px}
+.test-res.ok{display:flex;gap:8px;align-items:center;color:var(--teal);background:var(--teal-dim);border:1px solid rgba(56,201,155,.3)}
+.test-res.bad{display:flex;gap:8px;color:var(--red);background:var(--red-dim);border:1px solid rgba(255,107,94,.3)}
+.modal .mf{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--line)}
+
+/* ---------- module 3: schema ---------- */
+.schema-w{display:grid;grid-template-columns:250px 1fr;gap:14px}
+.rail{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.rail .search{padding:10px}
+.sch-sec{font-family:var(--mono);font-size:9px;letter-spacing:.15em;color:var(--ink-faint);text-transform:uppercase;padding:8px 12px 4px}
+.sch-item{display:flex;align-items:center;gap:8px;padding:7px 12px;font-family:var(--mono);font-size:11px;color:var(--ink-dim);cursor:pointer;transition:background .12s,color .12s}
+.sch-item:hover{background:rgba(152,162,180,.06);color:var(--ink)}
+.sch-item.on{background:var(--teal-dim);color:var(--ink)}
+.sch-item .t-ico{color:var(--ink-faint);font-size:10px;width:14px;text-align:center}
+.sch-item .cnt{font-size:8.5px;color:var(--ink-faint);margin-left:auto}
+.sch-item .fk{color:var(--blue);font-size:9px}
+.sch-col{padding-left:26px;font-size:10px;color:var(--ink-faint)}
+.preview-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.ptab{padding:8px 16px;font-family:var(--mono);font-size:11px;color:var(--ink-faint);border-bottom:2px solid transparent}
+.ptab.on{color:var(--ink);border-bottom-color:var(--teal)}
+.codeblock{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:10.5px;line-height:1.9;color:var(--ink-dim);overflow:auto}
+.codeblock .kw{color:var(--blue)}.codeblock .ty{color:var(--amber)}.codeblock .str{color:var(--teal)}.codeblock .cm{color:var(--ink-faint)}
+
+/* ---------- module 5: editor ---------- */
+.editor{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ed-tool{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.ed-line{display:flex;font-family:var(--mono);font-size:12px;line-height:1.9}
+.ed-line .ln{width:44px;text-align:right;padding-right:14px;color:var(--ink-faint);user-select:none;flex:none}
+.ed-line .lc{padding-right:16px;color:var(--ink-dim);white-space:pre}
+.card3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:6px}
+.sqlcard{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.sqlcard .c-head{display:flex;align-items:center;gap:8px;padding:9px 13px;border-bottom:1px solid var(--line)}
+.vdot{width:7px;height:7px;border-radius:50%}
+.vdot.allow{background:var(--teal)}.vdot.review{background:var(--amber)}.vdot.block{background:var(--red)}.vdot.manual{background:var(--blue)}
+.vlab{font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--ink-dim)}
+.sqlcard .c-sql{font-family:var(--mono);font-size:10px;color:var(--ink-dim);padding:11px 13px;line-height:1.7;background:var(--bg-2)}
+.sqlcard .c-foot{display:flex;gap:8px;padding:10px 13px;border-top:1px solid var(--line)}
+.block-reason{font-size:11px;color:var(--red);padding:0 13px 4px}
+.sugg{font-size:10px;color:var(--ink-faint);padding:0 13px 10px;line-height:1.6}
+.sugg b{color:var(--blue);font-weight:500}
+
+/* ---------- module 6: chat ---------- */
+.chat-w{display:grid;grid-template-columns:1fr 300px;gap:14px}
+.chat-panel{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;height:430px}
+.chat-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.model-pill{font-family:var(--mono);font-size:10px;color:var(--ink-dim);border:1px solid var(--line);border-radius:6px;padding:3px 8px;margin-left:auto}
+.inc-data{font-size:9.5px;color:var(--ink-faint);display:flex;align-items:center;gap:6px;margin-left:8px}
+.chat-body{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:88%;font-size:12px;line-height:1.7;color:var(--ink-dim)}
+.msg.user{align-self:flex-end;background:var(--card-hi);border:1px solid var(--line);border-radius:12px 12px 3px 12px;padding:9px 13px;color:var(--ink)}
+.msg.ai{align-self:flex-start}
+.msg.ai .think{font-size:10.5px;color:var(--ink-faint);background:var(--bg);border:1px dashed var(--line-strong);border-radius:8px;padding:7px 11px;margin-bottom:8px}
+.msg.ai .think::before{content:"think ▸ ";color:var(--blue);font-family:var(--mono);font-size:9px}
+.msg.ai .body{color:var(--ink-dim);margin-bottom:8px}
+.chat-input{display:flex;gap:8px;padding:11px;border-top:1px solid var(--line);background:var(--panel)}
+.chat-input .input{flex:1}
+.sendbtn{width:38px;height:38px;border-radius:10px;background:var(--teal);color:var(--on-teal);font-weight:600;flex:none;transition:filter .16s}
+.sendbtn:hover{filter:brightness(1.1)}
+
+/* ---------- module 7: knowledge ---------- */
+.kb-w{display:grid;grid-template-columns:1fr 300px;gap:14px}
+.kb-build{display:flex;align-items:center;gap:14px;background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px}
+.prog{flex:1;height:6px;border-radius:10px;background:var(--card-hi);overflow:hidden}
+.prog i{display:block;height:100%;width:72%;background:linear-gradient(90deg,var(--teal),#2aa47f);border-radius:10px}
+.kb-build .plab{font-family:var(--mono);font-size:10px;color:var(--ink-dim);white-space:nowrap}
+.kb-review{display:flex;flex-direction:column;gap:12px}
+.kb-card{border:1px solid var(--line);border-radius:12px;background:var(--card);overflow:hidden}
+.kb-card .kb-head{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--line)}
+.kb-card .tb{font-family:var(--mono);font-size:12px;color:var(--ink);font-weight:500}
+.kb-card .kb-rows{font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+.kb-card .kb-body{padding:12px 13px}
+.kb-desc{font-size:11.5px;color:var(--ink-dim);line-height:1.7}
+.tagrow{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px;align-items:center}
+.tag{font-family:var(--mono);font-size:10px;border-radius:20px;padding:3px 10px;border:1px solid var(--line)}
+.tag.draft{color:var(--amber);border-color:rgba(240,168,78,.4);background:var(--amber-dim)}
+.tag.conf{color:var(--teal);border-color:rgba(56,201,155,.4);background:var(--teal-dim)}
+.tag.plus{color:var(--ink-faint);border-style:dashed}
+.field-notes{margin-top:10px;border-top:1px dashed var(--line);padding-top:9px;display:flex;flex-direction:column;gap:5px}
+.fn{display:flex;gap:8px;font-size:10.5px;color:var(--ink-faint);align-items:baseline}
+.fn .fn-col{font-family:var(--mono);color:var(--ink-dim)}
+.fn .fn-txt{color:var(--ink-faint)}
+.kb-actions{display:flex;gap:8px;padding:11px 13px;border-top:1px solid var(--line)}
+
+/* graph */
+.graph{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;height:360px;position:relative;overflow:hidden}
+.graph .g-title{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-faint);text-transform:uppercase;padding:12px;position:absolute;top:0;left:0;z-index:2}
+.g-node{position:absolute;background:var(--card);border:1px solid var(--line-strong);border-radius:10px;padding:7px 11px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);text-align:center;box-shadow:0 10px 24px -14px rgba(0,0,0,.7)}
+.g-node .g-n{display:block;color:var(--ink);font-weight:500}
+.g-node .g-t{font-size:8.5px;color:var(--ink-faint)}
+.g-node.hot{border-color:var(--teal);box-shadow:0 0 0 3px rgba(56,201,155,.15)}
+.g-line{position:absolute;height:1.5px;background:var(--line-strong);transform-origin:left center;z-index:0}
+.g-line.hot{background:var(--teal);opacity:.6}
+.g-legend{position:absolute;bottom:12px;left:12px;display:flex;gap:12px;font-family:var(--mono);font-size:9px;color:var(--ink-faint)}
+
+/* ---------- module 8: audit/settings ---------- */
+.audit-list{display:flex;flex-direction:column;gap:8px}
+.audit-row{display:flex;align-items:center;gap:12px;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:11.5px}
+.audit-row .a-time{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:none;width:92px}
+.audit-row .a-conn{font-family:var(--mono);font-size:10px;color:var(--ink-dim);flex:none}
+.audit-row .a-sql{font-family:var(--mono);font-size:10px;color:var(--ink-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.audit-row .a-ms{font-family:var(--mono);font-size:9px;color:var(--ink-faint);flex:none}
+.vtag{font-family:var(--mono);font-size:8.5px;padding:2px 7px;border-radius:10px;flex:none}
+.vtag.allow{color:var(--teal);background:var(--teal-dim)}
+.vtag.review{color:var(--amber);background:var(--amber-dim)}
+.vtag.block{color:var(--red);background:var(--red-dim)}
+.filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.fp{font-family:var(--mono);font-size:10px;color:var(--ink-dim);border:1px solid var(--line);border-radius:20px;padding:4px 12px;cursor:pointer}
+.fp.on{color:var(--ink);border-color:var(--teal);background:var(--teal-dim)}
+.fp .cnt{color:var(--ink-faint);margin-left:4px}
+
+/* settings modal */
+.setgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.field-note{font-size:10px;color:var(--ink-faint);margin-top:4px;line-height:1.5}
+
+/* ---------- module 9: tokens ---------- */
+.swatch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.sw{background:var(--bg-2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sw .sw-b{height:52px}
+.sw .sw-i{padding:9px 11px}
+.sw .sw-n{font-family:var(--mono);font-size:10.5px;color:var(--ink)}
+.sw .sw-v{font-family:var(--mono);font-size:9px;color:var(--ink-faint);margin-top:2px}
+.type-row{display:flex;gap:24px;flex-wrap:wrap}
+.type-row .tr-b{font-family:var(--mono);color:var(--ink)}
+.type-row .tr-d{font-family:var(--sans);color:var(--ink-dim);font-size:13px;margin-top:4px}
+
+@media (max-width:1000px){.studio{grid-template-columns:1fr}.studio-nav{display:none}.mod-grid,.schema-w,.chat-w,.kb-w{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="studio">
+  <!-- ================= bar ================= -->
+  <header class="studio-bar">
+    <span class="wordmark"><span class="dot"></span>CLEARED <small>UI DESIGN STUDIO</small></span>
+    <span class="bar-note">静态设计稿 · 非运行产品 · <b>前端当前有点击 bug，暂以此稿作为目标设计</b></span>
+    <span class="spacer"></span>
+    <span class="badge done">已实现 M2</span>
+    <span class="badge plan">规划中 M3–M5</span>
+    <span class="badge new">本次新设计</span>
+    <div class="dd" id="themeDD">
+      <button class="dd-trigger" data-dd><span class="sd" id="themeDot" style="background:#38c99b"></span><span id="themeLabel">深色</span><span class="chev">▼</span></button>
+      <div class="menu">
+        <div class="m-title">主题 · 视觉展示</div>
+        <button class="mi" data-theme-pick="dark"><span class="sd" style="background:#38c99b"></span><span class="m-name">深色 · 深墨</span></button>
+        <button class="mi" data-theme-pick="light"><span class="sd" style="background:#0c9a6c"></span><span class="m-name">浅色 · 明亮</span></button>
+        <button class="mi" data-theme-pick="mint"><span class="sd" style="background:#0c9c72"></span><span class="m-name">薄荷绿 · 清新</span></button>
+        <button class="mi" data-theme-pick="ocean"><span class="sd" style="background:#42c6e0"></span><span class="m-name">海洋 · 蓝调</span></button>
+        <button class="mi" data-theme-pick="ember"><span class="sd" style="background:#e3a354"></span><span class="m-name">琥珀 · 暖棕</span></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ================= nav ================= -->
+  <aside class="studio-nav">
+    <div class="nav-sec">模块导航</div>
+    <button class="nav-item on" data-goto="0"><span class="n-idx">00</span>总览 · 模块地图<span class="n-st done">全</span></button>
+    <div class="nav-sec">M2 · 已实现</div>
+    <button class="nav-item" data-goto="1"><span class="n-idx">01</span>引导层 Boot / Onboarding<span class="n-st done">实现</span></button>
+    <button class="nav-item" data-goto="2"><span class="n-idx">02</span>连接管理<span class="n-st done">实现</span></button>
+    <button class="nav-item" data-goto="3"><span class="n-idx">03</span>Schema 浏览器<span class="n-st done">实现</span></button>
+    <button class="nav-item" data-goto="4"><span class="n-idx">04</span>结果区 · 数据表<span class="n-st done">实现</span></button>
+    <div class="nav-sec">M3–M5 · 规划中</div>
+    <button class="nav-item" data-goto="5"><span class="n-idx">05</span>SQL 编辑器<span class="n-st plan">规划</span></button>
+    <button class="nav-item" data-goto="6"><span class="n-idx">06</span>AI 聊天面板<span class="n-st plan">规划</span></button>
+    <button class="nav-item" data-goto="7"><span class="n-idx">07</span>知识库 · 图谱<span class="n-st done">部分</span></button>
+    <button class="nav-item" data-goto="8"><span class="n-idx">08</span>审计 · 设置 · 状态线<span class="n-st plan">规划</span></button>
+    <div class="nav-sec">设计系统</div>
+    <button class="nav-item" data-goto="9"><span class="n-idx">09</span>设计令牌<span class="n-st done">全</span></button>
+  </aside>
+
+  <!-- ================= stage ================= -->
+  <main class="studio-stage">
+
+    <!-- ========== 00 总览 ========== -->
+    <section class="mod on" data-mod="0">
+      <div class="mod-head">
+        <div class="crumb">CLEARED · AI DATABASE TERMINAL</div>
+        <h1>前端功能模块地图</h1>
+        <p class="one-liner">一句话：<b style="color:var(--ink)">数据主场 + AI 副驾</b>。左侧是浏览/查询/结果（数据主场，面积大），右侧是对话面板（AI 副驾，窄栏）。安全三色（绿=读 / 黄=写 / 红=DDL）是全局唯一的彩色语言。点击下方卡片进入对应模块设计。</p>
+        <div class="chips">
+          <span class="chip">安全闸门贯穿所有模块</span><span class="chip">一闸门管 AI + 手动</span><span class="chip">行数据默认不出内网</span><span class="chip">查多写少</span>
+        </div>
+      </div>
+      <div class="mod-grid" id="overviewGrid"></div>
+    </section>
+
+    <!-- ========== 01 引导层 ========== -->
+    <section class="mod" data-mod="1">
+      <div class="mod-head">
+        <div class="crumb">模块 01</div>
+        <h1>引导层 <span class="badge done">M2 已实现</span></h1>
+        <p class="one-liner">应用启动的三个状态：连接中 → 就绪（有连接）或 空态（无连接，引导建演示库）。点击测试按钮可查看状态变化。</p>
+      </div>
+      <div class="mod-grid">
+        <div>
+          <div class="grp-label">状态 A · 连接中（Boot）</div>
+          <div class="boot">
+            <div class="boot-bar"><span class="wordmark"><span class="dot"></span>CLEARED</span></div>
+            <div class="boot-body">
+              <div class="boot-card">
+                <div class="kicker">connecting to CLEARED</div>
+                <div class="spinner"><i></i><i></i><i></i></div>
+                <p class="hint">正在连接本地 CLEARED 服务…</p>
+                <div class="boot-err">× 无法连接 127.0.0.1:8765，请确认服务已启动</div>
+              </div>
+            </div>
+          </div>
+          <div class="note">通过 <span class="k">useBootstrap()</span> 轮询 <span class="k">GET /api/v1/bootstrap</span> 拿 token；未就绪时持续重试，停在 Boot 屏。失败时显示红色错误（上示例），可"重试"。</div>
+        </div>
+        <div>
+          <div class="grp-label">状态 B · 空态（Onboarding）</div>
+          <div class="onboard">
+            <div class="ob-body">
+              <div class="ob-ring"><span class="db"></span><span class="pl"></span></div>
+              <div class="ob-title">还没有连接数据库</div>
+              <p class="ob-sub">一键创建演示库快速体验，或手动新建一个真实连接（SQLite / MySQL / PostgreSQL）。</p>
+              <div class="ob-actions">
+                <button class="btn primary" data-demo>使用演示库</button>
+                <button class="btn ghost" data-goto="2">新建连接</button>
+              </div>
+            </div>
+          </div>
+          <div class="note">空态让新用户 <b>10 秒内跑到"问数据库"</b>。"使用演示库"调后端自动播种的 <span class="k">demo.db</span>（14 张表），一键创建 SQLite 连接。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 02 连接管理 ========== -->
+    <section class="mod" data-mod="2">
+      <div class="mod-head">
+        <div class="crumb">模块 02</div>
+        <h1>连接管理 <span class="badge done">M2 已实现</span></h1>
+        <p class="one-liner">顶部连接下拉（切换/新建/编辑）+ 新建连接弹窗。连接类型走方言插件注册表：SQLite / MySQL / PostgreSQL。</p>
+      </div>
+      <div class="mod-grid">
+        <div>
+          <div class="grp-label">连接下拉</div>
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">AppBar · 连接切换</span><span class="ts">已实现</span></div>
+            <div class="mu-body">
+              <div class="dd">
+                <button class="dd-trigger" data-dd><span class="sd"></span>demo.db · sqlite<span class="chev">▼</span></button>
+                <div class="menu">
+                  <div class="m-title">连接</div>
+                  <button class="mi check"><span class="sd"></span><span class="m-name">demo.db</span><span class="m-sub">sqlite</span><span class="m-check">✓</span></button>
+                  <button class="mi"><span class="sd mysql"></span><span class="m-name">prod-mysql</span><span class="m-sub">mysql</span></button>
+                  <button class="mi"><span class="sd postgres"></span><span class="m-name">analytics-pg</span><span class="m-sub">postgres</span></button>
+                  <div class="sep"></div>
+                  <button class="mi" data-goto="2">＋ 新建连接</button>
+                  <button class="mi">编辑当前连接</button>
+                  <button class="mi">移除连接</button>
+                </div>
+              </div>
+              <div class="note" style="margin-top:16px">下拉右侧有<b>连接测试</b>（打绿勾"已连接"）与<b>移除</b>。当前连接左侧绿点高亮。点击弹窗中的"＋ 新建连接"可触发下方弹窗。</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">新建连接弹窗</div>
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">ConnectionModal</span><span class="ts">已实现</span></div>
+            <div class="mu-body">
+              <div class="modal-mask" id="connMask">
+                <div class="modal">
+                  <div class="mh"><span class="mt">新建连接</span><button class="mx" data-close>✕</button></div>
+                  <div class="mb">
+                    <div class="test-res" id="testRes"><span>✓</span><span id="testTxt">连接测试成功 · 版本 3.47.0 (SQLite)</span></div>
+                    <div class="frow"><label class="fl">名称<em>*</em></label><input class="input" value="demo.db"></div>
+                    <div class="frow"><label class="fl">类型</label>
+                      <div class="frow2">
+                        <div style="display:flex;gap:8px">
+                          <span class="fp on">SQLite</span><span class="fp">MySQL</span><span class="fp">PostgreSQL</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="frow"><label class="fl">数据库文件</label><input class="input" value="~/.cleared/demo.db"></div>
+                    <div class="frow2">
+                      <div class="frow" style="margin:0"><label class="fl">只读会话</label>
+                        <div class="switch"><span class="knob"></span>开</div>
+                      </div>
+                      <div class="frow" style="margin:0"><label class="fl">行数上限</label><input class="input" value="500"></div>
+                    </div>
+                  </div>
+                  <div class="mf">
+                    <button class="btn ghost" data-test>测试连接</button>
+                    <button class="btn primary" data-close>保存连接</button>
+                  </div>
+                </div>
+              </div>
+              <button class="btn primary mini" data-open="connMask" data-goto2 style="margin:4px 0 10px">＋ 打开新建连接弹窗</button>
+              <div class="note">字段含<b>类型（sqlite/mysql/postgres 方言）</b>、连接串/主机端口、<b>只读会话开关</b>（会话级只读已实现）、行数上限。测试按钮调 <span class="k">POST /connections/{id}/test</span>，成功打绿勾（上方示例），失败标红。密码打码保存。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 03 Schema 浏览器 ========== -->
+    <section class="mod" data-mod="3">
+      <div class="mod-head">
+        <div class="crumb">模块 03</div>
+        <h1>Schema 浏览器 <span class="badge done">M2 已实现</span></h1>
+        <p class="one-liner">左侧表/列树（含行数、注释、FK 标记），点击表在右侧看 <b>预览</b>（前 N 行）或 <b>DDL</b>。schema 有 30s 缓存，可强制刷新。</p>
+      </div>
+      <div class="schema-w">
+        <div class="rail">
+          <div class="search"><input class="input" placeholder="⌕ 过滤表 / 列…"></div>
+          <div class="sch-sec">表 · 14</div>
+          <div class="sch-item on"><span class="t-ico">▤</span>orders<span class="cnt">12.4k</span></div>
+          <div class="sch-col">· id  INTEGER  PK</div>
+          <div class="sch-col">· customer_id  FK → customers</div>
+          <div class="sch-col">· status  TEXT</div>
+          <div class="sch-item"><span class="t-ico">▤</span>customers<span class="cnt">3.1k</span></div>
+          <div class="sch-item"><span class="t-ico">▤</span>products<span class="cnt">1.2k</span></div>
+          <div class="sch-item"><span class="t-ico">▤</span>categories<span class="cnt">86</span></div>
+          <div class="sch-item"><span class="t-ico">▤</span>order_items<span class="cnt">31.8k</span><span class="fk">FK·2</span></div>
+          <div class="sch-item"><span class="t-ico">▤</span>suppliers<span class="cnt">54</span></div>
+          <div class="sch-sec">视图 · 2</div>
+          <div class="sch-item"><span class="t-ico">◧</span>v_order_totals<span class="cnt">—</span></div>
+        </div>
+        <div>
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">orders · 预览前 10 行</span><span class="ts">tab 切换 preview / ddl</span></div>
+            <div class="mu-body">
+              <div class="preview-tabs"><span class="ptab on">预览 · 10 行</span><span class="ptab">DDL</span></div>
+              <table class="tbl">
+                <tr><th>id <span class="arr">↓</span></th><th>customer_id</th><th>status</th><th>total</th><th>created_at</th></tr>
+                <tr class="sel"><td>10248</td><td>31</td><td>shipped</td><td class="num">440.00</td><td>2026-08-01</td></tr>
+                <tr><td>10249</td><td>44</td><td>pending</td><td class="num">1863.40</td><td>2026-08-01</td></tr>
+                <tr><td>10250</td><td>8</td><td>shipped</td><td class="num">1552.60</td><td>2026-08-02</td></tr>
+                <tr><td>10251</td><td>22</td><td>cancelled</td><td class="num">654.06</td><td>2026-08-03</td></tr>
+              </table>
+            </div>
+          </div>
+          <div class="note" style="margin-top:12px">列头显示<b>类型小字</b> + 排序箭头；行 hover 高亮。表名行数与 FK 计数来自后端 <span class="k">schema discovery</span>。列头带"问 AI"入口（M3 打通反向提问）。DDL tab 用 <span class="k">/connections/{id}/schema/{table}/ddl</span> 导出建表语句。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 04 结果区 ========== -->
+    <section class="mod" data-mod="4">
+      <div class="mod-head">
+        <div class="crumb">模块 04</div>
+        <h1>结果区 · 数据表 <span class="badge done">M2 已实现</span></h1>
+        <p class="one-liner">多结果标签页 + 高密度数据表（排序/过滤/分页/类型小字/列头问 AI）。读查询放行即进结果区，写操作需确认才执行。</p>
+      </div>
+      <div class="mod-grid">
+        <div style="grid-column:1/-1">
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">ResultTabs · DataTable</span><span class="ts">读放行直进 / 写确认执行</span></div>
+            <div class="mu-body">
+              <div class="preview-tabs"><span class="ptab on">result #1 · orders</span><span class="ptab">result #2 · customers</span><span class="ptab">＋</span></div>
+              <table class="tbl">
+                <tr><th>id<span class="ty">int</span><span class="arr">↓</span></th><th>customer_id<span class="ty">int</span></th><th>status<span class="ty">text</span></th><th>total<span class="ty">real</span></th><th>created_at<span class="ty">datetime</span></th></tr>
+                <tr><td>10248</td><td>31</td><td>shipped</td><td class="num">440.00</td><td>2026-08-01 09:12</td></tr>
+                <tr><td>10249</td><td>44</td><td>pending</td><td class="num">1863.40</td><td>2026-08-01 10:03</td></tr>
+                <tr><td>10250</td><td>8</td><td>shipped</td><td class="num">1552.60</td><td>2026-08-02 14:41</td></tr>
+                <tr><td>10251</td><td>22</td><td>cancelled</td><td class="num">654.06</td><td>2026-08-03 08:55</td></tr>
+                <tr><td>10252</td><td>19</td><td>shipped</td><td class="num">3597.90</td><td>2026-08-03 16:20</td></tr>
+                <tr><td>10253</td><td>33</td><td>pending</td><td class="num">1444.50</td><td>2026-08-04 11:37</td></tr>
+              </table>
+              <div class="note" style="margin-top:10px;border-left-color:var(--teal)"><span class="k">读取放行</span> · <b>6 / 500</b> 行 · <b>12 ms</b> · 分页 1-500 · <span class="k">列头问 AI</span> 入口在列头右侧。行数据仅在 <span class="k">include_data</span> 开启时回传模型。</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">写操作 · 影响行预览（确认才执行）</div>
+          <div class="sqlcard" style="border-color:rgba(240,168,78,.4)">
+            <div class="c-head"><span class="vdot review"></span><span class="vlab">REVIEW · DML</span></div>
+            <div class="c-sql">UPDATE orders SET status='shipped' WHERE id &gt; 100</div>
+            <div style="padding:0 13px 8px;font-size:11px;color:var(--amber)">将影响约 <b>4 行</b> · 无 WHERE 已拦截</div>
+            <div class="c-foot"><button class="btn warn mini">确认执行</button><button class="btn ghost mini">取消</button></div>
+          </div>
+          <div class="note" style="margin-top:10px">写操作走 <span class="k">POST /query confirm=true</span>，服务端<b>重新评估闸门</b>后才执行，BLOCK 优先。</div>
+        </div>
+        <div>
+          <div class="grp-label">拦截 · 红卡（绝不执行）</div>
+          <div class="sqlcard" style="border-color:rgba(255,107,94,.4)">
+            <div class="c-head"><span class="vdot block"></span><span class="vlab">BLOCK · DML</span></div>
+            <div class="c-sql">DELETE FROM orders</div>
+            <div class="block-reason">无 WHERE 条件的 DELETE 被安全闸门拦截</div>
+            <div class="sugg">建议：<b>DELETE FROM orders WHERE status='cancelled' AND created_at &lt; '2026-01-01'</b></div>
+          </div>
+          <div class="note" style="margin-top:10px;border-left-color:var(--red)"><span class="k">BLOCK 永不执行</span>。返回原因 + <span class="k">建议改写</span>（闸门 suggest_safe）。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 05 SQL 编辑器 ========== -->
+    <section class="mod" data-mod="5">
+      <div class="mod-head">
+        <div class="crumb">模块 05</div>
+        <h1>SQL 编辑器 <span class="badge plan">M3 规划</span></h1>
+        <p class="one-liner">独立编辑器标签页：行号 + 语法高亮 + 运行走闸门 + 格式化。选中片段可反向"问 AI"（解释/优化/风险）。</p>
+      </div>
+      <div class="mod-grid">
+        <div style="grid-column:1/-1">
+          <div class="grp-label">编辑器 + 运行反馈三态</div>
+          <div class="editor">
+            <div class="ed-tool">
+              <button class="btn primary mini">▶ 运行</button>
+              <button class="btn ghost mini">格式</button>
+              <button class="btn ghost mini">只读</button>
+              <span class="spacer" style="flex:1"></span>
+              <span class="m-sub mono" style="font-family:var(--mono);font-size:9px;color:var(--ink-faint)">选中片段 → 问 AI</span>
+            </div>
+            <div class="ed-line"><span class="ln">1</span><span class="lc"><span class="kw">SELECT</span> c.name, <span class="kw">COUNT</span>(o.id) <span class="kw">AS</span> orders<br></span></div>
+            <div class="ed-line"><span class="ln">2</span><span class="lc"><span class="kw">FROM</span> customers c <span class="kw">JOIN</span> orders o <span class="kw">ON</span> o.customer_id = c.id<br></span></div>
+            <div class="ed-line"><span class="ln">3</span><span class="lc"><span class="kw">GROUP BY</span> c.name <span class="kw">ORDER BY</span> orders <span class="kw">DESC</span> <span class="kw">LIMIT</span> <span class="ty">10</span><br></span></div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">放行 · 绿</div>
+          <div class="sqlcard" style="border-color:rgba(56,201,155,.4)">
+            <div class="c-head"><span class="vdot allow"></span><span class="vlab">ALLOW · READ</span></div>
+            <div class="c-sql">SELECT * FROM orders LIMIT 100</div>
+            <div style="padding:0 13px 8px;font-size:11px;color:var(--ink-dim)">已放行 · 结果进 result #1</div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">需确认 · 黄</div>
+          <div class="sqlcard" style="border-color:rgba(240,168,78,.4)">
+            <div class="c-head"><span class="vdot review"></span><span class="vlab">REVIEW · DML</span></div>
+            <div class="c-sql">UPDATE products SET price = price * 1.05 WHERE category_id = 3</div>
+            <div style="padding:0 13px 8px;font-size:11px;color:var(--amber)">将影响约 <b>24 行</b></div>
+            <div class="c-foot"><button class="btn warn mini">确认执行</button><button class="btn ghost mini">取消</button></div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">DDL · 蓝（manual only）</div>
+          <div class="sqlcard" style="border-color:rgba(121,160,255,.4)">
+            <div class="c-head"><span class="vdot manual"></span><span class="vlab">DDL · MANUAL</span></div>
+            <div class="c-sql">ALTER TABLE orders ADD COLUMN note TEXT</div>
+            <div class="c-foot"><button class="btn ghost mini" style="color:var(--blue)">发到编辑器</button><button class="btn ghost mini">取消</button></div>
+          </div>
+        </div>
+        <div style="grid-column:1/-1">
+          <div class="note"><span class="k">DDL 强红卡</span>：手动执行需二次确认；AI 只有 <span class="k">draft_ddl</span>（生成脚本送编辑器，永不执行）。编辑器选中 → <span class="k">/ai/selection</span> 反向问 AI（解释/优化/风险）。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 06 AI 聊天面板 ========== -->
+    <section class="mod" data-mod="6">
+      <div class="mod-head">
+        <div class="crumb">模块 06</div>
+        <h1>AI 聊天面板 <span class="badge plan">M3 规划</span></h1>
+        <p class="one-liner">右侧窄栏（AI 副驾）：自然语言 → SQL。SSE 流式输出 think 轨迹 / 文本 / SQL 卡片。卡片是<b>提案不是执行</b>——读可运行、写要确认、DDL 送编辑器。</p>
+      </div>
+      <div class="chat-w">
+        <div class="chat-panel">
+          <div class="chat-head">
+            <span style="font-size:11px;font-weight:600">AI 副驾</span>
+            <span class="model-pill">mock</span>
+            <label class="inc-data"><input type="checkbox" checked style="accent-color:var(--teal)">AI 可看结果明细</label>
+          </div>
+          <div class="chat-body">
+            <div class="msg user">退货率最高的 10 个商品是哪些？</div>
+            <div class="msg ai">
+              <div class="think">先取 order_items 关联 orders.status，按商品聚合退货率</div>
+              <div class="body">已为你生成查询，点击运行查看结果：</div>
+              <div class="sqlcard" style="border-color:rgba(56,201,155,.4)">
+                <div class="c-head"><span class="vdot allow"></span><span class="vlab">READ · allow</span></div>
+                <div class="c-sql">SELECT p.name, COUNT(*) AS total,<br>  SUM(o.status='returned') AS ret,<br>  ROUND(SUM(o.status='returned')*1.0/COUNT(*),3) AS rate<br>FROM order_items oi JOIN orders o ON o.id=oi.order_id<br>JOIN products p ON p.id=oi.product_id<br>GROUP BY p.name ORDER BY rate DESC LIMIT 10</div>
+                <div class="c-foot"><button class="btn primary mini">运行</button><button class="btn ghost mini">改 SQL</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-input"><input class="input" placeholder="ask your database…"><button class="sendbtn">➤</button></div>
+        </div>
+        <div>
+          <div class="grp-label">SQL 卡片三色（提案 ≠ 执行）</div>
+          <div class="sqlcard" style="border-color:rgba(56,201,155,.4);margin-bottom:10px">
+            <div class="c-head"><span class="vdot allow"></span><span class="vlab">读 · 运行进结果区</span></div>
+            <div class="c-sql">SELECT … (只读)</div>
+          </div>
+          <div class="sqlcard" style="border-color:rgba(240,168,78,.4);margin-bottom:10px">
+            <div class="c-head"><span class="vdot review"></span><span class="vlab">写 · 影响行预览 + 确认</span></div>
+            <div class="c-sql">UPDATE …</div>
+            <div style="padding:0 13px 8px;font-size:10.5px;color:var(--amber)">将影响约 3 行 · 需确认</div>
+          </div>
+          <div class="sqlcard" style="border-color:rgba(121,160,255,.4);margin-bottom:10px">
+            <div class="c-head"><span class="vdot manual"></span><span class="vlab">DDL · 送编辑器手动执行</span></div>
+            <div class="c-sql">CREATE INDEX …</div>
+          </div>
+          <div class="sqlcard" style="border-color:rgba(255,107,94,.4)">
+            <div class="c-head"><span class="vdot block"></span><span class="vlab">拦截 · 原因 + 建议</span></div>
+            <div class="c-sql">DELETE FROM orders</div>
+            <div class="sugg">建议加 WHERE 或先 SELECT 确认范围</div>
+          </div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:16px">SSE 事件流：<span class="k">turn_start → think → text → sql_card → done</span>。工具只回<b>列名 + 行数</b>，行数据默认不回传模型（<b>隐私红线</b>）；"AI 可看结果明细"开启时才 <span class="k">include_data</span>。模型下拉即切 provider（网关可配置）。</div>
+    </section>
+
+    <!-- ========== 07 知识库 ========== -->
+    <section class="mod" data-mod="7">
+      <div class="mod-head">
+        <div class="crumb">模块 07</div>
+        <h1>知识库 · 图谱 <span class="badge done">审查页已实现 · 图谱待完善</span></h1>
+        <p class="one-liner">逐表 AI 生成<b>表描述 + 领域标签 + 字段注释</b>，人工确认后才进入可路由标签库；图谱画 FK 网络辅助检索理解。</p>
+      </div>
+      <div class="kb-w">
+        <div>
+          <div class="kb-build">
+            <button class="btn primary mini">▶ 构建知识库</button>
+            <div class="prog"><i></i></div>
+            <span class="plab">12/14 表</span>
+          </div>
+          <div class="kb-review">
+            <div class="kb-card">
+              <div class="kb-head"><span class="tb">orders</span><span class="kb-rows">12,436 行</span><span class="spacer" style="flex:1"></span><span class="badge draft">标签草案</span></div>
+              <div class="kb-body">
+                <div class="kb-desc">订单主表，记录每次销售交易的状态流转（pending → shipped / returned / cancelled）。</div>
+                <div class="tagrow">
+                  <span class="tag conf">订单</span><span class="tag conf">交易</span><span class="tag draft">退货</span><span class="tag plus">＋ 建议标签</span>
+                </div>
+                <div class="field-notes">
+                  <div class="fn"><span class="fn-col">status</span><span class="fn-txt">订单状态：pending/shipped/returned/cancelled</span></div>
+                  <div class="fn"><span class="fn-col">total</span><span class="fn-txt">订单金额合计（含税）</span></div>
+                  <div class="fn"><span class="fn-col">customer_id</span><span class="fn-txt">下单客户，FK → customers</span></div>
+                </div>
+              </div>
+              <div class="kb-actions">
+                <button class="btn primary mini">✓ 确认标签</button>
+                <button class="btn ghost mini">✕ 拒绝</button>
+                <button class="btn ghost mini">编辑描述</button>
+              </div>
+            </div>
+            <div class="kb-card">
+              <div class="kb-head"><span class="tb">products</span><span class="kb-rows">1,213 行</span><span class="spacer" style="flex:1"></span><span class="badge done">已确认</span></div>
+              <div class="kb-body">
+                <div class="kb-desc">商品目录，含售价与成本；退货率分析的核心维度表。</div>
+                <div class="tagrow"><span class="tag conf">商品</span><span class="tag conf">目录</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">FK 图谱 · 标签着色</div>
+          <div class="graph">
+            <span class="g-title">知识图谱 · demo.db</span>
+            <span class="g-line" style="left:96px;top:112px;width:64px;transform:rotate(38deg)"></span>
+            <span class="g-line" style="left:96px;top:112px;width:84px;transform:rotate(-28deg)"></span>
+            <span class="g-line" style="left:202px;top:140px;width:70px;transform:rotate(-20deg)"></span>
+            <span class="g-line" style="left:96px;top:112px;width:120px;transform:rotate(70deg)"></span>
+            <span class="g-line hot" style="left:202px;top:140px;width:58px;transform:rotate(-92deg)"></span>
+            <div class="g-node hot" style="left:60px;top:86px"><span class="g-n">orders</span><span class="g-t">订单·退货</span></div>
+            <div class="g-node" style="left:176px;top:118px"><span class="g-n">customers</span><span class="g-t">客户</span></div>
+            <div class="g-node" style="left:288px;top:128px"><span class="g-n">products</span><span class="g-t">商品·目录</span></div>
+            <div class="g-node" style="left:110px;top:196px"><span class="g-n">order_items</span><span class="g-t">明细</span></div>
+            <div class="g-node" style="left:220px;top:220px"><span class="g-n">categories</span><span class="g-t">类目</span></div>
+            <div class="g-legend"><span class="tag conf">已确认标签</span><span class="tag draft">草案</span><span class="tag" style="border-color:var(--teal);color:var(--teal)">命中查询子图</span></div>
+          </div>
+          <div class="note" style="margin-top:12px">图谱按 <span class="k">foreign_keys</span> 画 FK 网络，节点着色=领域标签。<b>命中查询子图</b>高亮（teal 描边）——查询触碰的表。检索是 <span class="k">关键词 + 向量 + 图谱</span> 混合。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 08 审计 · 设置 ========== -->
+    <section class="mod" data-mod="8">
+      <div class="mod-head">
+        <div class="crumb">模块 08</div>
+        <h1>审计 · 设置 · 状态线 <span class="badge plan">M4 规划</span></h1>
+        <p class="one-liner">每条执行语句 JSONL 落审计；状态线实时显示闸门/模型/方言；设置弹窗配 AI 网关与闸门参数。</p>
+      </div>
+      <div class="mod-grid">
+        <div>
+          <div class="grp-label">审计抽屉 · 执行历史</div>
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">AuditDrawer</span><span class="ts">筛选：连接 / 判定</span></div>
+            <div class="mu-body">
+              <div class="filters">
+                <span class="fp on">全部 <span class="cnt">128</span></span><span class="fp">放行 <span class="cnt">110</span></span><span class="fp">需确认 <span class="cnt">14</span></span><span class="fp">拦截 <span class="cnt">4</span></span>
+              </div>
+              <div class="audit-list">
+                <div class="audit-row"><span class="a-time">14:32:11</span><span class="vtag allow">放行</span><span class="a-conn">demo.db</span><span class="a-sql">SELECT p.name, COUNT(*) …</span><span class="a-ms">12ms</span></div>
+                <div class="audit-row"><span class="a-time">14:29:50</span><span class="vtag review">确认</span><span class="a-conn">demo.db</span><span class="a-sql">UPDATE orders SET status='shipped' WHERE id&gt;100</span><span class="a-ms">48ms</span></div>
+                <div class="audit-row"><span class="a-time">14:27:03</span><span class="vtag block">拦截</span><span class="a-conn">demo.db</span><span class="a-sql">DELETE FROM orders</span><span class="a-ms">3ms</span></div>
+                <div class="audit-row"><span class="a-time">14:20:44</span><span class="vtag allow">放行</span><span class="a-conn">prod-mysql</span><span class="a-sql">SELECT * FROM inventory WHERE qty &lt; 10</span><span class="a-ms">87ms</span></div>
+              </div>
+              <div class="note" style="margin-top:10px">每条含：时间 / 判定色标 / 连接 / 语句 / 耗时。状态线"审计"计数即此表条数。</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="grp-label">设置弹窗 · AI 网关 + 闸门</div>
+          <div class="mu">
+            <div class="mu-tag"><span class="tt">SettingsModal</span><span class="ts">PUT /api/v1/settings</span></div>
+            <div class="mu-body">
+              <div class="setgrid">
+                <div class="frow" style="margin:0"><label class="fl">AI 提供方</label>
+                  <select class="input"><option>mock（免密钥）</option><option>cloud</option><option>local</option></select>
+                </div>
+                <div class="frow" style="margin:0"><label class="fl">模型</label><input class="input" value="claude-sonnet-4-5"></div>
+                <div class="frow" style="margin:0"><label class="fl">Base URL</label><input class="input" placeholder="https://… 或 http://localhost:11434/v1"></div>
+                <div class="frow" style="margin:0"><label class="fl">API Key</label><input class="input" value="sk-••••••••••"></div>
+                <div class="frow" style="margin:0"><label class="fl">温度</label><input class="input" value="0.2"></div>
+                <div class="frow" style="margin:0"><label class="fl">闸门审查阈值</label><input class="input" value="0.75"></div>
+              </div>
+              <div class="field-note">本地网关（Ollama / vLLM / 私有 OpenAI 兼容端点）接入即可，无需外网；企业隐私靠"模型默认只收 schema 结构"红线。</div>
+            </div>
+          </div>
+          <div class="grp-label" style="margin-top:16px">状态线 · StatusLine</div>
+          <div style="display:flex;align-items:center;gap:18px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);background:var(--bg-2);border:1px solid var(--line);border-radius:10px;padding:10px 16px">
+            <span style="display:flex;align-items:center;gap:6px"><span class="s-dot" style="width:6px;height:6px;border-radius:50%;background:var(--teal)"></span>gate : armed</span>
+            <span>model : mock</span><span>dialect : sqlite / mysql / postgres</span>
+            <span style="margin-left:auto">audit : 128 · ai : idle</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 09 设计令牌 ========== -->
+    <section class="mod" data-mod="9">
+      <div class="mod-head">
+        <div class="crumb">模块 09</div>
+        <h1>设计令牌 <span class="badge done">全</span></h1>
+        <p class="one-liner">深墨底 + 安全三色语义（绿=读 / 黄=写 / 红=DDL），蓝做辅助。IBM Plex 字体。全局唯一彩色语言是安全语义色。</p>
+      </div>
+      <div class="mod-grid">
+        <div style="grid-column:1/-1">
+          <div class="grp-label">语义色 · 安全三色</div>
+          <div class="swatch-grid">
+            <div class="sw"><div class="sw-b" style="background:var(--teal)"></div><div class="sw-i"><div class="sw-n">--teal</div><div class="sw-v">#38c99b · 读 / 放行 / 已确认</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--amber)"></div><div class="sw-i"><div class="sw-n">--amber</div><div class="sw-v">#f0a84e · 写 / 需确认 / 草案</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--red)"></div><div class="sw-i"><div class="sw-n">--red</div><div class="sw-v">#ff6b5e · DDL / 拦截 / 危险</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--blue)"></div><div class="sw-i"><div class="sw-n">--blue</div><div class="sw-v">#79a0ff · 辅助 / think 轨迹 / FK</div></div></div>
+          </div>
+        </div>
+        <div style="grid-column:1/-1">
+          <div class="grp-label">层级背景</div>
+          <div class="swatch-grid">
+            <div class="sw"><div class="sw-b" style="background:var(--bg)"></div><div class="sw-i"><div class="sw-n">--bg</div><div class="sw-v">#0b0d12</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--bg-2)"></div><div class="sw-i"><div class="sw-n">--bg-2</div><div class="sw-v">#0e1117</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--panel)"></div><div class="sw-i"><div class="sw-n">--panel</div><div class="sw-v">#10131b</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--card)"></div><div class="sw-i"><div class="sw-n">--card</div><div class="sw-v">#121722</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--card-hi)"></div><div class="sw-i"><div class="sw-n">--card-hi</div><div class="sw-v">#161c29</div></div></div>
+            <div class="sw"><div class="sw-b" style="background:var(--rail)"></div><div class="sw-i"><div class="sw-n">--rail</div><div class="sw-v">#0d1017</div></div></div>
+          </div>
+        </div>
+        <div style="grid-column:1/-1">
+          <div class="grp-label">字体</div>
+          <div class="type-row">
+            <div><div class="tr-b" style="font-size:26px">IBM Plex Sans 26</div><div class="tr-d">标题 / 正文（--sans）</div></div>
+            <div><div class="tr-b" style="font-size:16px;letter-spacing:.02em">IBM Plex Mono 16</div><div class="tr-d">SQL / 代码 / 状态线（--mono）</div></div>
+            <div><div class="tr-b" style="font-size:13px;color:var(--ink-dim)">PingFang SC · 中文</div><div class="tr-d">中文兜底字体栈</div></div>
+          </div>
+        </div>
+        <div style="grid-column:1/-1">
+          <div class="grp-label">多主题预设 · 顶部下拉切换（浅色/深色/薄荷/海洋/琥珀）</div>
+          <div class="swatch-grid">
+            <div class="sw"><div class="sw-b" style="background:#0b0d12"></div><div class="sw-i"><div class="sw-n">深色 · 深墨</div><div class="sw-v" style="display:flex;gap:7px;margin-top:4px"><span title="读" style="width:12px;height:12px;border-radius:50%;background:#38c99b"></span><span title="写" style="width:12px;height:12px;border-radius:50%;background:#f0a84e"></span><span title="DDL" style="width:12px;height:12px;border-radius:50%;background:#ff6b5e"></span></div></div></div>
+            <div class="sw"><div class="sw-b" style="background:#f4f6fa"></div><div class="sw-i"><div class="sw-n">浅色 · 明亮</div><div class="sw-v" style="display:flex;gap:7px;margin-top:4px"><span style="width:12px;height:12px;border-radius:50%;background:#0c9a6c"></span><span style="width:12px;height:12px;border-radius:50%;background:#ab6a14"></span><span style="width:12px;height:12px;border-radius:50%;background:#cf3d34"></span></div></div></div>
+            <div class="sw"><div class="sw-b" style="background:#f2faf6"></div><div class="sw-i"><div class="sw-n">薄荷绿 · 清新</div><div class="sw-v" style="display:flex;gap:7px;margin-top:4px"><span style="width:12px;height:12px;border-radius:50%;background:#0c9c72"></span><span style="width:12px;height:12px;border-radius:50%;background:#a97a2c"></span><span style="width:12px;height:12px;border-radius:50%;background:#cc4a41"></span></div></div></div>
+            <div class="sw"><div class="sw-b" style="background:#0a0e1a"></div><div class="sw-i"><div class="sw-n">海洋 · 蓝调</div><div class="sw-v" style="display:flex;gap:7px;margin-top:4px"><span style="width:12px;height:12px;border-radius:50%;background:#42c6e0"></span><span style="width:12px;height:12px;border-radius:50%;background:#f0b45a"></span><span style="width:12px;height:12px;border-radius:50%;background:#ff7268"></span></div></div></div>
+            <div class="sw"><div class="sw-b" style="background:#161009"></div><div class="sw-i"><div class="sw-n">琥珀 · 暖棕</div><div class="sw-v" style="display:flex;gap:7px;margin-top:4px"><span style="width:12px;height:12px;border-radius:50%;background:#e3a354"></span><span style="width:12px;height:12px;border-radius:50%;background:#b3802f"></span><span style="width:12px;height:12px;border-radius:50%;background:#e05a4e"></span></div></div></div>
+          </div>
+        </div>
+        <div style="grid-column:1/-1">
+          <div class="note">彩色语义约束：<b>安全判定用彩色</b>（绿=读/黄=写/红=DDL），其他用中性灰阶。多主题只换<b>背景色系 + 主强调</b>，三色语义在每套主题内保持可区分。主题切换做成产品能力（顶部下拉 + <span class="k">localStorage</span> 记忆），后续产品复用这套 token。</div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= statusline ================= -->
+  <footer class="statusline">
+    <span class="s-dot"></span><span>gate&nbsp;:&nbsp;<b>armed</b></span>
+    <span>model&nbsp;:&nbsp;mock</span>
+    <span>dialect&nbsp;:&nbsp;sqlite / mysql / postgres</span>
+    <div class="st-right"><span>audit&nbsp;:&nbsp;<b>128</b></span><span>design&nbsp;:&nbsp;frontend-design</span></div>
+  </footer>
+</div>
+
+<script>
+// ===== 模块切换 =====
+const navs = document.querySelectorAll('.nav-item')
+const mods = document.querySelectorAll('.mod')
+function go(i){
+  mods.forEach(m=>m.classList.toggle('on', m.dataset.mod===String(i)))
+  navs.forEach(n=>n.classList.toggle('on', Number(n.dataset.goto)===i))
+  document.querySelectorAll('.modal-mask').forEach(m=>m.style.display='none')
+  document.querySelector('.studio-stage').scrollTop=0
+}
+document.querySelectorAll('[data-goto]').forEach(el=>el.addEventListener('click', e=>{
+  e.stopPropagation(); go(Number(el.dataset.goto))
+}))
+
+// ===== 总览卡片 =====
+const cards = [
+  {i:1,t:'引导层',d:'Boot 连接中 / 空态一键用演示库',st:'实现',c:'boot'},
+  {i:2,t:'连接管理',d:'下拉切换 · 新建弹窗 · 测试 · 只读开关',st:'实现',c:'conn'},
+  {i:3,t:'Schema 浏览器',d:'表/列树 · 预览 · DDL · 30s 缓存',st:'实现',c:'tree'},
+  {i:4,t:'结果区 · 数据表',d:'多标签 · 排序/过滤/分页 · 类型小字',st:'实现',c:'grid'},
+  {i:5,t:'SQL 编辑器',d:'行号+高亮 · 运行走闸门 · 反向问 AI',st:'规划',c:'edit'},
+  {i:6,t:'AI 聊天面板',d:'SSE 流式 · 三色卡片 · 提案非执行',st:'规划',c:'chat'},
+  {i:7,t:'知识库 · 图谱',d:'表注释+领域标签 · 确认制 · FK 网络',st:'部分',c:'kb'},
+  {i:8,t:'审计 · 设置 · 状态线',d:'执行留痕 · AI 网关 · gate armed',st:'规划',c:'audit'},
+  {i:9,t:'设计令牌',d:'安全三色语义 · 深墨 · IBM Plex',st:'全',c:'token'},
+]
+document.getElementById('overviewGrid').innerHTML = cards.map(c=>`
+  <div class="mu" style="cursor:pointer" data-goto="${c.i}">
+    <div class="mu-body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">${String(c.i).padStart(2,'0')}</span>
+        <span style="font-size:14px;font-weight:600">${c.t}</span>
+        <span class="badge ${c.st==='实现'?'done':c.st==='规划'?'plan':'new'}" style="margin-left:auto">${c.st}</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--ink-dim);line-height:1.6">${c.d}</div>
+    </div>
+  </div>`).join('')
+document.querySelectorAll('#overviewGrid [data-goto]').forEach(el=>el.addEventListener('click',()=>go(Number(el.dataset.goto))))
+
+// ===== 下拉 =====
+document.querySelectorAll('[data-dd]').forEach(tr=>tr.addEventListener('click',()=>{
+  const dd=tr.closest('.dd'); dd.classList.toggle('open')
+}))
+document.addEventListener('click',e=>{ if(!e.target.closest('.dd')) document.querySelectorAll('.dd').forEach(d=>d.classList.remove('open')) })
+
+// ===== 弹窗 =====
+function openMask(id){const m=document.getElementById(id); if(m) m.style.display='flex'}
+function closeMask(id){const m=document.getElementById(id); if(m) m.style.display='none'}
+document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();openMask(b.dataset.open)}))
+document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>{const m=b.closest('.modal-mask');if(m)m.style.display='none'}))
+document.querySelectorAll('.modal-mask').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.style.display='none'}))
+
+// ===== 连接测试按钮 =====
+document.querySelectorAll('[data-test]').forEach(b=>b.addEventListener('click',()=>{
+  const r=document.getElementById('testRes'); if(r) r.className='test-res ok'
+}))
+
+// ===== 演示库按钮：跳转到结果区示意 =====
+document.querySelectorAll('[data-demo]').forEach(b=>b.addEventListener('click',()=>go(4)))
+
+// ===== 多主题切换（偏好存 localStorage） =====
+const themeDot=document.getElementById('themeDot'),themeLabel=document.getElementById('themeLabel')
+const THEME_META={dark:{dot:'#38c99b',name:'深色'},light:{dot:'#0c9a6c',name:'浅色'},
+  mint:{dot:'#0c9c72',name:'薄荷绿'},ocean:{dot:'#42c6e0',name:'海洋'},ember:{dot:'#e3a354',name:'琥珀'}}
+function setTheme(t){
+  if(t==='dark') document.documentElement.removeAttribute('data-theme')
+  else document.documentElement.dataset.theme=t
+  themeDot.style.background=THEME_META[t].dot
+  themeLabel.textContent=THEME_META[t].name
+  try{localStorage.setItem('cleared-theme',t)}catch{}
+}
+document.querySelectorAll('[data-theme-pick]').forEach(b=>b.addEventListener('click',()=>{
+  setTheme(b.dataset.themePick); document.getElementById('themeDD').classList.remove('open')
+}))
+;(()=>{let t='dark';try{t=localStorage.getItem('cleared-theme')||'dark'}catch{};if(!THEME_META[t])t='dark';setTheme(t)})()
+</script>
+</body>
+</html>
