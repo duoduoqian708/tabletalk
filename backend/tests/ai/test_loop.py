@@ -43,9 +43,9 @@ async def test_provider_cfg_resolves_model_id():
     cfg_def = _provider_cfg(_FakeState(), ChatRequest(connection_id="c"))
     assert cfg_def["provider"] == "mock"
 
-    # 显式 reasoning 覆盖选中模型
-    cfg_ov = _provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2", reasoning=False))
-    assert cfg_ov["reasoning"] is False
+    # 显式 reasoning 覆盖选中模型（强度字符串）
+    cfg_ov = _provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2", reasoning="off"))
+    assert cfg_ov["reasoning"] == "off"
 
 
 async def _collect(state, conn_id, text, include_data=False):

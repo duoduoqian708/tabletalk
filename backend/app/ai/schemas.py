@@ -1,6 +1,8 @@
 """AI 层请求/事件 pydantic 模型。"""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -27,8 +29,9 @@ class ChatRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    # 推理思考开关（None=跟随模型配置；显式传 True/False 覆盖本次对话）
-    reasoning: bool | None = None
+    # 思考强度（对话级）：off=关闭(默认) | low | medium | high
+    # None/空 视为 off；非法值由 pydantic 在请求校验阶段拒绝
+    reasoning: Literal["off", "low", "medium", "high"] | None = None
     # 结果回传 opt-in（隐私红线：默认只回列名+行数）
     include_data: bool = False
     table: str | None = None
