@@ -229,10 +229,15 @@ async def test_audit_logged(client, conn_id):
     assert "block" in verdicts
 
 
-async def test_settings_update(client):
+async def test_settings_update(client, app_state):
+    # 默认不再内置模型 → 先塞一条，再测兼容字段代理与旧格式 PUT
+    app_state.runtime.update({"ai_models": [{
+        "id": "llm_t", "name": "测试模型", "provider": "cloud",
+        "base_url": "https://x/v1", "model": "gpt-test", "api_key": "k",
+    }], "default_ai_model": "llm_t"})
     r = await client.get("/api/v1/settings")
     body = r.json()
-    # 兼容字段 ai_provider 代理到当前默认模型（内置 deepseek 为 cloud）
+    # 兼容字段 ai_provider 代理到当前默认模型
     assert body["ai_provider"] == next(m["provider"] for m in body["ai_models"] if m["id"] == body["default_ai_model"])
     r = await client.put("/api/v1/settings", json={"ai_provider": "local", "ai_base_url": "http://localhost:11434/v1"})
     body = r.json()

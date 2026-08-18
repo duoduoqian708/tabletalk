@@ -208,18 +208,10 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def _builtin_deepseek() -> dict[str, Any]:
-    """内置 DeepSeek V4 Flash（需要 key 才真实可用；无 key 时网关静默降级 mock）。"""
-    return asdict(ModelConfig(
-        id="llm_deepseek", name="DeepSeek V4 Flash（内置）", provider="cloud",
-        base_url="https://ark.cn-beijing.volces.com/api/plan/v3",
-        model="deepseek-v4-flash", reasoning=True, builtin=True,
-    ))
-
-
 def _migrate_from_legacy(data: dict[str, Any]) -> None:
-    """如果有旧单组字段但没有 ai_models，自动迁移为列表第一条。"""
-    if not data.get("ai_models"):
+    """如果有旧单组字段但完全没有 ai_models 键，自动迁移为列表第一条。不注入任何内置模型。
+    注意：ai_models=[] 表示"已配置、暂无模型"（用户清空），不算缺失，不触发迁移。"""
+    if "ai_models" not in data or data.get("ai_models") is None:
         m = ModelConfig(
             id=_new_id("llm"),
             name="默认模型",
@@ -231,11 +223,9 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
             timeout=data.get("ai_timeout", 120.0),
         )
         data["ai_models"] = [asdict(m)]
-        # 默认切到内置 deepseek（用户默认 deepseek 的产品设定），旧模型保留可切回
-        data["ai_models"].extend([_builtin_deepseek()])
-        data["default_ai_model"] = "llm_deepseek"
+        data["default_ai_model"] = m.id
 
-    if not data.get("embedding_models"):
+    if "embedding_models" not in data or data.get("embedding_models") is None:
         m = EmbeddingModelConfig(
             id=_new_id("emb"),
             name="默认嵌入",
@@ -285,7 +275,7 @@ class SettingsStore:
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
         }
-        # 从 env 初始化默认模型：内置 deepseek-v4-flash（有 key 即可用）
+        # 从 env 初始化默认模型（有 env 配置才有首条；否则空列表，等用户自己配）
         if env.ai_provider != "mock" and env.ai_model:
             env_ai = ModelConfig(
                 id=_new_id("llm"),
@@ -298,11 +288,11 @@ class SettingsStore:
                 timeout=env.ai_timeout,
                 reasoning=env.ai_reasoning,
             )
-            self._data["ai_models"] = [asdict(env_ai), _builtin_deepseek()]
+            self._data["ai_models"] = [asdict(env_ai)]
             self._data["default_ai_model"] = env_ai.id
         else:
-            self._data["ai_models"] = [_builtin_deepseek()]
-            self._data["default_ai_model"] = "llm_deepseek"
+            self._data["ai_models"] = []
+            self._data["default_ai_model"] = ""
 
         env_emb = EmbeddingModelConfig(
             id=_new_id("emb"),
@@ -331,18 +321,27 @@ class SettingsStore:
                     self._data[k] = data[k]
         except Exception:
             pass
-        self._ensure_builtins()
+        if self._ensure_builtins():
+            # 加载时剔除了遗留内置模型 → 顺手落盘，把 settings.json 也清干净
+            self.save()
 
-    def _ensure_builtins(self) -> None:
-        """确保内置模型始终在列表（系统内置，重启恢复；deepseek 在首/默认）。"""
+    def _ensure_builtins(self) -> bool:
+        """不再内置任何模型。这里只做收尾：
+        ① 剔除历史遗留的 builtin 标记模型（如旧的 llm_deepseek / llm_mock，用不起来）；
+        ② default_ai_model 指向不存在 / 空时，回退到列表第一条（列表空则留空）。
+        返回是否有剔除发生（调用方可据此落盘）。"""
         models = self._data["ai_models"]
-        ids = {m.get("id") for m in models}
-        if "llm_deepseek" not in ids:
-            models.insert(0, _builtin_deepseek())
-        if not self._data.get("default_ai_model"):
-            self._data["default_ai_model"] = (
-                "llm_deepseek" if any(m.get("id") == "llm_deepseek" for m in models) else models[0]["id"]
-            )
+        # ① 剔除遗留内置项
+        kept = [m for m in models if not m.get("builtin")]
+        removed = len(kept) != len(models)
+        self._data["ai_models"] = kept
+        # ② 默认模型校正
+        cur = self._data["ai_models"]
+        cur_ids = {m.get("id") for m in cur}
+        default = self._data.get("default_ai_model", "")
+        if not default or default not in cur_ids:
+            self._data["default_ai_model"] = cur[0]["id"] if cur else ""
+        return removed
 
     def save(self) -> None:
         with self._lock:
@@ -377,10 +376,10 @@ class SettingsStore:
         - 旧格式：传 ai_provider / ai_base_url / ...（更新默认模型的对应字段）
         """
         with self._lock:
-            # 先确保有列表结构
-            if "ai_models" not in self._data or not self._data["ai_models"]:
+            # 先确保有列表结构（key 缺失才迁移；空列表 = 用户清空，不算缺失）
+            if "ai_models" not in self._data or self._data.get("ai_models") is None:
                 _migrate_from_legacy(self._data)
-            if "embedding_models" not in self._data or not self._data["embedding_models"]:
+            if "embedding_models" not in self._data or self._data.get("embedding_models") is None:
                 _migrate_from_legacy(self._data)
 
             # 新格式：直接替换列表（api_key 掩码 "•••" 不回写，保留旧值）

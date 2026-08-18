@@ -3039,14 +3039,14 @@ body.resizing {
   padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
   color: var(--ink-faint); background: var(--bg-2);
 }
-.model-edit .me-row .re-status.on { color: var(--teal); border-color: rgba(10,109,255,.35); background: var(--teal-dim); }
-.model-edit .me-row .re-status.off { color: var(--ink-dim); border-color: var(--line); }
-/* 温度滑条：覆盖通用 input 的边框盒样式，用原生 range + 读数 */
+.model-edit .me-row .re-status.on { color: var(--green); border-color: rgba(10,157,106,.35); background: var(--green-dim); }
+.model-edit .me-row .re-status.off { color: var(--amber); border-color: rgba(200,135,30,.35); background: var(--amber-dim); }
+/* 温度滑条：覆盖通用 input 的边框盒样式，保留原生 range 外观 + 蓝色 accent */
 .model-edit .me-row input[type="range"].temp-slider {
-  flex: 1; height: auto; min-height: 20px; padding: 0; border: none; background: transparent;
-  box-shadow: none; appearance: none; -webkit-appearance: none; accent-color: var(--teal);
+  flex: 1; height: 6px; min-height: 6px; padding: 0; border: none; background: transparent;
+  box-shadow: none; accent-color: var(--teal); cursor: pointer;
 }
-.model-edit .me-row input[type="range"].temp-slider:focus { box-shadow: none; border: none; background: transparent; }
+.model-edit .me-row input[type="range"].temp-slider:focus { box-shadow: none; border: none; background: transparent; outline: none; }
 .model-edit .me-row .temp-val {
   flex: none; width: 46px; text-align: right; font-size: 10.5px; color: var(--ink-dim);
 }

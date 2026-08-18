@@ -10,18 +10,14 @@ async def test_settings_has_ai_models_list(client):
     body = r.json()
     assert "ai_models" in body
     assert isinstance(body["ai_models"], list)
-    assert len(body["ai_models"]) >= 1
     assert "default_ai_model" in body
-    # 默认列表不应含内置 mock 模型
+    # 不内置任何模型：默认无内置 mock、无内置 deepseek（列表可能为空，等用户自己配）
     ids = {m["id"] for m in body["ai_models"]}
     assert "llm_mock" not in ids
-    # 默认应有 cloud(deepseek) 内置模型
-    assert "llm_deepseek" in ids
-    providers = {m["provider"] for m in body["ai_models"]}
-    assert "cloud" in providers
-    # api_key 脱敏
+    assert "llm_deepseek" not in ids
+    # api_key 脱敏：空或含 •••
     for m in body["ai_models"]:
-        assert m["api_key"] in ("", "•••")  # 空或打码
+        assert m["api_key"] == "" or "•••" in m["api_key"]
 
 
 async def test_settings_has_embedding_models_list(client):
@@ -173,7 +169,7 @@ async def test_embedding_test_hash(client):
 
 
 async def test_settings_put_ai_models_full_replace(client):
-    """PUT /settings 传 ai_models 全量替换列表（内置模型始终保留）。"""
+    """PUT /settings 传 ai_models 全量替换列表（不再注入内置模型）。"""
     r = await client.put("/api/v1/settings", json={
         "ai_models": [
             {"id": "llm_custom1", "name": "我的模型", "provider": "cloud",
@@ -185,29 +181,30 @@ async def test_settings_put_ai_models_full_replace(client):
     body = r.json()
     ids = [m["id"] for m in body["ai_models"]]
     assert "llm_custom1" in ids
-    assert "llm_deepseek" in ids  # 内置始终在
+    assert "llm_deepseek" not in ids  # 不再注入内置
     assert body["default_ai_model"] == "llm_custom1"
     # 默认模型的 provider 兼容字段应更新
     assert body["ai_provider"] == "cloud"
     assert body["ai_model"] == "gpt-test"
-    # api_key 脱敏
+    # api_key 脱敏：sk-xxx 6 位 ≤ 8 → 退化为 •••
     m1 = next(m for m in body["ai_models"] if m["id"] == "llm_custom1")
     assert m1["api_key"] == "•••"
 
 
 async def test_settings_legacy_put_updates_default_model(app_state):
-    """旧格式 PUT ai_base_url 等字段应更新默认模型（向后兼容）。"""
+    """旧格式 PUT ai_base_url 等字段应更新默认模型（向后兼容）。
+    列表为空时旧格式 PUT 会新建一条默认模型并落到它上面。"""
     # 直接通过 store 测（避免 HTTP 路由的序列化问题）
     store = app_state.runtime
-    before = store.get()
-    default_id = before.default_ai_model
     store.update({
         "ai_provider": "cloud",
         "ai_base_url": "https://legacy.example.com/v1",
         "ai_model": "legacy-model",
     })
     after = store.get()
-    m = next(x for x in after.ai_models if x.id == default_id)
+    # 旧格式 PUT 后必有默认模型（空列表则新建一条）
+    assert after.default_ai_model
+    m = next(x for x in after.ai_models if x.id == after.default_ai_model)
     assert m.base_url == "https://legacy.example.com/v1"
     assert m.model == "legacy-model"
     assert m.provider == "cloud"

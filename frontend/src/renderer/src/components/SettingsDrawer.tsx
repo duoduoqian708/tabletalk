@@ -429,10 +429,10 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           <label>推理思考</label>
                           <span className={`re-status${(editing as Partial<AiModelConfig>).reasoning == null ? '' : ((editing as Partial<AiModelConfig>).reasoning ? ' on' : ' off')}`}>
                             {(editing as Partial<AiModelConfig>).reasoning == null
-                              ? '未测试 · 测试连接时自动探测'
-                              : ((editing as Partial<AiModelConfig>).reasoning ? '支持 · 回答前会先思考' : '不支持')}
+                              ? '未测试'
+                              : ((editing as Partial<AiModelConfig>).reasoning ? '支持' : '不支持')}
                           </span>
-                          <span className="hint" style={{ flex: 1 }}>该模型推理能力由「测试连接」自动探测，只读展示</span>
+                          <span className="hint" style={{ flex: 1 }}>测试连接时自动探测</span>
                         </div>
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
