@@ -420,8 +420,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                         </div>
                         <div className="me-row switch">
                           <label>推理思考</label>
-                          <span className="hint" style={{ flex: 1 }}>模型是否支持 think；测试连接会自动探测标定</span>
-                          <label className="tg" title="模型是否支持 think">
+                          <span className="hint" style={{ flex: 1 }}>开启后，推理类模型会先思考再作答（o1 / o3 / r1 等）</span>
+                          <label className="tg" title="开启 / 关闭推理思考">
                             <input type="checkbox" disabled={editing.provider === 'mock'} checked={!!(editing as Partial<AiModelConfig>).reasoning} onChange={(e) => setEditing({ ...editing, reasoning: e.target.checked } as Partial<AiModelConfig>)} />
                             <span className="tg-k" />
                           </label>

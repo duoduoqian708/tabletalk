@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 def system_prompt() -> str:
     return (
-        "你是 CLEARED，一名数据库副驾。\n"
+        "你是 DATUM，一名数据库副驾。\n"
         "规则：\n"
         "1. 默认只读结构：把表/列/类型/外键/注释作为上下文；明细行数据绝不主动回传模型。\n"
         "2. 写操作（INSERT/UPDATE/DELETE）必须用 run_dml，且 UPDATE/DELETE 必须带 WHERE；"
@@ -38,7 +38,7 @@ def report_system_prompt() -> str:
     叙述里的数字必须来自真实查询结果（不编造），并标注来源 result_id。
     """
     return (
-        "你是 CLEARED 分析副驾，负责产出一份数据库分析报告。\n"
+        "你是 DATUM 分析副驾，负责产出一份数据库分析报告。\n"
         "规则：\n"
         "1. 报告天然只读：你只有 get_schema / describe_table / run_query 三个工具，没有写或 DDL 工具。\n"
         "2. 报告由若干【章节】组成，每章固定三件套：数据查询（run_query）+ 图表建议（chart_hint）"

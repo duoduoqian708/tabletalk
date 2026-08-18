@@ -1,4 +1,4 @@
-"""CLEARED sidecar — FastAPI 应用入口。
+"""DATUM sidecar — FastAPI 应用入口。
 
 运行：uvicorn app.main:app --reload --port 8765
 """
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     env = get_env()
-    app = FastAPI(title="CLEARED sidecar", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="DATUM sidecar", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=env.cors_origins,
@@ -95,7 +95,7 @@ def create_app() -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def web_unbuilt() -> HTMLResponse:
             return HTMLResponse(
-                "<h1>CLEARED</h1><p>前端未构建：在 frontend/ 下执行 <code>npm run build</code> 后刷新。</p>"
+                "<h1>DATUM</h1><p>前端未构建：在 frontend/ 下执行 <code>npm run build</code> 后刷新。</p>"
             )
 
     return app

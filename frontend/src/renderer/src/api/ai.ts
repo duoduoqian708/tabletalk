@@ -200,7 +200,7 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
       /* 非 JSON 错误体 */
     }
     // TODO: 测试后删除
-    console.log(`[CLEARED][sse] chat 非 200: ${res.status} ${msg}`)
+    console.log(`[DATUM][sse] chat 非 200: ${res.status} ${msg}`)
     throw new Error(msg)
   }
 
@@ -223,7 +223,7 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
       try {
         const ev = JSON.parse(payload) as AiEvent
         evCount += 1
-        console.log(`[CLEARED][sse] [${evCount}] type=${ev.type}${ev.type === 'sql_card' ? ' verdict=' + (ev.card?.verdict ?? '?') : ''}${ev.type === 'error' ? ' msg=' + (ev as any).message : ''}`)
+        console.log(`[DATUM][sse] [${evCount}] type=${ev.type}${ev.type === 'sql_card' ? ' verdict=' + (ev.card?.verdict ?? '?') : ''}${ev.type === 'error' ? ' msg=' + (ev as any).message : ''}`)
         onEvent(ev)
       } catch {
         /* 跳过非 JSON 事件 */

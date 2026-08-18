@@ -314,7 +314,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 async def _llm_clarify(provider, question: str) -> list[dict]:
     try:
         prompt = (
-            "你是 CLEARED 分析副驾。用户想要一份报告，判断问题是否需要澄清口径。\n"
+            "你是 DATUM 分析副驾。用户想要一份报告，判断问题是否需要澄清口径。\n"
             f"用户问题：{question}\n"
             "若欠定义（如时间范围/口径/维度不明），提不超过 3 个澄清问题。\n"
             '若已足够清楚，返回 JSON：{"questions": []}。\n'

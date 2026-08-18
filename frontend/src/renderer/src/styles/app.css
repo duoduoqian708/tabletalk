@@ -1320,17 +1320,22 @@ body.resizing {
 
 .p-b { padding: 15px 16px; display: flex; flex-direction: column; gap: 13px; }
 
-/* toggle switch */
-.tg { position: relative; width: 34px; height: 19px; flex: none; cursor: pointer; display: inline-block; }
+/* toggle switch：轨道自带 关/开 文字，滑块盖住当前处于关闭的那半 → 一看便知状态 */
+.tg { position: relative; width: 44px; height: 20px; flex: none; cursor: pointer; display: inline-block; }
 .tg input { opacity: 0; width: 0; height: 0; position: absolute; }
 .tg .tg-k { position: absolute; inset: 0; background: var(--line-strong); border-radius: 19px; transition: background 0.18s; }
+.tg .tg-k::before {
+  content: "关"; position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  font-size: 8.5px; font-family: 'JetBrains Mono', monospace; color: var(--ink-dim); line-height: 1; z-index: 1;
+}
 .tg .tg-k::after {
   content: ""; position: absolute; width: 15px; height: 15px; border-radius: 50%;
-  background: #fff; top: 2px; left: 2px;
+  background: #fff; top: 2px; left: 2px; z-index: 2;
   box-shadow: 0 1px 2px rgba(20, 30, 60, 0.25); transition: transform 0.18s var(--ease);
 }
 .tg input:checked + .tg-k { background: var(--teal); }
-.tg input:checked + .tg-k::after { transform: translateX(15px); }
+.tg input:checked + .tg-k::before { content: "开"; right: auto; left: 7px; color: #fff; }
+.tg input:checked + .tg-k::after { transform: translateX(25px); }
 
 .proxy-rows { opacity: 0.42; transition: opacity 0.18s; pointer-events: none; }
 .proxy-rows.on { opacity: 1; pointer-events: auto; }

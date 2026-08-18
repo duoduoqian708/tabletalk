@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 底：数据地台（圆盘，隐示数据库底座） -->
+  <rect width="64" height="64" rx="14" fill="#0a6dff"/>
+  <!-- 护城河/守卫环：AI 锁定数据的边界 -->
+  <circle cx="32" cy="32" r="21" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.92"/>
+  <!-- 准星刻度：从环指向中心（聚焦/检索） -->
+  <g stroke="#ffffff" stroke-width="3" stroke-linecap="round">
+    <line x1="32" y1="15" x2="32" y2="22.5"/>
+    <line x1="32" y1="41.5" x2="32" y2="49"/>
+    <line x1="15" y1="32" x2="22.5" y2="32"/>
+    <line x1="41.5" y1="32" x2="49" y2="32"/>
+  </g>
+  <!-- 中心数据核心点 -->
+  <circle cx="32" cy="32" r="6.5" fill="#ffffff"/>
+  <!-- AI 亮点：右上角独立光点 -->
+  <circle cx="48.5" cy="15.5" r="4" fill="#ffffff"/>
+</svg>
