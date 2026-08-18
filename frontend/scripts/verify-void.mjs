@@ -50,7 +50,7 @@ try {
     await onboard.click()
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
-  await page.waitForSelector('.sch-item', { timeout: 20000 })
+  await page.waitForSelector('.g-node', { timeout: 30000 })
 
   const cs = (sel, prop) => page.evaluate(([s, p]) => {
     const el = document.querySelector(s)
@@ -61,7 +61,7 @@ try {
   check('body 文字亮色', (await cs('body', 'color')) === 'rgb(232, 234, 240)', await cs('body', 'color'))
   check('appbar 背景深色面板', (await cs('.appbar', 'backgroundColor')) === 'rgb(13, 14, 18)', await cs('.appbar', 'backgroundColor'))
   check('airail 背景深色面板', (await cs('.airail', 'backgroundColor')) === 'rgb(13, 14, 18)', await cs('.airail', 'backgroundColor'))
-  check('schemaview 背景深色面板', (await cs('.schemaview', 'backgroundColor')) === 'rgb(13, 14, 18)', await cs('.schemaview', 'backgroundColor'))
+  check('图谱画布背景深色', (await cs('.gcanvas', 'backgroundColor')) === 'rgb(10, 11, 14)', await cs('.gcanvas', 'backgroundColor'))
 
   // 设置抽屉
   await page.click('.sys-btn')

@@ -3660,3 +3660,134 @@ body.g-panning .gcanvas {
   font-size: 9px;
   color: var(--ink-faint);
 }
+
+/* ============ V2 表格视图：左缘微条 + 结果标签栏 ============ */
+.ws-data {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  min-height: 0;
+}
+.edge-rail {
+  flex: none;
+  width: var(--rail-w);
+  background: var(--void-1);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 8px;
+}
+.er-btn {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--accent-soft);
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.er-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.er-div {
+  width: 16px;
+  height: 1px;
+  background: var(--line-strong);
+  margin: 2px 0 4px;
+}
+.er-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--void-5);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  padding: 0;
+}
+.er-dot:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.35);
+}
+.er-caption {
+  font-size: 7.5px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
+.er-spacer {
+  flex: 1;
+}
+.ws-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ws-tabbar::-webkit-scrollbar {
+  display: none;
+}
+.ws-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  max-width: 240px;
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  background: var(--void-3);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  padding: 5px 8px 5px 10px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.ws-tab:hover {
+  color: var(--ink);
+}
+.ws-tab.on {
+  color: var(--ink);
+  background: var(--void-2);
+  border-color: var(--line-strong);
+}
+.ws-tab-ic {
+  color: var(--accent-soft);
+  font-size: 9px;
+}
+.ws-tab-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-tab-x {
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 9px;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 4px;
+}
+.ws-tab-x:hover {
+  color: var(--ink);
+  background: var(--void-4);
+}
+.ws-data-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--void-0);
+}
+.ws-data-body .tableview {
+  flex: 1;
+}

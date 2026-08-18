@@ -139,7 +139,9 @@ function CellPop({ pop, onClose }: { pop: PopState; onClose: () => void }): Reac
 }
 
 export function DataTable(): React.JSX.Element {
-  const { result, filter, sort, page, setFilter, sortBy, cycleSort, setPage } = useResults()
+  const { filter, sort, page, setFilter, sortBy, cycleSort, setPage } = useResults()
+  const active = useResults((s) => s.tabs.find((t) => t.id === s.activeId) ?? null)
+  const result = active?.kind === 'data' ? active.result : null
   const [filterCol, setFilterCol] = useState<number | null>(null)
   const [hlRow, setHlRow] = useState<number | null>(null)
   const [pop, setPop] = useState<PopState | null>(null)
