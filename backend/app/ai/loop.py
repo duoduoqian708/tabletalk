@@ -18,6 +18,7 @@ from app.ai.report import report_stream
 from app.ai.schemas import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS, execute_tool
 from app.core.schema import get_schema
+from app.core.sensitive import filter_sensitive
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -75,7 +76,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     # 知识库：未构建过才构建（真实库不每次对话重采样）；schema 变化由显式 rebuild 刷新
     if not state.knowledge.is_built(conn_id):
         try:
-            schema = await get_schema(state, conn_id)
+            schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
             await state.knowledge.build(conn_id, schema)
         except Exception:
             pass

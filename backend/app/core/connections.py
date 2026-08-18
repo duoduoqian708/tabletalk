@@ -32,6 +32,7 @@ class ConnectionConfig:
     timeout: int = 10
     credential_ref: str | None = None   # 预留：钥匙串凭据引用
     created_at: str = ""
+    sensitive: list[str] = field(default_factory=list)   # 敏感表/列 glob 名单，如 ["payroll_*"]
 
     def to_dialect_config(self) -> DialectConfig:
         return DialectConfig(
@@ -101,6 +102,7 @@ class ConnectionRegistry:
             timeout=int(data.get("timeout") or 10),
             credential_ref=data.get("credential_ref"),
             created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            sensitive=list(data.get("sensitive") or []),
         )
         self._conns[cfg.id] = cfg
         self.save()
@@ -110,7 +112,7 @@ class ConnectionRegistry:
         cfg = self.get(conn_id)
         allowed = {
             "name", "dialect", "host", "port", "user", "password", "database",
-            "file", "ssl", "read_only", "timeout", "credential_ref",
+            "file", "ssl", "read_only", "timeout", "credential_ref", "sensitive",
         }
         for k, v in patch.items():
             if k in allowed and v is not None:

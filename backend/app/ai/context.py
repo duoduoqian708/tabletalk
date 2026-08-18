@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from app.core.schema import get_schema, summarize
+from app.core.sensitive import filter_sensitive
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -54,7 +55,7 @@ async def assemble_context(
     table: str | None = None,
     query: str = "",
 ) -> str:
-    schema = await get_schema(state, conn_id)
+    schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
     parts: list[str] = [
         f"当前连接: {schema.get('connection', conn_id)}（{schema.get('dialect', '')}）"
     ]

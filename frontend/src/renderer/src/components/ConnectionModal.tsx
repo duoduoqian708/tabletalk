@@ -21,6 +21,7 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
   const [file, setFile] = useState('')
   const [ssl, setSsl] = useState(false)
   const [readOnly, setReadOnly] = useState(true)
+  const [sensitive, setSensitive] = useState('')
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState('')
 
@@ -42,7 +43,8 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
         database: isSqlite ? '' : database,
         file: isSqlite ? file : '',
         ssl,
-        read_only: readOnly
+        read_only: readOnly,
+        sensitive: sensitive.split(',').map((s) => s.trim()).filter(Boolean)
       })
       if (cfg) {
         const r = await testConnection(cfg.id)
@@ -64,7 +66,8 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
       database: isSqlite ? '' : database,
       file: isSqlite ? file : '',
       ssl,
-      read_only: readOnly
+      read_only: readOnly,
+      sensitive: sensitive.split(',').map((s) => s.trim()).filter(Boolean)
     })
     onClose()
   }
@@ -130,6 +133,10 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
                 <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} /> 只读连接
               </label>
             </div>
+          </div>
+          <div className="fld">
+            <label>敏感名单（表/列 glob，逗号分隔；屏蔽项不进 AI 上下文与知识库）</label>
+            <input value={sensitive} onChange={(e) => setSensitive(e.target.value)} placeholder="payroll_*, *secret*" />
           </div>
           {testMsg && (
             <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 10.5, color: 'var(--ink-dim)' }}>

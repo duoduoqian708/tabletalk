@@ -13,6 +13,7 @@ export interface ConnectionInput {
   ssl?: boolean
   read_only?: boolean
   timeout?: number
+  sensitive?: string[]
 }
 
 export interface TestResult {

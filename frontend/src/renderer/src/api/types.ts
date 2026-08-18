@@ -13,6 +13,7 @@ export interface ConnectionConfig {
   timeout: number
   credential_ref: string | null
   created_at: string
+  sensitive: string[]
 }
 
 export interface TableInfo {
