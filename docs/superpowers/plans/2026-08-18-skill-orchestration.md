@@ -12,6 +12,10 @@
 
 **设计依据**：`docs/superpowers/specs/2026-08-18-skill-orchestration-design.md`
 
+## 完成状态（2026-08-18 全部完成）
+
+8 个 task 全部落地并提交：T1 `7b435e3`（provider_cfg 并入 gateway）· T2 `484c518`（schemas→dto）· T3+4 `2878b28`（tools/ 注册表+迁入5工具）· T5 `c573c0e`（skills/ 注册表+内置 query/report）· T6 `15c10b9`（dispatcher 路由）· T7 `49f37f7`（统一入口按 dispatcher）· T8 `225fe13`+`8b6877a`（前端四步展示+技能badge+移除 mock 播放器）。验证：后端 181 passed · 前端 typecheck/build ✓ · E2E 四步 stage 恒发。
+
 ---
 
 ## Task 0: 跑基线确认全绿
