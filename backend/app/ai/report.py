@@ -265,6 +265,11 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 
     # ---- 2) 计划：mock 下确定性 → plan 事件 ----
     plan = _mock_plan(user_text) if is_mock else await _llm_plan(provider, user_text, context)
+    if not plan:
+        # 真实路径规划失败：报错而非生成空壳报告（零定制，不注入演示数据）
+        yield {"type": "error", "message": "报告章节规划失败，请稍后重试或换个问法。"}
+        yield {"type": "done"}
+        return
     yield {"type": "plan", "sections": plan}
 
     # ---- 3) 逐章执行：每章过闸门+审计 → section 事件（含聚合数据） ----
@@ -353,7 +358,8 @@ async def _llm_plan(provider, question: str, context: str) -> list[dict]:
             })
         return out
     except Exception:  # noqa: BLE001
-        return _mock_plan(question)   # 降级用 mock 计划
+        # 真实路径异常时不回填 mock 演示 SQL（零定制红线），返回空计划并记日志
+        return []
 
 
 async def _llm_narration(provider, question, plan, section_results) -> str:
@@ -373,7 +379,8 @@ async def _llm_narration(provider, question, plan, section_results) -> str:
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
         return (resp.content or "").strip() or "（无法生成叙述）"
     except Exception:  # noqa: BLE001
-        return _mock_narration(question, plan, section_results)
+        # 真实路径异常时不回填 mock 演示叙述（零定制红线），返回明确占位
+        return "（报告叙述生成失败，请重试）"
 
 
 def _mock_narration(question: str, plan: list[dict], section_results: list[dict]) -> str:

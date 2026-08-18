@@ -106,24 +106,13 @@ useChat.subscribe((s) => {
   }
 })
 
-/** 从首问语义生成对话标题（规则映射 + 截断兜底）。 */
+/** 从首问生成对话标题（通用机制：去掉语气词/句尾标点，截取前 N 个有效字符，零业务定制）。 */
 export function generateTitle(q: string): string {
-  const s = q.toLowerCase()
-  const rules: [RegExp, string][] = [
-    [/退货|退款|return/, '商品退货率分析'],
-    [/提价|涨价|调价|价格/, '商品调价'],
-    [/删除|delete|删/, '数据删除操作'],
-    [/索引|建表|删表|alter|ddl/, '表结构变更'],
-    [/客户|clv|生命周期|价值/, '客户价值分析'],
-    [/库存|积压|周转|inventory/, '库存周转分析'],
-    [/销售|sales|revenue/, '销售数据分析'],
-    [/字段|列|结构|describe/, '表结构查询'],
-    [/报告|报表|概览|趋势|分析报告/, '数据分析报告']
-  ]
-  for (const [re, t] of rules) {
-    if (re.test(s)) return t
-  }
-  return q.replace(/[？?。.!！\s]+$/, '').slice(0, 16)
+  const clean = q
+    .replace(/[？?。.!！，,、\s]+$/g, '')          // 去句尾标点/词气
+    .replace(/^(请|帮我|麻烦|给我|我想(要|看|知道|查)?|请问|帮我查|帮我分析)\s*/g, '') // 去常见祈使/语气前缀
+  if (!clean) return '新对话'
+  return clean.length > 16 ? `${clean.slice(0, 16)}…` : clean
 }
 
 export function relTime(ts: number): string {

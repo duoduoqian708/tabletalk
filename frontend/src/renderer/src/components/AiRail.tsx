@@ -925,7 +925,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
           <div className="airail-empty">
             <div className="e-ic">⌁</div>
             <div className="e-t">ask your database…</div>
-            <div className="e-s mono">试试：退货率最高的 10 个商品</div>
+            <div className="e-s mono">用一句话描述你想查的数，回车即可</div>
           </div>
         )}
 
