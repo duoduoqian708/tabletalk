@@ -38,8 +38,21 @@ export function confirmComment(connId: string, table: string, column?: string): 
   return request(`/api/v1/knowledge/${connId}/confirm`, { method: 'POST', body: JSON.stringify({ table, column: column ?? null }) })
 }
 
+/** 整库一键确认全部待确认注释（table/column 均为 null）。 */
+export function confirmAll(connId: string): Promise<{ confirmed: number }> {
+  return request(`/api/v1/knowledge/${connId}/confirm`, { method: 'POST', body: JSON.stringify({ table: null, column: null }) })
+}
+
 export function rejectComment(connId: string, table: string, column?: string): Promise<{ rejected: number }> {
   return request(`/api/v1/knowledge/${connId}/reject-comment`, { method: 'POST', body: JSON.stringify({ table, column: column ?? null }) })
+}
+
+/** 手动写入/覆盖表级注释（PUT docs，kind=note）。返回新 doc。 */
+export function saveDoc(connId: string, table: string, note: string): Promise<unknown> {
+  return request(`/api/v1/knowledge/${connId}/docs`, {
+    method: 'PUT',
+    body: JSON.stringify({ table, note, kind: 'note' })
+  })
 }
 
 export function routeTables(connId: string, tagNames: string[]): Promise<RouteResult> {

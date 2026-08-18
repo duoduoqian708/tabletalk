@@ -20,6 +20,38 @@ interface MenuState {
   table: string
 }
 
+/** 治理模式统计条：知识健康度 + 批量操作。 */
+function GovernanceBar(): React.JSX.Element {
+  const currentId = useConnections((s) => s.currentId)
+  const overview = useKnowledge((s) => s.overview)
+  const { annotateTags, confirmAll } = useKnowledge()
+  const [busy, setBusy] = useState(false)
+  const draftCount = overview?.draft_count ?? 0
+  const tagDraft = overview?.tag_draft_count ?? 0
+  const unannotated = overview?.tables.filter((t) => !t.comment && t.comment_status !== 'confirmed').length ?? 0
+
+  async function run(fn: () => Promise<void>): Promise<void> {
+    if (!currentId) return
+    setBusy(true)
+    try {
+      await fn()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="g-gov-bar">
+      <span className="ggb-item">待确认注释 <b>{draftCount}</b></span>
+      <span className="ggb-item">待确认标签 <b>{tagDraft}</b></span>
+      <span className="ggb-item">未注释表 <b>{unannotated}</b></span>
+      <span className="spacer" />
+      <button className="ggb-btn" disabled={busy} onClick={() => void run(() => annotateTags(currentId!))}>AI 生成标签</button>
+      <button className="ggb-btn" disabled={busy || (draftCount === 0 && tagDraft === 0)} onClick={() => void run(() => confirmAll(currentId!))}>整库一键确认</button>
+    </div>
+  )
+}
+
 export function GraphCanvas(): React.JSX.Element {
   const { nodes, edges, bounds, viewport, mode, selected, seq, build, setMode, select, setViewport } = useGraph()
   const schema = useSchema((s) => s.data)
@@ -238,6 +270,7 @@ export function GraphCanvas(): React.JSX.Element {
                 onClick={(e) => {
                   e.stopPropagation()
                   select(n.id)
+                  selectTable(n.name) // 同步 schema 选中 → 上下文筹码联动
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation()
@@ -287,6 +320,9 @@ export function GraphCanvas(): React.JSX.Element {
           </button>
         ))}
       </div>
+
+      {/* 治理模式统计条 */}
+      {mode === 'govern' && <GovernanceBar />}
       <div className="g-hint">
         单击 = 检查器 · <b>双击 = 打开数据</b> · 右键 = 更多
       </div>

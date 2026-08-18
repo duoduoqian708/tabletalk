@@ -15,6 +15,8 @@ interface KnowledgeState {
   confirmTag: (connId: string, name: string) => Promise<void>
   rejectTag: (connId: string, name: string) => Promise<void>
   assignTags: (connId: string, table: string, tags: string[]) => Promise<void>
+  saveNote: (connId: string, table: string, note: string) => Promise<void>
+  confirmAll: (connId: string) => Promise<void>
 }
 
 export const useKnowledge = create<KnowledgeState>((set, get) => ({
@@ -79,6 +81,16 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
 
   async assignTags(connId, table, tags) {
     await api.assignTags(connId, table, tags)
+    await get().load(connId)
+  },
+
+  async saveNote(connId, table, note) {
+    await api.saveDoc(connId, table, note)
+    await get().load(connId)
+  },
+
+  async confirmAll(connId) {
+    await api.confirmAll(connId)
     await get().load(connId)
   }
 }))

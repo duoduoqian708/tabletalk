@@ -272,6 +272,11 @@ class KnowledgeBase:
     def is_built(self, conn_id: str) -> bool:
         return conn_id in self._auto or self._artifact_path(conn_id).exists()
 
+    def ensure_loaded(self, conn_id: str) -> None:
+        """重启后如有工件但未加载进内存，先恢复（overview/graph 等只读入口调用）。"""
+        if conn_id not in self._auto and self._artifact_path(conn_id).exists():
+            self.load_artifact(conn_id)
+
     async def retrieve(self, conn_id: str, query: str = "", table: str | None = None, k: int = 10) -> list[KnowledgeDoc]:
         if conn_id not in self._auto and self._artifact_path(conn_id).exists():
             self.load_artifact(conn_id)  # 重启后未重新构建也能用上次的知识
@@ -420,8 +425,12 @@ class KnowledgeBase:
         return added
 
     def assign_table_tags(self, conn_id: str, table: str, names: list[str]) -> int:
-        """把标签绑定到表（去重保序）。"""
+        """把标签绑定到表（去重保序）；库中不存在的标签自动补为 draft（否则 overview 不可见、无法确认）。"""
         keep = [n for n in dict.fromkeys(names) if n]
+        lib = self._tags.setdefault(conn_id, {})
+        for n in keep:
+            if n not in lib:
+                lib[n] = {"description": "", "status": "draft"}
         self._table_tags.setdefault(conn_id, {})[table] = keep
         self._persist_artifact(conn_id)
         return len(keep)

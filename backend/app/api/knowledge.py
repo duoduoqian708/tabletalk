@@ -86,6 +86,9 @@ async def overview(conn_id: str) -> dict:
                 except Exception:
                     samples[t["name"]] = {}
         await state.knowledge.build(conn_id, schema, samples)
+    else:
+        # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
+        state.knowledge.ensure_loaded(conn_id)
     return state.knowledge.overview(conn_id)
 
 
@@ -93,6 +96,7 @@ async def overview(conn_id: str) -> dict:
 async def graph(conn_id: str) -> dict:
     _have(conn_id)
     state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
     return state.knowledge.graph(conn_id)
 
 

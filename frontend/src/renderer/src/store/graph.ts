@@ -170,7 +170,9 @@ export const useGraph = create<GraphState>((set, get) => ({
       maxX: Math.max(...xs) + NODE_W,
       maxY: Math.max(...ys) + NODE_H
     }
-    set({ nodes, edges, bounds, selected: null, viewport: { scale: 1, tx: 0, ty: 0 }, seq: get().seq + 1 })
+    // 治理操作后重载会重建：保留选中（若节点仍存在），避免检查器闪关
+    const keepSel = get().selected && nodes.some((n) => n.id === get().selected) ? get().selected : null
+    set({ nodes, edges, bounds, selected: keepSel, viewport: { scale: 1, tx: 0, ty: 0 }, seq: get().seq + 1 })
   },
 
   setMode(m) {

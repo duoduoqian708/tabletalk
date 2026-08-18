@@ -3791,3 +3791,260 @@ body.g-panning .gcanvas {
 .ws-data-body .tableview {
   flex: 1;
 }
+
+/* ============ V2 AI 交互区：思考行 / 风险面板 / 留痕 / 上下文筹码 / 建议条 ============ */
+.think-panel {
+  margin-bottom: 6px;
+}
+.think-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+.think-line:hover {
+  background: var(--void-4);
+}
+.think-line .ok {
+  color: var(--green);
+}
+.think-line .spin {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 99px;
+  animation: gspin 0.8s linear infinite;
+}
+.think-line .step-arrow {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+@keyframes gspin {
+  to { transform: rotate(360deg); }
+}
+
+/* 写操作风险评估面板（证据默认展开） */
+.risk-panel {
+  background: var(--amber-dim);
+  border: 1px solid rgba(246, 173, 85, 0.35);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 9px;
+  margin-bottom: 6px;
+}
+.risk-panel .rp-title {
+  color: var(--amber);
+  font-weight: 600;
+  font-size: 9.5px;
+}
+.risk-panel .rp-line {
+  color: var(--ink-dim);
+  line-height: 1.5;
+}
+.risk-panel .rp-line.mono {
+  font-family: var(--font-mono);
+  color: var(--ink);
+}
+.risk-panel .rp-line.dim {
+  color: var(--ink-faint);
+}
+
+/* 已执行留痕 */
+.exec-stamp {
+  color: var(--green);
+  font-size: 9px;
+  padding: 3px 0;
+}
+.c-p.done {
+  color: var(--green);
+}
+
+/* 上下文筹码 */
+.ctx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.ctx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8.5px;
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  border: 1px solid rgba(124, 140, 255, 0.35);
+  border-radius: 99px;
+  padding: 2px 8px 2px 10px;
+}
+.ctx-x {
+  border: 0;
+  background: transparent;
+  color: var(--accent-soft);
+  font-size: 8px;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 4px;
+}
+.ctx-x:hover {
+  background: rgba(124, 140, 255, 0.25);
+}
+
+/* 主动建议条 */
+.sug-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.sug-chip {
+  border: 1px dashed rgba(124, 140, 255, 0.4);
+  background: transparent;
+  color: var(--accent-soft);
+  font-size: 8.5px;
+  border-radius: 99px;
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sug-chip:hover {
+  background: var(--accent-dim);
+  border-style: solid;
+}
+.sug-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============ V2 治理模式 ============ */
+.g-gov-bar {
+  position: absolute;
+  top: 12px;
+  left: 216px;
+  right: 60px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(13, 14, 18, 0.9);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  z-index: 5;
+}
+.ggb-item b {
+  color: var(--amber);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.ggb-btn {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 9px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.ggb-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.ggb-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.gi-gov {
+  font-size: 8px;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+.gi-comment.draft {
+  border-color: rgba(246, 173, 85, 0.4);
+}
+.gi-status {
+  display: block;
+  margin-top: 3px;
+  color: var(--amber);
+  font-size: 8px;
+}
+.gi-note-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+.gi-note-ta {
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 9px;
+  padding: 6px 8px;
+  resize: vertical;
+  outline: none;
+  font-family: inherit;
+}
+.gi-note-ta:focus {
+  border-color: var(--accent);
+}
+.gi-act-row {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+.gi-btn.ok {
+  color: var(--green);
+  border-color: rgba(110, 231, 183, 0.4);
+  background: var(--green-dim);
+}
+.gi-btn.no {
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: var(--red-dim);
+}
+.gi-tag-act {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 8px;
+  margin-left: 3px;
+  padding: 0 2px;
+}
+.gi-tag-act.ok { color: var(--green); }
+.gi-tag-act.no { color: var(--red); }
+.gi-tag-add {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+.gi-tag-input {
+  flex: 1;
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 9px;
+  padding: 4px 8px;
+  outline: none;
+}
+.gi-tag-input:focus {
+  border-color: var(--accent);
+}

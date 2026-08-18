@@ -45,11 +45,17 @@ const GATE_LABEL: Record<string, string> = {
   block: '拦截'
 }
 
-/* 推理步骤面板：每步 勾/转圈/待定，可展开看思考输出 */
-function StepsPanel({ steps }: { steps: Step[] }): React.JSX.Element {
-  const [open, setOpen] = useState<Set<string>>(new Set())
-  const toggle = (id: string): void => {
-    setOpen((prev) => {
+/* 推理步骤：默认收成一行轻量指示，点击展开细节（真实事件驱动，无 mock 播放） */
+function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [openStep, setOpenStep] = useState<Set<string>>(new Set())
+  const running = steps.some((s) => s.status === 'running')
+  const doneCount = steps.filter((s) => s.status === 'done').length
+
+  if (!running && doneCount === 0) return <div className="think-line" />
+
+  const toggleStep = (id: string): void => {
+    setOpenStep((prev) => {
       const n = new Set(prev)
       if (n.has(id)) n.delete(id)
       else n.add(id)
@@ -58,36 +64,55 @@ function StepsPanel({ steps }: { steps: Step[] }): React.JSX.Element {
   }
 
   return (
-    <div className="steps">
-      {steps.map((s, i) => {
-        const isOpen = open.has(s.id)
-        const first = i === 0
-        return (
-          <div className={`step ${s.status}`} key={s.id}>
-            <div className="step-h" onClick={() => toggle(s.id)}>
-              <span className="step-ic">
-                {s.status === 'done' && <span className="ok">✓</span>}
-                {s.status === 'running' && <span className="spin" />}
-                {s.status === 'pending' && <span className="dot" />}
-              </span>
-              <span className="step-label">
-                {first && <span className="tag">AI</span>}
-                {s.label}
-              </span>
-              <span className="step-arrow">▾</span>
-            </div>
-            <div className={`step-detail${isOpen ? ' open' : ''}`}>
-              {s.detail.length === 0 ? (
-                <div className="sd-empty mono">{s.status === 'running' ? '思考中…' : '—'}</div>
-              ) : (
-                s.detail.map((d, di) => (
-                  <div key={di} className="sd-line mono">{d}</div>
-                ))
-              )}
-            </div>
-          </div>
-        )
-      })}
+    <div className="think-panel">
+      <div className="think-line" onClick={() => setOpen((o) => !o)}>
+        {running ? (
+          <>
+            <span className="spin" />
+            <span>思考中…</span>
+          </>
+        ) : (
+          <>
+            <span className="ok">✓</span>
+            <span>已评估 {doneCount} 步</span>
+          </>
+        )}
+        <span className="spacer" />
+        <span className="step-arrow">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div className="steps">
+          {steps.map((s, i) => {
+            const isOpen = openStep.has(s.id)
+            const first = i === 0
+            return (
+              <div className={`step ${s.status}`} key={s.id}>
+                <div className="step-h" onClick={() => toggleStep(s.id)}>
+                  <span className="step-ic">
+                    {s.status === 'done' && <span className="ok">✓</span>}
+                    {s.status === 'running' && <span className="spin" />}
+                    {s.status === 'pending' && <span className="dot" />}
+                  </span>
+                  <span className="step-label">
+                    {first && <span className="tag">AI</span>}
+                    {s.label}
+                  </span>
+                  <span className="step-arrow">▾</span>
+                </div>
+                <div className={`step-detail${isOpen ? ' open' : ''}`}>
+                  {s.detail.length === 0 ? (
+                    <div className="sd-empty mono">{s.status === 'running' ? '思考中…' : '—'}</div>
+                  ) : (
+                    s.detail.map((d, di) => (
+                      <div key={di} className="sd-line mono">{d}</div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -215,16 +240,28 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
       />
 
       <div className="c-f">
-        {card.verdict === 'review' && <span className="c-p">将影响约 {card.preview_rows ?? '?'} 行</span>}
+        {card.verdict === 'review' && !card.executed && (
+          <div className="risk-panel">
+            <div className="rp-title">⚠ 写操作风险评估</div>
+            <div className="rp-line mono">影响范围：约 {card.preview_rows ?? '?'} 行</div>
+            {card.reason && <div className="rp-line">{card.reason}</div>}
+            <div className="rp-line dim">确认时后端将重新评估（防 TOCTOU）· 执行后不可回滚，操作会留痕审计</div>
+          </div>
+        )}
+        {card.executed && (
+          <div className="exec-stamp mono">✓ 已执行 · {card.affected ?? 0} 行受影响 · 已写入审计</div>
+        )}
         {blocked && <span className="c-p warn">已拦截</span>}
         <span className="spacer" />
-        {!pending && (
+        {!pending && !card.executed && (
           <button className="btn gho" disabled={formatting} onClick={() => void handleFormat()}>
             {formatting ? '…' : '格式化'}
           </button>
         )}
         {pending ? (
           <span className="c-p">安全评估中…</span>
+        ) : card.executed ? (
+          <span className="c-p done">✓ 完成</span>
         ) : card.verdict === 'allow' ? (
           <button className="btn pri" disabled={busy || !draft.trim()} onClick={() => onRun(draft)}>▶ 运行</button>
         ) : card.verdict === 'review' ? (
@@ -246,6 +283,7 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   const currentId = useConnections((s) => s.currentId)
   const connDialect = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.dialect ?? 'sqlite')
   const selectedTable = useSchema((s) => s.selectedTable)
+  const selectTable = useSchema((s) => s.selectTable)
   const push = useResults((s) => s.push)
   const setReport = useResults((s) => s.setReport)
   const upsertSection = useResults((s) => s.upsertSection)
@@ -255,6 +293,8 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   const [busy, setBusy] = useState(false)
   const [input, setInput] = useState('')
   const [histOpen, setHistOpen] = useState(false)
+  const [sugs, setSugs] = useState<string[]>([])
+  const ctxTable = selectedTable // 上下文筹码：当前选中的表
   const [settings, setSettings] = useState<SettingsPublic | null>(null)
   useEffect(() => {
     let alive = true
@@ -478,11 +518,12 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
     }
   }
 
-  async function send(opts?: { mode?: 'query' | 'report' }): Promise<void> {
-    const q = input.trim()
+  async function send(inputText?: string, opts?: { mode?: 'query' | 'report' }): Promise<void> {
+    const q = (inputText ?? input).trim()
     if (!q || !currentId) return
     const mode = opts?.mode
     setInput('')
+    setSugs([])
     if (inputRef.current) inputRef.current.style.height = 'auto'
     setBusy(true)
     const isFirstQ = userCountRef.current === 0
@@ -493,7 +534,9 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
     gateDoneRef.current = false
     autoRanRef.current = false
     loopResultRef.current = null
-    histRef.current.push({ role: 'user', content: q })
+    // 上下文联动：当前选中表自动附加到提问（用户已可见上下文筹码，可移除）
+    const ctx = ctxTable && !q.includes(`@${ctxTable}`) && !q.includes(ctxTable) ? `（上下文：${ctxTable} 表）` : ''
+    histRef.current.push({ role: 'user', content: `${q}${ctx}` })
     const cur = histRef.current
     const reportTitle = q.replace(/[？?。.!！\s]+$/, '').slice(0, 24)
     // 报告模式：turn 标记 isReport，不走 query 模式步骤动画
@@ -824,6 +867,7 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
 
   function handleQueryResult(r: QueryResponse, sql: string, question?: string): void {
     if (r.verdict === 'allow') {
+      setSugs(r.suggestions ?? [])
       const types = r.types ?? []
       const numSet = new Set(types.map((t, i) => (t.toLowerCase().includes('int') || t.toLowerCase().includes('real') || t.toLowerCase().includes('numeric') || t.toLowerCase().includes('dec')) ? i : -1).filter((i) => i >= 0))
       const rows = (r.rows ?? []).map((row) => row.map((c, i) => {
@@ -857,7 +901,23 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
         return n
       })
     } else if (r.verdict === 'executed') {
-      toastMsg(`已执行 · ${r.affected_rows ?? 0} 行受影响`)
+      toastMsg(`已执行 · ${r.affected_rows ?? 0} 行受影响 · 已写入审计`)
+      // 留痕：把最后一张 AI 卡标记为已执行（含影响行数）
+      setTurns((t) => {
+        const n = [...t]
+        for (let i = n.length - 1; i >= 0; i--) {
+          const last = n[i]
+          if (last.role === 'ai' && last.cards && last.cards.length > 0) {
+            const cardsArr = last.cards
+            const cards = cardsArr.map((c, ci) =>
+              ci === cardsArr.length - 1 ? { ...c, executed: true, affected: r.affected_rows ?? 0 } : c
+            )
+            n[i] = { ...last, cards }
+            break
+          }
+        }
+        return n
+      })
     }
   }
 
@@ -928,7 +988,7 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
                   ))}
                 </div>
               )}
-              {t.steps && <StepsPanel steps={t.steps} />}
+              {t.steps && <ThinkPanel steps={t.steps} />}
               {t.text && !t.isReport && <div className="ai-txt">{t.text}</div>}
               {t.text && t.isReport && t.clarify && null}
               {t.cards && t.cards.map((c, ci) => (
@@ -977,6 +1037,23 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
       )}
 
       <div className="airail-in">
+        {ctxTable && (
+          <div className="ctx-chips">
+            <span className="ctx-chip" title="提问时自动附带该表上下文">
+              上下文：{ctxTable}
+              <button className="ctx-x" title="移除上下文" onClick={() => selectTable(null)}>✕</button>
+            </span>
+          </div>
+        )}
+        {sugs.length > 0 && (
+          <div className="sug-strip">
+            {sugs.slice(0, 3).map((s, i) => (
+              <button key={i} className="sug-chip" disabled={busy} onClick={() => void send(s)} title={s}>
+                {s.length > 26 ? `${s.slice(0, 25)}…` : s}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="ai-compose">
           <textarea
             ref={inputRef}

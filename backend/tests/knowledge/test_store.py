@@ -176,3 +176,15 @@ async def test_embedding_api_selection(tmp_path):
         raise AssertionError("应抛错")
     except Exception:
         pass
+
+
+async def test_overview_without_retrieve_loads_artifact(tmp_path):
+    """回归：重启后（新实例）直接 overview 不经过 retrieve 也能恢复工件——表列表不再为空。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), _samples())
+    kb2 = KnowledgeBase(tmp_path)
+    assert kb2.is_built("c1")
+    kb2.ensure_loaded("c1")
+    tables = kb2.overview("c1")["tables"]
+    assert any(t["name"] == "orders" for t in tables)
+    assert any(e["kind"] == "fk" for e in kb2.graph("c1")["edges"])

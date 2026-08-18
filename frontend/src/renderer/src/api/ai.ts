@@ -25,6 +25,9 @@ export interface AiCard {
     truncated?: boolean
     elapsed_ms?: number
   } | null
+  /** 人工确认/运行后已执行：展示"已留痕"标记 */
+  executed?: boolean
+  affected?: number
 }
 
 /* 报告模式：章节计划/执行/图表数据/数字回溯 */
