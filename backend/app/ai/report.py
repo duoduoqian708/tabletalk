@@ -38,10 +38,6 @@ MAX_REPORT_TURNS = 10        # 报告比单查询多几轮：澄清 + 计划 + �
 CLARIFY_MAX_QUESTIONS = 3    # 一轮澄清最多 3 个问题
 
 
-def _provider_cfg(state: "AppState", req: ChatRequest) -> dict[str, Any]:
-    return resolve_provider_cfg(state, req)
-
-
 def _normalize_messages(messages: list) -> list[dict]:
     out: list[dict] = []
     for m in messages:
@@ -231,7 +227,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
     from app.debuglog import dbg
     dbg("[report] start conn=", req.connection_id, "model_id=", req.model_id,
         "reasoning=", req.reasoning)
-    provider = gw.build_provider(_provider_cfg(state, req))
+    provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"
     snapshot_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -252,7 +248,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 
     # ---- 1) 澄清：若历史里没有澄清问答且问题欠定义 → yield clarify 后结束本轮 ----
     answered = _extract_clarify_answers(_normalize_messages(req.messages))
-    is_mock = _provider_cfg(state, req)["provider"] == "mock"
+    is_mock = resolve_provider_cfg(state, req)["provider"] == "mock"
 
     need_clarify: list[dict] = []
     if len(answered) == 0 and not any(

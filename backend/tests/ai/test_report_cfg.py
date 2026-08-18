@@ -1,7 +1,6 @@
 """报告模式必须与查询模式一致：model_id 命中 ai_models、reasoning 透传。"""
 
 from app.ai.provider_cfg import resolve_provider_cfg
-from app.ai.report import _provider_cfg as report_provider_cfg
 
 
 async def test_report_cfg_respects_model_id(app_state):
@@ -36,5 +35,7 @@ async def test_report_provider_cfg_actually_used(app_state):
         model_id = target.id
         provider = base_url = api_key = model = reasoning = temperature = None
 
-    cfg = report_provider_cfg(app_state, Req())
+    cfg = resolve_provider_cfg(app_state, Req())
     assert cfg["model"] == target.model
+    # 报告路径使用共享 resolve_provider_cfg（已断言 import 移除本地镜像）
+    from app.ai import report  # noqa: F401

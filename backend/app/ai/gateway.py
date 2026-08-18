@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -241,3 +242,37 @@ class MockProvider:
         if name == "get_schema":
             return ChatResponse(content="已返回连接的表结构摘要（只读结构）。")
         return ChatResponse(content="完成。")
+
+
+def resolve_provider_cfg(state, req) -> dict[str, Any]:
+    """解析生效的 AI provider 配置：model_id 命中 ai_models 优先，支持逐次覆盖与 reasoning。
+
+    loop（查询）与 report（报告）共用，保证两模式对「按对话切模型 + 思考强度」行为一致。
+    """
+    rs = state.runtime.get()
+    mid = getattr(req, "model_id", None)
+    if mid:
+        target = next((m for m in rs.ai_models if m.id == mid), None)
+        if target is not None:
+            cfg = {
+                "provider": target.provider,
+                "base_url": target.base_url,
+                "api_key": target.api_key,
+                "model": target.model,
+                "temperature": target.temperature,
+                "timeout": target.timeout,
+                "reasoning": target.reasoning,
+            }
+        else:
+            cfg = rs.provider_config()
+    else:
+        cfg = rs.provider_config()
+    for key in ("provider", "base_url", "api_key", "model"):
+        override = getattr(req, key, None)
+        if override is not None:
+            cfg[key] = override
+    if getattr(req, "reasoning", None) is not None:
+        cfg["reasoning"] = req.reasoning
+    if getattr(req, "temperature", None) is not None:
+        cfg["temperature"] = req.temperature
+    return cfg
