@@ -238,61 +238,7 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
   )
 }
 
-/* ---------- 思考文案（按问题类型，模拟真实推理逐行输出） ---------- */
-type ThinkMode = 'returns' | 'dml' | 'delete' | 'ddl' | 'clv' | 'inventory' | 'default'
-
-function thinkMode(q: string): ThinkMode {
-  const s = q.toLowerCase()
-  if (/退货|退款|return/.test(s)) return 'returns'
-  if (/提价|涨价|price|更新|改价/.test(s)) return 'dml'
-  if (/删|delete/.test(s)) return 'delete'
-  if (/索引|建表|删表|alter|create|ddl/.test(s)) return 'ddl'
-  if (/客户|clv|价值|revenue/.test(s)) return 'clv'
-  if (/库存|积压|周转/.test(s)) return 'inventory'
-  return 'default'
-}
-
-const THINK_LINES: Record<string, Record<ThinkMode, string[]>> = {
-  intent: {
-    returns: ['理解问题意图：统计商品退货表现', '意图分类 → 聚合分析查询', '匹配领域标签：商品、订单'],
-    dml: ['理解问题意图：数据修改', '意图分类 → 写操作', '匹配领域标签：商品'],
-    delete: ['理解问题意图：删除数据', '意图分类 → 高风险写操作', '匹配领域标签：订单'],
-    ddl: ['理解问题意图：结构变更', '意图分类 → DDL 草稿', '匹配领域标签：—'],
-    clv: ['理解问题意图：客户价值分析', '意图分类 → 聚合分析查询', '匹配领域标签：客户'],
-    inventory: ['理解问题意图：库存分析', '意图分类 → 聚合分析查询', '匹配领域标签：库存'],
-    default: ['理解问题意图：数据查询', '意图分类 → 只读查询', '匹配领域标签：—']
-  },
-  retrieval: {
-    returns: ['检索打标表：products、order_items', 'FK 扩展 → orders、returns', '候选子图 4 张表'],
-    dml: ['检索打标表：products', '单表更新，无子图扩展', '候选表 1 张'],
-    delete: ['检索打标表：orders', 'FK 扩展 → order_items、payments', '候选子图 3 张表'],
-    ddl: ['结构变更无需表检索', '跳过候选子图构建', '直接进入草稿生成'],
-    clv: ['检索打标表：customers、orders', 'FK 扩展 → order_items', '候选子图 3 张表'],
-    inventory: ['检索打标表：inventory、products', 'FK 扩展 → categories', '候选子图 3 张表'],
-    default: ['检索打标表：orders', '无 FK 扩展', '候选表 1 张']
-  },
-  sql: {
-    returns: ['按商品聚合退货占比', 'JOIN products ↔ order_items ↔ orders ↔ returns', 'ORDER BY return_rate DESC LIMIT 10'],
-    dml: ['构造 UPDATE 语句', 'SET price = price * 1.1', 'WHERE stock = 0（带条件）'],
-    delete: ['构造 DELETE 语句', 'WHERE 条件缺失', '需拦截：无 WHERE 全表删除'],
-    ddl: ['生成 CREATE INDEX 草稿', 'DDL 仅草稿，不执行', '—'],
-    clv: ['按客户聚合订单与营收', 'JOIN customers ↔ orders ↔ order_items', 'ORDER BY revenue DESC LIMIT 6'],
-    inventory: ['按库存周转聚合', 'JOIN inventory ↔ products ↔ categories', 'ORDER BY last_moved_at ASC LIMIT 6'],
-    default: ['构造 SELECT 查询', '取 orders 全字段', 'ORDER BY created_at DESC LIMIT 50']
-  },
-  gate: {
-    returns: ['安全闸门评估中…', '检查语句类型：SELECT', '判定生成中…'],
-    dml: ['安全闸门评估中…', '检查语句类型：UPDATE', '判定生成中…'],
-    delete: ['安全闸门评估中…', '检查语句类型：DELETE · 无 WHERE', '判定生成中…'],
-    ddl: ['安全闸门评估中…', '检查语句类型：DDL', '判定生成中…'],
-    clv: ['安全闸门评估中…', '检查语句类型：SELECT', '判定生成中…'],
-    inventory: ['安全闸门评估中…', '检查语句类型：SELECT', '判定生成中…'],
-    default: ['安全闸门评估中…', '检查语句类型：SELECT', '判定生成中…']
-  }
-}
-
-const STEP_MS = 1500      // 每步停留时长（思考需要时间）
-const LINE_MS = 340       // 思考文案逐行浮现间隔
+const STEP_MS = 1500      // 每步停留时长
 
 /* ---------- 主组件 ---------- */
 export function AiRail({ width, provider }: { width: number; provider?: string | null }): React.JSX.Element {
@@ -325,6 +271,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
   const supportsReasoning = !!effectiveModel?.reasoning
   // 报告模式：点击「报告」按钮下一句发送 mode=report（绕过意图分类）
   const [forceReport, setForceReport] = useState(false)
+  const [activeSkill, setActiveSkill] = useState<'query' | 'report'>('query')
   // 澄清挂起：报告中等待用户回答澄清问题时渲染内联输入
   const [clarifyPending, setClarifyPending] = useState<{ q: string; field: string } | null>(null)
   const [clarifyInput, setClarifyInput] = useState('')
@@ -433,17 +380,6 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     })
   }
 
-  /** 向某一步追加一行思考输出。 */
-  function appendStepDetail(idx: number, line: string): void {
-    setTurns((t) => {
-      const n = [...t]
-      const last = n[n.length - 1]
-      if (last.role !== 'ai' || !last.steps) return n
-      last.steps = last.steps.map((s, i) => (i === idx ? { ...s, detail: [...s.detail, line] } : s))
-      return n
-    })
-  }
-
   /** 将暂存的卡片挂到当前 turn（安全评估未完成时 pending=true）。
    *  仅当 SQL 生成步已完成（播放器走到）或流已结束时挂载，避免卡片早于步骤出现。 */
   function attachCards(): void {
@@ -519,24 +455,16 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     maybeAutoRun(card)
   }
 
-  /** 逐步播放：每步 running → 逐行浮现思考 → 停留 → done → 下一步。 */
+  /** 逐步播放：每步 running → 停留 → done → 下一步（detail 由真实 stage/think/sql/gate 事件填充） */
   function playSteps(question: string): void {
     clearStepTimers()
-    const mode = thinkMode(question)
-    const allLines = THINK_LINES
     const sqlIdx = STEP_DEFS.length - 2   // SQL 生成
     const gateIdx = STEP_DEFS.length - 1  // 安全评估
 
     for (let idx = 0; idx < STEP_DEFS.length; idx++) {
       const stepStart = idx * STEP_MS
-      const lines = allLines[STEP_DEFS[idx].id][mode]
-
       // 步骤开始：mark running（前一步已 done 由前一轮完成）
       stepTimers.current.push(setTimeout(() => setStepStatus(idx, 'running'), stepStart))
-      // 思考文案逐行浮现
-      lines.forEach((ln, li) => {
-        stepTimers.current.push(setTimeout(() => appendStepDetail(idx, ln), stepStart + 300 + li * LINE_MS))
-      })
       // 步骤完成
       stepTimers.current.push(setTimeout(() => {
         setStepStatus(idx, 'done')
@@ -552,6 +480,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     const q = input.trim()
     if (!q || !currentId) return
     const mode = opts?.mode
+    setActiveSkill(mode === 'report' ? 'report' : 'query')
     // TODO: 测试后删除——提交对话（含信任级别/model/reasoning 供排查）
     console.log(`[CLEARED][send] mode=${mode ?? 'query'} trustLevel=${trustLevel} modelId=${modelId} reasoning=${reasoningEffort} q=${q.slice(0, 40)}`)
     setInput('')
@@ -681,6 +610,36 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
                 if (last.steps) {
                   const cur = last.steps.find((s) => s.status === 'running') ?? last.steps[last.steps.length - 1]
                   cur.detail = [...cur.detail, ev.text]
+                }
+              }
+              return n
+            })
+          } else if (ev.type === 'stage' && ev.stage === 'intent') {
+            // 四步展示：意图分解（真实标签路由结果）
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.steps) {
+                const s = last.steps.find((x) => x.id === 'intent')
+                if (s) {
+                  s.status = 'done'
+                  const v = Array.isArray(ev.value) ? (ev.value as string[]).join(' / ') : String(ev.value ?? '')
+                  s.detail = [...s.detail, `意图标签：${v || '无（未命中领域路由）'}`]
+                }
+              }
+              return n
+            })
+          } else if (ev.type === 'stage' && ev.stage === 'retrieval') {
+            // 四步展示：表检索定位（真实候选表清单）
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.steps) {
+                const s = last.steps.find((x) => x.id === 'retrieval')
+                const tables = ev.tables ?? []
+                if (s) {
+                  s.status = 'done'
+                  s.detail = [...s.detail, `候选表 ${tables.length} 张：${tables.join(', ') || '（路由未命中，走全量摘要）'}`]
                 }
               }
               return n
@@ -910,6 +869,9 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
           {activeConv?.title ?? '新对话'}
         </span>
         <span className="meta mono">{connName} · model: {provider ?? 'mock'}</span>
+        <span className="skill-badge" title="当前对话使用的技能">
+          {activeSkill === 'report' ? '报告' : '查询'}
+        </span>
         <select
           className="ah-btn trust"
           value={trustLevel}

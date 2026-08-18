@@ -95,11 +95,9 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     ]
 
     yield {"type": "turn_start", "connection": conn_id}
-    # 四步展示的阶段元数据：意图 + 候选表清单（真实路由结果，非 mock）
-    if context_meta.get("intent"):
-        yield {"type": "stage", "stage": "intent", "value": context_meta["intent"]}
-    if context_meta.get("candidate_tables"):
-        yield {"type": "stage", "stage": "retrieval", "tables": context_meta["candidate_tables"]}
+    # 四步展示的阶段元数据：意图 + 候选表（始终下发，未命中路由则如实空态——结构恒可见、零定制）
+    yield {"type": "stage", "stage": "intent", "value": context_meta.get("intent", [])}
+    yield {"type": "stage", "stage": "retrieval", "tables": context_meta.get("candidate_tables", [])}
     for _ in range(MAX_TURNS):
         tool_calls: list = []
         async for chunk in provider.chat_stream(messages, TOOL_SCHEMAS):

@@ -2426,6 +2426,18 @@ body.resizing {
   flex: 1;
 }
 
+.skill-badge {
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 8px;
+  font-size: 9px;
+  line-height: 1.6;
+  background: var(--teal, #0a6dff);
+  color: #fff;
+  opacity: 0.9;
+}
+
 .ah-btn {
   flex: none;
   width: 24px;

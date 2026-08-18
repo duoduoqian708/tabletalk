@@ -71,6 +71,17 @@ async def test_context_full_returns_stage_meta(app_state, conn_id):
     assert isinstance(meta["intent"], list) and isinstance(meta["candidate_tables"], list)
 
 
+async def test_chat_stream_always_emits_stage_events(app_state, conn_id):
+    """chat_stream 无条件下发 intent/retrieval 阶段事件（空态也发，保证四步结构恒可见）。"""
+    events = [ev async for ev in chat_stream(app_state, ChatRequest(
+        connection_id=conn_id, messages=[{"role": "user", "content": "最近30天退货率"}],
+        provider="mock"))]
+    stages = [ev for ev in events if ev["type"] == "stage"]
+    ids = [(s["stage"], s.get("tables", s.get("value"))) for s in stages]
+    assert ("intent", []) in ids or any(sid == "intent" for sid, _ in ids)
+    assert any(sid == "retrieval" for sid, _ in ids)
+
+
 async def test_read_flow_produces_read_card(app_state, conn_id):
     events = await _collect(app_state, conn_id, "查上个月退货率最高的 10 个商品")
     cards = await _cards(events)
