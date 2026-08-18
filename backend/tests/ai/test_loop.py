@@ -60,6 +60,17 @@ async def _cards(events):
     return [ev["card"] for ev in events if ev["type"] == "sql_card"]
 
 
+async def test_context_full_returns_stage_meta(app_state, conn_id):
+    """assemble_context_full 返回 (text, meta)，meta 含 intent 与 candidate_tables（四步展示数据源）。"""
+    from app.ai.context import assemble_context_full
+    from app.ai.dto import ChatRequest as CR
+
+    text, meta = await assemble_context_full(app_state, conn_id, query="库存分析")
+    assert isinstance(text, str) and len(text) > 0
+    assert "intent" in meta and "candidate_tables" in meta
+    assert isinstance(meta["intent"], list) and isinstance(meta["candidate_tables"], list)
+
+
 async def test_read_flow_produces_read_card(app_state, conn_id):
     events = await _collect(app_state, conn_id, "查上个月退货率最高的 10 个商品")
     cards = await _cards(events)

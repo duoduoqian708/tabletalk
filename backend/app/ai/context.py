@@ -59,6 +59,17 @@ async def assemble_context(
     table: str | None = None,
     query: str = "",
 ) -> str:
+    text, _meta = await assemble_context_full(state, conn_id, table, query)
+    return text
+
+
+async def assemble_context_full(
+    state: "AppState",
+    conn_id: str,
+    table: str | None = None,
+    query: str = "",
+) -> tuple[str, dict]:
+    """组装给模型的上下文文本 + 沿路产出的阶段元数据（意图/候选表），供前端四步展示。"""
     schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
     parts: list[str] = [
         f"当前连接: {schema.get('connection', conn_id)}（{schema.get('dialect', '')}）"
@@ -81,4 +92,5 @@ async def assemble_context(
     kb = await state.knowledge.to_context(conn_id, query, table)
     if kb:
         parts.append(kb)
-    return "\n".join(parts)
+    meta = {"intent": tags or [], "candidate_tables": routed or []}
+    return "\n".join(parts), meta

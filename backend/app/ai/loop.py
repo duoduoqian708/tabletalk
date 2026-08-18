@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
 from app.ai.agent.dispatcher import dispatch_skill
-from app.ai.context import assemble_context, system_prompt
+from app.ai.context import assemble_context_full, system_prompt
 from app.ai.intent import MODE_QUERY, MODE_REPORT
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
@@ -87,7 +87,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     from app.debuglog import dbg
     dbg("[chat] conn=", conn_id, "model_id=", req.model_id, "reasoning=", req.reasoning,
         "user=", user_text[:40])
-    context = await assemble_context(state, conn_id, req.table, user_text)
+    context, context_meta = await assemble_context_full(state, conn_id, req.table, user_text)
     messages: list[dict] = [
         {"role": "system", "content": system_prompt()},
         {"role": "system", "content": context},
@@ -95,6 +95,11 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     ]
 
     yield {"type": "turn_start", "connection": conn_id}
+    # 四步展示的阶段元数据：意图 + 候选表清单（真实路由结果，非 mock）
+    if context_meta.get("intent"):
+        yield {"type": "stage", "stage": "intent", "value": context_meta["intent"]}
+    if context_meta.get("candidate_tables"):
+        yield {"type": "stage", "stage": "retrieval", "tables": context_meta["candidate_tables"]}
     for _ in range(MAX_TURNS):
         tool_calls: list = []
         async for chunk in provider.chat_stream(messages, TOOL_SCHEMAS):
