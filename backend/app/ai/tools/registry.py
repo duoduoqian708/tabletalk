@@ -1,0 +1,85 @@
+"""原子工具注册表：每个工具 = 名称 + schema + 执行函数，execute_tool 按名分发。
+
+各工具模块（sql.py / schema_tools.py）import 后调用 register_tool 注册，运行时由
+execute_tool 按工具名派发。这是 skill 框架的底层积木——任一技能引用的是这里注册的原子工具。
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from app.state import AppState
+
+
+@dataclass
+class ToolOutcome:
+    result: dict[str, Any]
+    card: dict[str, Any] | None = None
+    think: str | None = None
+
+
+ToolHandler = Callable[..., Awaitable[ToolOutcome]]
+
+TOOL_SCHEMAS: list[dict] = []
+_TOOL_HANDLERS: dict[str, ToolHandler] = {}
+
+
+def _tool(name: str, description: str, props: dict, required: list[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": props, "required": required},
+        },
+    }
+
+
+def register_tool(
+    name: str,
+    description: str,
+    props: dict,
+    required: list[str],
+    handler: ToolHandler,
+) -> None:
+    TOOL_SCHEMAS.append(_tool(name, description, props, required))
+    _TOOL_HANDLERS[name] = handler
+
+
+def tool_schemas(readonly: bool = False) -> list[dict]:
+    if not readonly:
+        return list(TOOL_SCHEMAS)
+    allow = {"get_schema", "describe_table", "run_query"}
+    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allow]
+
+
+async def execute_tool(
+    state: "AppState",
+    name: str,
+    args: dict[str, Any],
+    conn_id: str,
+    include_data: bool = False,
+) -> ToolOutcome:
+    handler = _TOOL_HANDLERS.get(name)
+    if handler is None:
+        return ToolOutcome(result={"ok": False, "error": f"未知工具: {name}"})
+    return await handler(state=state, args=args, conn_id=conn_id, include_data=include_data)
+
+
+def _get_ctx(state: "AppState", conn_id: str):
+    from app.safety import gate as safety_gate
+
+    cfg = state.connections.get(conn_id)
+    return cfg, safety_gate.sqlglot_dialect_for(cfg.dialect)
+
+
+def _sub(sql: str, sqlglot_dialect: str) -> str:
+    from app.safety import parser as safety_parser
+
+    infos = safety_parser.parse_sql(sql, sqlglot_dialect)
+    if not infos:
+        return ""
+    i = infos[0]
+    extra = f" · {len(i.tables)} tables" if i.tables else ""
+    return f"{i.stmt_type.upper()}{extra}"
