@@ -58,6 +58,18 @@ def _auto_cap(sql: str, sqlglot_dialect: str, cap: int) -> str:
 JS_SAFE_INT_MAX = 9007199254740991
 
 
+def _sqlglot_dialect(dialect: str) -> str:
+    """从方言注册表取 sqlglot 方言名；未注册兜底 sqlite。新增数据库无需改本文件。"""
+    from app.core.dialects.registry import registry
+
+    if registry.has(dialect):
+        try:
+            return registry.get(dialect).sqlglot_name or dialect
+        except Exception:  # noqa: BLE001
+            return dialect
+    return "sqlite"
+
+
 def serialize_value(v: Any) -> Any:
     if v is None or isinstance(v, bool):
         return v
@@ -123,7 +135,7 @@ async def execute(
 ) -> dict[str, Any]:
     max_rows = max_rows or state.runtime.get().query_max_rows
     cfg = state.connections.get(conn_id)
-    dialect = cfg.dialect if cfg.dialect in ("sqlite", "postgres", "mysql") else "sqlite"
+    dialect = _sqlglot_dialect(cfg.dialect)
     paged_sql = _apply_page(sql, dialect, limit, offset)
     # 调用方没给分页参数时，在 SQL 层截断 DB 工作量（不只截断传输）
     if limit is None and offset is None:
