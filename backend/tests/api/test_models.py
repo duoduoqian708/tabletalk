@@ -255,10 +255,10 @@ async def test_masked_key_not_overwritten(tmp_path):
         "base_url": "https://x.example.com/v1", "api_key": "real-secret-123",
         "model": "gpt-test",
     }], "default_ai_model": "llm_sec"})
-    # 读取时脱敏
+    # 读取时脱敏：保留开头 / 结尾各 3 位
     pub = store.get().public()
     m = next(x for x in pub["ai_models"] if x["id"] == "llm_sec")
-    assert m["api_key"] == "•••"
+    assert m["api_key"] == "rea•••123"
     # 前端把掩码列表原样写回 → 真实 key 必须保留
     store.update({"ai_models": pub["ai_models"]})
     after = store.get()
@@ -271,6 +271,20 @@ async def test_masked_key_not_overwritten(tmp_path):
     }]})
     m3 = next(x for x in store.get().ai_models if x.id == "llm_new")
     assert m3.api_key == "new-key"
+
+
+def test_mask_key_edge_cases():
+    """脱敏展示：保留首尾 3 位；过短 / 为空时退化为 ••• 或空。"""
+    from app.core.settings import _mask_key, _is_masked
+
+    assert _mask_key("real-secret-123") == "rea•••123"
+    assert _mask_key("sk-abcdefghijklmnop") == "sk-•••nop"
+    assert _mask_key("short") == "•••"          # 过短不给可辨识片段
+    assert _mask_key("") == ""
+    assert _mask_key(None) == ""
+    assert _is_masked("rea•••123") is True
+    assert _is_masked("real-secret-123") is False
+    assert _is_masked("") is False
 
 
 async def test_gateway_chat_stream_mock_yields_tool_call():

@@ -25,6 +25,11 @@ function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+// 后端对已保存的 api_key 返回脱敏掩码（sk-abc•••xyz）——含 ••• 即表示"有存量 key，前端拿不到真值"
+function isMaskedKey(k: unknown): boolean {
+  return typeof k === 'string' && k.includes('•••')
+}
+
 const CAP_LABELS: Record<string, { label: string; cls: string }> = {
   connectivity: { label: '连通', cls: 'ok' },
   function_calling: { label: 'FC', cls: 'fc' },
@@ -156,7 +161,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
     setTesting(true)
     setTestMsg('')
     // 掩码 = 用户未改 key → 传空，让后端用已存的真实 key（避免把掩码当 key 打向 API）
-    const effectiveKey = editing.api_key === '•••' ? '' : editing.api_key
+    const effectiveKey = isMaskedKey(editing.api_key) ? '' : editing.api_key
     try {
       if (mTab === 'chat') {
         const r = await testGateway({
@@ -410,21 +415,24 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                             </div>
                             <div className="me-row">
                               <label>API Key</label>
-                              <input type="password" value={editing.api_key === '•••' ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder="留空 = 免 key 端点" />
+                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? `已保存 ${editing.api_key} · 留空则不变` : '粘贴新 key，留空 = 免 key 端点'} />
                             </div>
                           </>
                         )}
                         <div className="me-row">
                           <label>温度</label>
-                          <input type="number" step="0.05" min="0" max="2" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) || 0.2 })} />
+                          <input type="range" className="temp-slider" min="0" max="2" step="0.05" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) })} />
+                          <span className="temp-val mono">{((editing as Partial<AiModelConfig>).temperature ?? 0.2).toFixed(2)}</span>
+                          <span className="hint" style={{ flex: 1 }}>越低越稳定，越高越有创意</span>
                         </div>
-                        <div className="me-row switch">
+                        <div className="me-row">
                           <label>推理思考</label>
-                          <span className="hint" style={{ flex: 1 }}>开启后，推理类模型会先思考再作答（o1 / o3 / r1 等）</span>
-                          <label className="tg" title="开启 / 关闭推理思考">
-                            <input type="checkbox" disabled={editing.provider === 'mock'} checked={!!(editing as Partial<AiModelConfig>).reasoning} onChange={(e) => setEditing({ ...editing, reasoning: e.target.checked } as Partial<AiModelConfig>)} />
-                            <span className="tg-k" />
-                          </label>
+                          <span className={`re-status${(editing as Partial<AiModelConfig>).reasoning == null ? '' : ((editing as Partial<AiModelConfig>).reasoning ? ' on' : ' off')}`}>
+                            {(editing as Partial<AiModelConfig>).reasoning == null
+                              ? '未测试 · 测试连接时自动探测'
+                              : ((editing as Partial<AiModelConfig>).reasoning ? '支持 · 回答前会先思考' : '不支持')}
+                          </span>
+                          <span className="hint" style={{ flex: 1 }}>该模型推理能力由「测试连接」自动探测，只读展示</span>
                         </div>
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
@@ -505,7 +513,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                             </div>
                             <div className="me-row">
                               <label>API Key</label>
-                              <input type="password" value={editing.api_key === '•••' ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder="留空 = 免 key 端点" />
+                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? `已保存 ${editing.api_key} · 留空则不变` : '粘贴新 key，留空 = 免 key 端点'} />
                             </div>
                           </>
                         )}

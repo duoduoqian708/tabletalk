@@ -1320,23 +1320,6 @@ body.resizing {
 
 .p-b { padding: 15px 16px; display: flex; flex-direction: column; gap: 13px; }
 
-/* toggle switch：轨道自带 关/开 文字，滑块盖住当前处于关闭的那半 → 一看便知状态 */
-.tg { position: relative; width: 44px; height: 20px; flex: none; cursor: pointer; display: inline-block; }
-.tg input { opacity: 0; width: 0; height: 0; position: absolute; }
-.tg .tg-k { position: absolute; inset: 0; background: var(--line-strong); border-radius: 19px; transition: background 0.18s; }
-.tg .tg-k::before {
-  content: "关"; position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-  font-size: 8.5px; font-family: 'JetBrains Mono', monospace; color: var(--ink-dim); line-height: 1; z-index: 1;
-}
-.tg .tg-k::after {
-  content: ""; position: absolute; width: 15px; height: 15px; border-radius: 50%;
-  background: #fff; top: 2px; left: 2px; z-index: 2;
-  box-shadow: 0 1px 2px rgba(20, 30, 60, 0.25); transition: transform 0.18s var(--ease);
-}
-.tg input:checked + .tg-k { background: var(--teal); }
-.tg input:checked + .tg-k::before { content: "开"; right: auto; left: 7px; color: #fff; }
-.tg input:checked + .tg-k::after { transform: translateX(25px); }
-
 .proxy-rows { opacity: 0.42; transition: opacity 0.18s; pointer-events: none; }
 .proxy-rows.on { opacity: 1; pointer-events: auto; }
 
@@ -3050,7 +3033,23 @@ body.resizing {
   font-family: 'JetBrains Mono', monospace;
   line-height: 1.6;
 }
-.model-edit .me-row.switch .tg { margin-left: auto; }
+/* 推理能力 = 只读展示（测试连接探测出的结果，非开关） */
+.model-edit .me-row .re-status {
+  flex: none; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--ink-faint); background: var(--bg-2);
+}
+.model-edit .me-row .re-status.on { color: var(--teal); border-color: rgba(10,109,255,.35); background: var(--teal-dim); }
+.model-edit .me-row .re-status.off { color: var(--ink-dim); border-color: var(--line); }
+/* 温度滑条：覆盖通用 input 的边框盒样式，用原生 range + 读数 */
+.model-edit .me-row input[type="range"].temp-slider {
+  flex: 1; height: auto; min-height: 20px; padding: 0; border: none; background: transparent;
+  box-shadow: none; appearance: none; -webkit-appearance: none; accent-color: var(--teal);
+}
+.model-edit .me-row input[type="range"].temp-slider:focus { box-shadow: none; border: none; background: transparent; }
+.model-edit .me-row .temp-val {
+  flex: none; width: 46px; text-align: right; font-size: 10.5px; color: var(--ink-dim);
+}
 .model-edit .me-actions {
   display: flex;
   gap: 8px;

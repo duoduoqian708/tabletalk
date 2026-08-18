@@ -129,12 +129,12 @@ class RuntimeSettings:
     def public(self) -> dict[str, Any]:
         d = {
             "ai_models": [
-                {**asdict(m), "api_key": "•••" if m.api_key else ""}
+                {**asdict(m), "api_key": _mask_key(m.api_key)}
                 for m in self.ai_models
             ],
             "default_ai_model": self.default_ai_model,
             "embedding_models": [
-                {**asdict(m), "api_key": "•••" if m.api_key else ""}
+                {**asdict(m), "api_key": _mask_key(m.api_key)}
                 for m in self.embedding_models
             ],
             "default_embedding_model": self.default_embedding_model,
@@ -152,13 +152,13 @@ class RuntimeSettings:
             # 兼容字段（旧前端 / 旧脚本仍能读）
             "ai_provider": self.ai_provider,
             "ai_base_url": self.ai_base_url,
-            "ai_api_key": "•••" if self.ai_api_key else "",
+            "ai_api_key": _mask_key(self.ai_api_key),
             "ai_model": self.ai_model,
             "ai_temperature": self.ai_temperature,
             "ai_timeout": self.ai_timeout,
             "embedding_provider": self.embedding_provider,
             "embedding_base_url": self.embedding_base_url,
-            "embedding_api_key": "•••" if self.embedding_api_key else "",
+            "embedding_api_key": _mask_key(self.embedding_api_key),
             "embedding_model": self.embedding_model,
         }
         return d
@@ -248,13 +248,26 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
         data["default_embedding_model"] = m.id
 
 
+def _mask_key(key: str | None) -> str:
+    """API key 脱敏展示：保留开头 / 结尾各 3 位，中间以 ••• 代替，可辨识但不可还原。"""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "•••"
+    return f"{key[:3]}•••{key[-3:]}"
+
+
+def _is_masked(val: Any) -> bool:
+    return isinstance(val, str) and "•••" in val
+
+
 def _restore_masked_keys(cur: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """前端读到的 api_key 是掩码 "•••"；全量写回时把掩码还原为旧真值，避免覆盖 key。"""
+    """前端读到的 api_key 是掩码（含 •••）；全量写回时把掩码还原为旧真值，避免覆盖 key。"""
     real_by_id = {m.get("id"): m.get("api_key", "") for m in cur}
     out = []
     for m in incoming:
         m = dict(m)
-        if m.get("api_key") == "•••" and m.get("id") in real_by_id:
+        if _is_masked(m.get("api_key")) and m.get("id") in real_by_id:
             m["api_key"] = real_by_id[m["id"]]
         out.append(m)
     return out
