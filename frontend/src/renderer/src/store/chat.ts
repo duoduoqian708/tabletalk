@@ -25,6 +25,8 @@ export interface Conversation {
   turns: Turn[]
 }
 
+export type TrustLevel = 'all_confirm' | 'read_auto' | 'max_trust'
+
 const LS_KEY = 'cleared-chats-v1'
 
 function load(): Conversation[] {
@@ -39,6 +41,9 @@ function load(): Conversation[] {
 interface ChatState {
   conversations: Conversation[]
   activeId: string | null
+  /** 会话信任级别（HITL 介入粒度）：all_confirm 全部介入 / read_auto 读自动·写确认 / max_trust 读写自动（V0.5 仅前两档可用） */
+  trustLevel: TrustLevel
+  setTrustLevel: (level: TrustLevel) => void
   newConversation: (connId: string) => string
   rename: (id: string, title: string) => void
   /** 持久化轮次内容，**不**刷新 updatedAt（查看/恢复历史不更新时间） */
@@ -48,9 +53,17 @@ interface ChatState {
   select: (id: string) => void
 }
 
+const TRUST_KEY = 'cleared-trust-level'
+
 export const useChat = create<ChatState>((set) => ({
   conversations: load(),
   activeId: null,
+  trustLevel: (localStorage.getItem(TRUST_KEY) as TrustLevel) || 'read_auto',
+
+  setTrustLevel(level) {
+    localStorage.setItem(TRUST_KEY, level)
+    set({ trustLevel: level })
+  },
 
   newConversation(connId) {
     const id = `c${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`

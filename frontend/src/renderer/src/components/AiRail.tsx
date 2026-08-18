@@ -14,7 +14,7 @@ import {
   type ReasoningEffort
 } from '@renderer/api/ai'
 import { toastMsg } from '@renderer/utils/toast'
-import { useChat, generateTitle, relTime, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
+import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
 
 /* ---------- 推理步骤状态机 ---------- */
@@ -304,7 +304,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
   const setReport = useResults((s) => s.setReport)
   const upsertSection = useResults((s) => s.upsertSection)
   const setNarration = useResults((s) => s.setNarration)
-  const { conversations, activeId, newConversation, rename, saveTurns, touch, select } = useChat()
+  const { conversations, activeId, newConversation, rename, saveTurns, touch, select, trustLevel, setTrustLevel } = useChat()
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [busy, setBusy] = useState(false)
   const [input, setInput] = useState('')
@@ -476,6 +476,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     if (autoRanRef.current) return
     if (!card || card.verdict !== 'allow') return
     if (!streamDoneRef.current || !gateDoneRef.current) return
+    if (trustLevel === 'all_confirm') return   // 全部介入：读卡也不自动执行，等用户点卡片运行
     autoRanRef.current = true
     // 卡片已带循环内执行的结果 → 直接渲染，不再 POST /query（消除同 SQL 双执行）
     const loopRes = (card as { result?: Record<string, any> }).result
@@ -894,6 +895,20 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
           {activeConv?.title ?? '新对话'}
         </span>
         <span className="meta mono">{connName} · model: {provider ?? 'mock'}</span>
+        <select
+          className="ah-btn trust"
+          value={trustLevel}
+          onChange={(e) => {
+            const v = e.target.value as TrustLevel
+            setTrustLevel(v)
+            toastMsg(v === 'all_confirm' ? '信任级别：全部介入（读也需人工确认）' : '信任级别：读自动 · 写确认')
+          }}
+          title="会话信任级别"
+          style={{ fontSize: 11, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--line)', background: 'transparent', color: 'inherit', marginRight: 6 }}
+        >
+          <option value="all_confirm">全部介入</option>
+          <option value="read_auto">读自动·写确认</option>
+        </select>
         <span className="spacer" />
         <button className="ah-btn" title="新建对话" disabled={busy} onClick={newChat}>＋</button>
         <div className="ah-dd" ref={histDdRef}>
