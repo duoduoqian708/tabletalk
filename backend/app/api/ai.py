@@ -174,7 +174,7 @@ def _resolve_ai_cfg(state, model_id, provider, base_url, api_key, model) -> dict
         cfg["provider"] = provider
     if base_url is not None:
         cfg["base_url"] = base_url
-    if api_key is not None:
+    if api_key is not None and api_key != "•••":
         cfg["api_key"] = api_key
     if model is not None:
         cfg["model"] = model
@@ -199,7 +199,7 @@ def _resolve_emb_cfg(state, model_id, provider, base_url, api_key, model) -> dic
         cfg["provider"] = provider
     if base_url is not None:
         cfg["base_url"] = base_url
-    if api_key is not None:
+    if api_key is not None and api_key != "•••":
         cfg["api_key"] = api_key
     if model is not None:
         cfg["model"] = model

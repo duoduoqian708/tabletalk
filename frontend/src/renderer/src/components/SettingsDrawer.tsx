@@ -156,12 +156,14 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
   async function handleTest(): Promise<void> {
     setTesting(true)
     setTestMsg('')
+    // 掩码 = 用户未改 key → 传空，让后端用已存的真实 key（避免把掩码当 key 打向 API）
+    const effectiveKey = editing.api_key === '•••' ? '' : editing.api_key
     try {
       if (mTab === 'chat') {
         const r = await testGateway({
           provider: editing.provider as string,
           baseUrl: editing.base_url,
-          apiKey: editing.api_key,
+          apiKey: effectiveKey,
           model: editing.model,
         })
         if (r.ok) {
@@ -186,7 +188,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
         const r = await testEmbedding({
           provider: editing.provider as string,
           baseUrl: editing.base_url,
-          apiKey: editing.api_key,
+          apiKey: effectiveKey,
           model: editing.model,
         })
         if (r.ok) {
