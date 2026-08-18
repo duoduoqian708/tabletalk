@@ -1,26 +1,42 @@
 """意图调度：用户问题 → 从技能注册表选一个技能。
 
-真实 LLM 下从非 query 技能里选；mock/降级用关键词；兜底回 query（保证永远有得回答）。
+先做触发词关键词匹配（启用技能），再走真实 LLM 从非 query 技能里选；
+mock/降级用关键词；兜底回 query（保证永远有得回答）。
 """
 from __future__ import annotations
 
 from app.ai import gateway as gw
 from app.ai.intent import is_report_intent
-from app.ai.skills.registry import list_skills
+from app.ai.skills.registry import list_enabled_skills
 
 _DEFAULT = "query"
+
+
+def _trigger_match(q: str) -> str | None:
+    """启用技能的触发词关键词匹配（确定性路由，mock 与真实模型共用）。"""
+    ql = (q or "").lower()
+    for s in list_enabled_skills():
+        if s.id == "query":
+            continue
+        for t in s.triggers:
+            if t and t.lower() in ql:
+                return s.id
+    return None
 
 
 async def dispatch_skill(state, question: str) -> str:
     q = (question or "").strip()
     if not q:
         return _DEFAULT
+    hit = _trigger_match(q)
+    if hit:
+        return hit
     rt = state.runtime.get()
     if gw.is_effective_mock(rt.provider_config()):
         if is_report_intent(q):
             return "report"
         return _DEFAULT
-    skills = [s for s in list_skills() if s.id != "query"]  # query 是兜底，不参与选择
+    skills = [s for s in list_enabled_skills() if s.id != "query"]  # query 是兜底，不参与选择
     if not skills:
         return _DEFAULT
     desc = "\n".join(f"- {s.id}: {s.description}" for s in skills)

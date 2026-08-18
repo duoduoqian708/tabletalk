@@ -28,6 +28,8 @@ _state: AppState | None = None
 
 def _build_state(data_dir=None) -> AppState:
     env = reset_env(data_dir)
+    from app.ai.skills.registry import load_custom
+    load_custom(env.data_dir)  # 恢复自定义技能（技能广场持久化）
     connections = ConnectionRegistry(env.data_dir)
     runtime = SettingsStore(env.data_dir)
     return AppState(

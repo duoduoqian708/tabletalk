@@ -28,6 +28,8 @@ class ChatRequest(BaseModel):
     provider: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    # 意图路由出的技能 id（loop.stream 写入，chat_stream 用它过滤工具集）
+    skill_id: str | None = None
     model: str | None = None
     # 思考强度（对话级）：off=关闭(默认) | low | medium | high
     # None/空 视为 off；非法值由 pydantic 在请求校验阶段拒绝

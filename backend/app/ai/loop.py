@@ -17,7 +17,8 @@ from app.ai.intent import MODE_QUERY, MODE_REPORT
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
 from app.ai.dto import ChatRequest
-from app.ai.tools import TOOL_SCHEMAS, execute_tool
+from app.ai.skills.registry import skill_tool_schemas
+from app.ai.tools import execute_tool
 from app.core.schema import get_schema
 from app.core.sensitive import filter_sensitive
 
@@ -38,6 +39,7 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         user_text = _last_user_text(_normalize_messages(req.messages))
         skill_id = await dispatch_skill(state, user_text)
         mode = MODE_REPORT if skill_id == "report" else MODE_QUERY
+        req.skill_id = skill_id  # 供 chat_stream 按技能组合过滤工具集
     if mode == MODE_REPORT:
         async for ev in report_stream(state, req):
             yield ev
@@ -100,7 +102,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     yield {"type": "stage", "stage": "retrieval", "tables": context_meta.get("candidate_tables", [])}
     for _ in range(MAX_TURNS):
         tool_calls: list = []
-        async for chunk in provider.chat_stream(messages, TOOL_SCHEMAS):
+        async for chunk in provider.chat_stream(messages, skill_tool_schemas(req.skill_id)):
             if chunk.delta:
                 yield {"type": "text", "content": chunk.delta}
             elif chunk.content:

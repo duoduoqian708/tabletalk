@@ -1,11 +1,11 @@
 """技能模型：Skill / ScriptSpec / ScriptStep。
 
 Skill 是"使用指导书"——一段可配置的流程描述，把若干原子 Tool 按剧本串起来，
-并携带自己的 system prompt 与只读等元数据。这是可插拔、可增删的基础。
+并携带自己的 system prompt、触发词与只读等元数据。这是可插拔、可增删的基础。
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -38,3 +38,34 @@ class Skill:
     system_prompt: str = ""
     builtin: bool = False
     read_only: bool = False
+    enabled: bool = True                      # 启用/禁用（技能广场）
+    triggers: list[str] = field(default_factory=list)  # 关键词路由（自定义技能）
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        if self.script is not None:
+            d["script"] = asdict(self.script)
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Skill":
+        script = d.get("script")
+        spec = None
+        if script:
+            spec = ScriptSpec(
+                steps=[ScriptStep(**s) for s in script.get("steps", [])],
+                requires_schema=script.get("requires_schema", False),
+                requires_history=script.get("requires_history", False),
+            )
+        return cls(
+            id=d["id"],
+            name=d.get("name", d["id"]),
+            description=d.get("description", ""),
+            tools=list(d.get("tools", [])),
+            script=spec,
+            system_prompt=d.get("system_prompt", ""),
+            builtin=bool(d.get("builtin", False)),
+            read_only=bool(d.get("read_only", False)),
+            enabled=bool(d.get("enabled", True)),
+            triggers=list(d.get("triggers", [])),
+        )

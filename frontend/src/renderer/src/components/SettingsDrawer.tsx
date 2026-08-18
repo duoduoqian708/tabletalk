@@ -3,6 +3,7 @@ import { useConnections } from '@renderer/store/connections'
 import { testGateway, testEmbedding } from '@renderer/api/ai'
 import { getSettings, updateSettings } from '@renderer/api/settings'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
+import { SkillPlaza } from './SkillPlaza'
 
 interface Props {
   open: boolean
@@ -14,6 +15,7 @@ const SECTIONS = [
   { key: 'dsm', ic: '⛁', label: '数据源管理' },
   { key: 'theme', ic: '◐', label: '主题风格' },
   { key: 'llm', ic: '◎', label: '大模型接入' },
+  { key: 'skills', ic: '✦', label: '技能广场' },
   { key: 'safety', ic: '▣', label: '安全参数' },
   { key: 'general', ic: '⚙', label: '通用' }
 ] as const
@@ -537,6 +539,12 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                     <div className="set-row inline"><span className="sr-l">连接池大小</span><input type="number" min={1} value={poolSize} onChange={(e) => setPoolSize(Number(e.target.value) || 1)} onBlur={() => { void persist(); }} /><span className="hint" style={{ marginLeft: 6 }}>SQLite 固定 1 · PG/MySQL 默认 3</span></div>
                   </div>
                 </div>
+              </section>
+            )}
+
+            {sec === 'skills' && (
+              <section className="set-sec">
+                <SkillPlaza />
               </section>
             )}
 

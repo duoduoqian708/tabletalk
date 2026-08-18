@@ -4048,3 +4048,245 @@ body.g-panning .gcanvas {
 .gi-tag-input:focus {
   border-color: var(--accent);
 }
+
+/* ============ V2 技能广场 ============ */
+.skill-plaza {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sp-item {
+  background: var(--void-3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.sp-item.open {
+  border-color: var(--line-strong);
+}
+.sp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.sp-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.sp-badge {
+  font-size: 8px;
+  border-radius: 99px;
+  padding: 1px 7px;
+  flex: none;
+}
+.sp-badge.b {
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+}
+.sp-badge.c {
+  color: var(--green);
+  background: var(--green-dim);
+}
+.sp-badge.ro {
+  color: var(--ink-faint);
+  background: var(--void-5);
+}
+.sp-badge.rw {
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+.sp-badge.off {
+  color: var(--red);
+  background: var(--red-dim);
+}
+.sp-desc {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.sp-toggle {
+  display: inline-flex;
+  cursor: pointer;
+  flex: none;
+}
+.sp-toggle input {
+  display: none;
+}
+.sp-toggle .tg-track {
+  width: 28px;
+  height: 16px;
+  border-radius: 99px;
+  background: var(--void-5);
+  border: 1px solid var(--line-strong);
+  position: relative;
+  transition: all var(--dur) var(--ease);
+}
+.sp-toggle input:checked + .tg-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.sp-toggle .tg-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 99px;
+  background: #fff;
+  transition: transform var(--dur) var(--ease);
+}
+.sp-toggle input:checked + .tg-track .tg-knob {
+  transform: translateX(12px);
+}
+.sp-more, .sp-del {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 9px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  flex: none;
+}
+.sp-more:hover { color: var(--ink); border-color: var(--accent); }
+.sp-del { color: var(--red); }
+.sp-del:hover { border-color: var(--red); }
+.sp-body {
+  border-top: 1px solid var(--line);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.sp-label {
+  font-size: 9px;
+  color: var(--ink-faint);
+  width: 52px;
+  flex: none;
+  padding-top: 3px;
+}
+.sp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex: 1;
+}
+.sp-tool {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  padding: 4px 8px;
+  font-size: 9px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.sp-tool input { display: none; }
+.sp-tool.on {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent-soft);
+}
+.sp-tool-n {
+  font-weight: 600;
+}
+.sp-tool-d {
+  font-size: 8px;
+  opacity: 0.75;
+}
+.sp-trig {
+  font-size: 9px;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.sp-prompt {
+  flex: 1;
+  font-size: 9px;
+  color: var(--ink-dim);
+  background: var(--void-4);
+  border-radius: 6px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  max-height: 120px;
+  overflow: auto;
+}
+.sp-create {
+  border: 1px dashed var(--accent);
+  background: transparent;
+  color: var(--accent-soft);
+  font-size: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.sp-create:hover {
+  background: var(--accent-dim);
+}
+.sp-form {
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sp-form-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.sp-f-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sp-f-row label {
+  font-size: 9px;
+  color: var(--ink-faint);
+  width: 52px;
+  flex: none;
+}
+.sp-f-row input, .sp-f-row textarea {
+  flex: 1;
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 10px;
+  padding: 6px 9px;
+  outline: none;
+  font-family: inherit;
+}
+.sp-f-row input:focus, .sp-f-row textarea:focus {
+  border-color: var(--accent);
+}
+.sp-hint {
+  font-size: 8.5px;
+  color: var(--ink-faint);
+}
+.sp-error {
+  color: var(--red);
+  font-size: 9.5px;
+}
+.sp-f-acts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}

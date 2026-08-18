@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, audit, connections, health, knowledge, query, schema, settings
+from app.api import ai, audit, connections, health, knowledge, query, schema, settings, skills
 from app.config import get_env, get_token
 from app.debuglog import dbg  # TODO: 测试后删除
 from app.state import get_state
@@ -83,7 +83,7 @@ def create_app() -> FastAPI:
         return resp
 
     for r in (health.router, connections.router, schema.router, query.router,
-              audit.router, settings.router, ai.router, knowledge.router):
+              audit.router, settings.router, ai.router, knowledge.router, skills.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）
