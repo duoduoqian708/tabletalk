@@ -3039,6 +3039,13 @@ body.resizing {
   background: #fff;
   box-shadow: 0 0 0 3px var(--teal-dim);
 }
+.model-edit .me-row .hint {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.6;
+}
+.model-edit .me-row.switch .tg { margin-left: auto; }
 .model-edit .me-actions {
   display: flex;
   gap: 8px;
@@ -3046,6 +3053,21 @@ body.resizing {
   margin-top: 4px;
 }
 .model-edit .me-actions .spacer { flex: 1; }
+/* 测试结果独立成行，避免挤压/顶歪 测试连接 / 取消 / 保存 按钮 */
+.model-edit .me-test {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+  margin-top: 2px;
+  word-break: break-word;
+}
+.model-edit .me-test.ok { color: var(--green); border-color: rgba(16, 120, 87, 0.3); background: rgba(16, 120, 87, 0.06); }
+.model-edit .me-test.bad { color: var(--red); border-color: rgba(212, 69, 58, 0.3); background: rgba(212, 69, 58, 0.06); }
 
 .model-empty {
   padding: 20px;

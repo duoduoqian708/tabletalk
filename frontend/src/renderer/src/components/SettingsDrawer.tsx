@@ -59,7 +59,6 @@ function CapBadges({ caps }: { caps?: { connectivity?: boolean; function_calling
 export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React.JSX.Element | null {
   const [sec, setSec] = useState<Sec>('dsm')
   const { list, currentId, select, remove } = useConnections()
-  const [saving, setSaving] = useState(false)
   const [savedMsg, setSavedMsg] = useState('')
 
   // 平台级运行参数（安全闸门 / 通用）
@@ -279,16 +278,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
     persist(undefined, undefined, next, nextDefault)
   }
 
-  async function handleSaveAll(): Promise<void> {
-    setSaving(true)
-    setSavedMsg('')
-    try {
-      await persist()
-    } finally {
-      setSaving(false)
-    }
-  }
-
   if (!open) return null
 
   return (
@@ -429,23 +418,23 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           <label>温度</label>
                           <input type="number" step="0.05" min="0" max="2" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) || 0.2 })} />
                         </div>
-                        <div className="me-row">
+                        <div className="me-row switch">
                           <label>推理思考</label>
-                          <label className="tg" title="模型是否支持 think；测试连接会自动探测">
+                          <span className="hint" style={{ flex: 1 }}>模型是否支持 think；测试连接会自动探测标定</span>
+                          <label className="tg" title="模型是否支持 think">
                             <input type="checkbox" disabled={editing.provider === 'mock'} checked={!!(editing as Partial<AiModelConfig>).reasoning} onChange={(e) => setEditing({ ...editing, reasoning: e.target.checked } as Partial<AiModelConfig>)} />
                             <span className="tg-k" />
                           </label>
-                          <span className="hint mono" style={{ flex: 1 }}>支持 think · 测试连接自动探测</span>
                         </div>
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
                             {testing ? '测试中…' : '测试连接'}
                           </button>
-                          {testMsg && <span className={`test-result${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</span>}
                           <span className="spacer" />
                           <button className="mini-btn" onClick={cancelEdit}>取消</button>
                           <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? '添加' : '保存'}</button>
                         </div>
+                        {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
@@ -524,11 +513,11 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           <button className="btn tl" disabled={testing || (editing.provider !== 'hash' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
                             {testing ? '测试中…' : '测试连接'}
                           </button>
-                          {testMsg && <span className={`test-result${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</span>}
                           <span className="spacer" />
                           <button className="mini-btn" onClick={cancelEdit}>取消</button>
                           <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? '添加' : '保存'}</button>
                         </div>
+                        {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
@@ -578,10 +567,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
 
             <div className="save-bar">
               {savedMsg && <span className={`test-result${savedMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{savedMsg}</span>}
-              <span className="sv-t mono" style={{ marginLeft: 'auto' }}>模型改动即时保存 · 无需手动提交</span>
-              <button className="mini-btn" disabled={saving} onClick={() => void handleSaveAll()}>
-                {saving ? '同步中…' : '全部同步'}
-              </button>
             </div>
           </div>
         </div>
