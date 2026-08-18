@@ -11,8 +11,9 @@ import json
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
+from app.ai.agent.dispatcher import dispatch_skill
 from app.ai.context import assemble_context, system_prompt
-from app.ai.intent import MODE_QUERY, MODE_REPORT, classify_mode
+from app.ai.intent import MODE_QUERY, MODE_REPORT
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
 from app.ai.dto import ChatRequest
@@ -26,17 +27,17 @@ if TYPE_CHECKING:
 MAX_TURNS = 6
 
 
-async def resolve_mode(state: "AppState", req: ChatRequest) -> str:
-    """确定 mode：显式传则用；否则按意图分类。报告按钮显式传 report 绕过分类。"""
-    if req.mode in (MODE_REPORT, MODE_QUERY):
-        return req.mode
-    user_text = _last_user_text(_normalize_messages(req.messages))
-    return await classify_mode(state, user_text, explicit=None)
-
-
 async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
-    """统一入口：按 resolved mode 分流到 chat_stream 或 report_stream。"""
-    mode = await resolve_mode(state, req)
+    """统一入口：显式 mode 优先，否则按 dispatcher 意图路由技能。
+
+    report 走 report_stream（report 技能剧本），其余走 chat_stream（query 技能剧本）。
+    """
+    if req.mode in (MODE_REPORT, MODE_QUERY):
+        mode = req.mode
+    else:
+        user_text = _last_user_text(_normalize_messages(req.messages))
+        skill_id = await dispatch_skill(state, user_text)
+        mode = MODE_REPORT if skill_id == "report" else MODE_QUERY
     if mode == MODE_REPORT:
         async for ev in report_stream(state, req):
             yield ev
