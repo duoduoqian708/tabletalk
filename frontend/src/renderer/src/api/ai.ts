@@ -198,12 +198,16 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
     } catch {
       /* 非 JSON 错误体 */
     }
+    // TODO: 测试后删除
+    console.log(`[CLEARED][sse] chat 非 200: ${res.status} ${msg}`)
     throw new Error(msg)
   }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
+  // TODO: 测试后删除——SSE 事件计数（另测 done/error/超时）
+  let evCount = 0
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -216,7 +220,10 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
       const payload = t.slice(5).trim()
       if (payload === '[DONE]') return
       try {
-        onEvent(JSON.parse(payload) as AiEvent)
+        const ev = JSON.parse(payload) as AiEvent
+        evCount += 1
+        console.log(`[CLEARED][sse] [${evCount}] type=${ev.type}${ev.type === 'sql_card' ? ' verdict=' + (ev.card?.verdict ?? '?') : ''}${ev.type === 'error' ? ' msg=' + (ev as any).message : ''}`)
+        onEvent(ev)
       } catch {
         /* 跳过非 JSON 事件 */
       }

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import ai, audit, connections, health, knowledge, query, schema, settings
 from app.config import get_env, get_token
+from app.debuglog import dbg  # TODO: 测试后删除
 from app.state import get_state
 
 # 导入方言模块以完成注册（新增数据库：写适配器 + 在此导入）
@@ -59,16 +60,27 @@ def create_app() -> FastAPI:
     async def sidecar_token_guard(request: Request, call_next):
         """本机鉴权：仅守 /api/*；health 与 bootstrap 免鉴权，静态资源/SPA 放行。"""
         path = request.url.path
+        # TODO: 测试后删除——全请求进入/完成日志
+        dbg("[http] IN ", request.method, path)
         if request.method == "OPTIONS":
-            return await call_next(request)
+            resp = await call_next(request)
+            dbg("[http] OUT", request.method, path, resp.status_code)
+            return resp
         if not path.startswith("/api/"):
-            return await call_next(request)
+            resp = await call_next(request)
+            dbg("[http] OUT", request.method, path, resp.status_code)
+            return resp
         if path in ("/api/v1/health", "/api/v1/bootstrap"):
-            return await call_next(request)
+            resp = await call_next(request)
+            dbg("[http] OUT", request.method, path, resp.status_code)
+            return resp
         supplied = request.headers.get("X-Cleared-Token", "")
         if not hmac.compare_digest(supplied, get_token()):
+            dbg("[http] 401", path)
             return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
-        return await call_next(request)
+        resp = await call_next(request)
+        dbg("[http] OUT", request.method, path, resp.status_code)
+        return resp
 
     for r in (health.router, connections.router, schema.router, query.router,
               audit.router, settings.router, ai.router, knowledge.router):

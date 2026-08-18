@@ -95,6 +95,9 @@ async def execute_tool(
 ) -> ToolOutcome:
     cfg = state.connections.get(conn_id)
     dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
+    # TODO: 测试后删除
+    from app.debuglog import dbg
+    dbg("[tool] IN", name, "conn=", conn_id, "include_data=", include_data)
 
     if name == "get_schema":
         schema = await core_schema(state, conn_id)
@@ -155,6 +158,8 @@ async def execute_tool(
                 card=card,
                 think=f"只读查询，安全闸门放行（{res['row_count']} 行）。",
             )
+        # TODO: 测试后删除
+        dbg("[tool.run_query] NOT_ALLOW verdict=", assessment.verdict.value, "reasons=", assessment.reasons)
         return ToolOutcome(
             result={"ok": False, "verdict": assessment.verdict.value, "reason": "; ".join(assessment.reasons)},
             card={"tier": assessment.tier.value, "verdict": assessment.verdict.value, "sql": sql,

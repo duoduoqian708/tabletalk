@@ -227,6 +227,10 @@ async def _run_report_query(
 
 async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
     """报告流 generator。前端持有中间态；后端无状态，靠 messages 历史 replay。"""
+    # TODO: 测试后删除
+    from app.debuglog import dbg
+    dbg("[report] start conn=", req.connection_id, "model_id=", req.model_id,
+        "reasoning=", req.reasoning)
     provider = gw.build_provider(_provider_cfg(state, req))
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"

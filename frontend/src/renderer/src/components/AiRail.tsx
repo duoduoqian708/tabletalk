@@ -473,18 +473,31 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
 
   /** 自动执行：流结束 + 安全评估完成 + 最后一张卡是读（allow）→ 直接运行出结果。 */
   function maybeAutoRun(card: AiCard | undefined): void {
-    if (autoRanRef.current) return
-    if (!card || card.verdict !== 'allow') return
-    if (!streamDoneRef.current || !gateDoneRef.current) return
-    if (trustLevel === 'all_confirm') return   // 全部介入：读卡也不自动执行，等用户点卡片运行
+    if (autoRanRef.current) {
+      console.log('[CLEARED][autorun] skipped (already ran)') // TODO: 测试后删除
+      return
+    }
+    if (!card || card.verdict !== 'allow') {
+      console.log(`[CLEARED][autorun] skipped (verdict=${card?.verdict ?? 'nocard'}, streamDone=${streamDoneRef.current}, gateDone=${gateDoneRef.current})`) // TODO: 测试后删除
+      return
+    }
+    if (!streamDoneRef.current || !gateDoneRef.current) {
+      console.log(`[CLEARED][autorun] deferred (streamDone=${streamDoneRef.current}, gateDone=${gateDoneRef.current})`) // TODO: 测试后删除
+      return
+    }
+    if (trustLevel === 'all_confirm') {
+      console.log('[CLEARED][autorun] BLOCKED by trustLevel=all_confirm (读卡不自动执行)') // TODO: 测试后删除
+      return
+    }
     autoRanRef.current = true
-    // 卡片已带循环内执行的结果 → 直接渲染，不再 POST /query（消除同 SQL 双执行）
     const loopRes = (card as { result?: Record<string, any> }).result
     if (loopRes) {
+      console.log('[CLEARED][autorun] USE loop-internal result (no double POST)') // TODO: 测试后删除
       loopResultRef.current = null
       handleQueryResult({ ...loopRes, verdict: 'allow' } as QueryResponse, card.sql, curQuestionRef.current)
       return
     }
+    console.log('[CLEARED][autorun] fallback POST /query') // TODO: 测试后删除
     void exec(card.sql, false, curQuestionRef.current)
   }
 
@@ -539,6 +552,8 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     const q = input.trim()
     if (!q || !currentId) return
     const mode = opts?.mode
+    // TODO: 测试后删除——提交对话（含信任级别/model/reasoning 供排查）
+    console.log(`[CLEARED][send] mode=${mode ?? 'query'} trustLevel=${trustLevel} modelId=${modelId} reasoning=${reasoningEffort} q=${q.slice(0, 40)}`)
     setInput('')
     if (mode === 'report') setForceReport(false)
     setBusy(true)

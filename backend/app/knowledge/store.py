@@ -159,6 +159,9 @@ class KnowledgeBase:
         schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
     ) -> dict[str, Any]:
+        # TODO: 测试后删除
+        from app.debuglog import dbg
+        dbg("[kb.build] conn=", conn_id, "tables=", len(schema.get("tables", [])))
         schema = dict(schema)
         schema["_conn_id"] = conn_id
         self._auto[conn_id] = self._from_schema(schema)
@@ -465,6 +468,9 @@ class KnowledgeBase:
         """
         confirmed = set(self.confirmed_tags(conn_id))
         tag_set = {t for t in tag_names if t in confirmed}
+        # TODO: 测试后删除
+        from app.debuglog import dbg
+        dbg("[kb.route] conn=", conn_id, "req_tags=", tag_names, "confirmed_hit=", sorted(tag_set))
         if not tag_set:
             return {"tables": [], "edges": [], "seeded": 0}
         picks: set[str] = set()

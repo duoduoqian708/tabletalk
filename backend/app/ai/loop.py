@@ -82,6 +82,10 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
             pass
 
     user_text = _last_user_text(_normalize_messages(req.messages))
+    # TODO: 测试后删除
+    from app.debuglog import dbg
+    dbg("[chat] conn=", conn_id, "model_id=", req.model_id, "reasoning=", req.reasoning,
+        "user=", user_text[:40])
     context = await assemble_context(state, conn_id, req.table, user_text)
     messages: list[dict] = [
         {"role": "system", "content": system_prompt()},

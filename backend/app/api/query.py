@@ -55,6 +55,10 @@ async def run_query(req: QueryRequest) -> dict:
     origin = Origin.AI if req.origin == "ai" else Origin.MANUAL
     assessment = safety_gate.assess_sql(req.sql, dialect, origin)
     t0 = time.monotonic()
+    # TODO: 测试后删除
+    from app.debuglog import dbg
+    dbg("[query] IN", "origin=", req.origin, "verdict=", assessment.verdict.value,
+        "tier=", assessment.tier.value, "sql=", (req.sql or "")[:80])
 
     # 只读连接硬边界：写/DDL 一律 BLOCK（不降级为 REVIEW 确认）
     if cfg.read_only and assessment.verdict != Verdict.ALLOW:
