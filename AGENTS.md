@@ -80,3 +80,13 @@ overridable via `PUT /api/v1/settings`.
 > **Gotcha:** `CLEARED_GATE_REVIEW_THRESHOLD` and `gate_rules` are configurable
 > and persisted, but **no gate code reads them** — writes are always `REVIEW`
 > regardless of row count. Don't assume a threshold auto-allows writes.
+
+## 会话死规矩（用户强制要求，务必自动执行，不等提醒）
+
+- **改完后端（Python）代码后，必须主动重启后端 sidecar，不要等用户喊：**
+  1. 找到占用端口的进程（默认 `CLEARED_PORT=8765`）：`lsof -ti tcp:8765`；
+  2. `kill -9 <pid>` 杀掉旧进程，确认端口空闲（`lsof -ti tcp:8765` 无输出）；
+  3. 重新拉起：`cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8765`；
+  4. 验证：`curl -s http://127.0.0.1:8765/api/v1/health` 返回预期字段（尤其改了 health/settings 后要确认新字段出现，旧进程会返回旧结构导致前端显示 `—`）。
+- **改完前端代码后，必须 `cd frontend && npm run typecheck && npm run build`**：后端 serve 的是 `frontend/dist`，不 rebuild 前端改动不生效。
+- 任何改动收尾都要实际跑验证命令并确认输出，再向用户汇报结果。

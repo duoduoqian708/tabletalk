@@ -367,12 +367,11 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                     <div className="model-list">
                       {aiModels.map((m) => (
                         <div key={m.id} className={`model-item${m.id === defaultAi ? ' cur' : ''}`}>
-                          <div className="mi-head">
-                            <span className="mi-name">{m.name}</span>
-                            <span className="mi-provider">{m.provider}</span>
-                            <span className="mi-model">{m.model || '—'}</span>
-                            <div className="mi-actions">
-                              <button className={`mini-btn set${m.id === defaultAi ? ' cur' : ''}`} onClick={() => { setDefaultAi(m.id); persist(aiModels, m.id) }}>
+                            <div className="mi-head">
+                              <span className="mi-name">{m.name}</span>
+                              <span className="mi-model">{m.model || '—'}</span>
+                              <div className="mi-actions">
+                                <button className={`mini-btn set${m.id === defaultAi ? ' cur' : ''}`} onClick={() => { setDefaultAi(m.id); persist(aiModels, m.id) }}>
                                 {m.id === defaultAi ? '当前' : '设为默认'}
                               </button>
                               <button className="mini-btn" onClick={() => startEditChat(m)}>编辑</button>
@@ -392,16 +391,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                     {editingChat && (
                       <div className="model-edit">
                         <div className="me-row">
-                          <label>名称</label>
-                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="我的模型" />
-                        </div>
-                        <div className="me-row">
                           <label>Provider</label>
-                          <select value={editing.provider ?? 'cloud'} onChange={(e) => setEditing({ ...editing, provider: e.target.value })}>
-                            <option value="cloud">云端 API</option>
-                            <option value="local">本地 / 私有网关</option>
-                            <option value="mock">Mock（内置）</option>
-                          </select>
+                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="火山引擎 / OpenAI …" />
                         </div>
                         {editing.provider !== 'mock' && (
                           <>
@@ -432,7 +423,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                               ? '未测试'
                               : ((editing as Partial<AiModelConfig>).reasoning ? '支持' : '不支持')}
                           </span>
-                          <span className="hint" style={{ flex: 1 }}>测试连接时自动探测</span>
                         </div>
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
@@ -498,7 +488,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           <label>Provider</label>
                           <select value={editing.provider ?? 'api'} onChange={(e) => setEditing({ ...editing, provider: e.target.value })}>
                             <option value="api">API（OpenAI 兼容）</option>
-                            <option value="hash">Hash（离线）</option>
                           </select>
                         </div>
                         {editing.provider !== 'hash' && (

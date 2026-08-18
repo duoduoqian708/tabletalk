@@ -21,14 +21,14 @@ async def test_settings_has_ai_models_list(client):
 
 
 async def test_settings_has_embedding_models_list(client):
-    """GET /settings 返回 embedding_models 列表。"""
+    """GET /settings 返回 embedding_models 列表（离线 Hash 为内部兜底，不再作为 UI 模型暴露）。"""
     r = await client.get("/api/v1/settings")
     body = r.json()
     assert "embedding_models" in body
     assert isinstance(body["embedding_models"], list)
-    assert len(body["embedding_models"]) >= 1
+    # 离线 Hash 向量模型不再出现在 UI 列表（知识库内部 HashingEmbedder 兜底）
     providers = {m["provider"] for m in body["embedding_models"]}
-    assert "hash" in providers
+    assert "hash" not in providers
 
 
 async def test_settings_legacy_fields_still_work(client):

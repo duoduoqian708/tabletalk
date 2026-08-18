@@ -118,6 +118,24 @@
   flex: 1;
 }
 
+/* 顶栏上下文：当前展示的表名（与功能菜单按钮明显区分） */
+.cur-table {
+  flex: none;
+  margin-left: 20px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 5px 12px;
+  letter-spacing: 0.02em;
+}
+
 .stage {
   flex: 1;
   display: flex;
@@ -436,6 +454,63 @@
   border-right-color: transparent;
 }
 
+/* 收起态：仅留一条窄边，露出展开图标（固定在左上角） */
+.schemaview.collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  border-right: 1px solid var(--line);
+  background: var(--rail);
+  overflow: hidden;
+}
+
+.sch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sch-toolbar .sch-grp { padding: 0; }
+
+/* 合并后的「展开/收起全部字段」可变箭头 + 「侧栏收起」开关 */
+.sch-tb {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.14s, background 0.14s;
+}
+
+.sch-tb:hover { color: var(--ink); background: var(--bg-2); }
+.sch-tb.on { color: var(--teal); }
+
+/* 收起态下的展开图标（固定在左上，不居中） */
+.sch-rail-toggle {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: color 0.14s, background 0.14s;
+}
+
+.sch-rail-toggle:hover { color: var(--teal); background: var(--teal-dim); }
+
 /* 拖拽分隔手柄 */
 .drag-h {
   flex: none;
@@ -454,7 +529,7 @@
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--line);
+  background: transparent;
   transition: background 0.12s;
 }
 
@@ -552,6 +627,25 @@ body.resizing {
   white-space: nowrap;
   flex: 1;
   min-width: 0;
+}
+
+.sch-row-toggle {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.14s, background 0.14s;
+}
+
+.sch-row-toggle:hover {
+  color: var(--teal);
+  background: var(--teal-dim);
 }
 
 .sch-item .tw {
@@ -729,15 +823,15 @@ body.resizing {
 /* ============ table ============ */
 .tableview {
   flex: 1;
-  margin: 8px 16px 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
   overflow: hidden;
   background: var(--card);
   min-height: 0;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 3px rgba(20, 30, 60, 0.04);
 }
 
 .tv-head {
@@ -1589,77 +1683,191 @@ body.resizing {
 .airail .btn.warn { color: var(--amber); border-color: rgba(200, 135, 30, 0.45); }
 .airail .btn.warn:hover { background: var(--amber-dim); color: var(--amber); border-color: var(--amber); }
 
+/* ============ AI 副驾 · 输入区（设计升级） ============ */
 .airail-in {
   flex: none;
   display: flex;
-  padding: 10px 11px;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px 13px 14px;
   border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, var(--teal-dim) 320%);
 }
 
-.ai-in-row {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-
-/* 报告模式触发按钮：在输入框左侧，激活时蓝描边 */
-.rpt-btn {
+/* AI 输入框下方：Provider / 模型ID（AI 区域左侧对齐） */
+.airail-foot {
   flex: none;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 16px;
-  background: var(--bg-2);
-  border: 1px solid var(--line-strong);
-  color: var(--ink-dim);
-  font-size: 11.5px;
-  font-family: 'Hanken Grotesk', sans-serif;
-  cursor: pointer;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
-}
-.rpt-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
-.rpt-btn.on {
-  background: var(--teal-dim);
-  border-color: var(--teal);
-  color: var(--teal);
+  display: flex;
+  justify-content: flex-start;
+  gap: 18px;
+  padding: 7px 15px 9px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--ink-faint);
 }
 
-.a-field {
+.airail-foot b {
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+
+.ai-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 15px;
+  padding: 8px 8px 8px 15px;
+  box-shadow: 0 8px 22px -14px rgba(20, 30, 60, 0.22);
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+
+.ai-compose:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-dim), 0 8px 22px -14px rgba(20, 30, 60, 0.22);
+}
+
+.compose-input {
   flex: 1;
-  background: var(--bg-2);
-  border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 9px 13px;
-  font-size: 12px;
+  border: 0;
+  background: transparent;
+  padding: 8px 0;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: var(--ink);
   outline: none;
-  transition: border-color 0.14s, box-shadow 0.14s, background 0.14s;
+  resize: none;
+  min-height: 22px;
+  max-height: 150px;
   font-family: 'Hanken Grotesk', sans-serif;
 }
 
-.a-field:focus {
-  border-color: var(--teal);
-  background: #fff;
-  box-shadow: 0 0 0 3px var(--teal-dim);
-}
-
-.a-field::placeholder { color: var(--ink-faint); }
+.compose-input::placeholder { color: var(--ink-faint); }
 
 .airail .send {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
+  flex: none;
   border-radius: 50%;
   background: var(--ink);
   color: #fff;
-  font-size: 13px;
-  flex: none;
-  cursor: pointer;
+  font-size: 15px;
   border: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
   transition: background 0.15s, transform 0.1s;
 }
 
 .airail .send:hover:not(:disabled) { background: var(--teal); }
 .airail .send:active:not(:disabled) { transform: scale(0.92); }
-.airail .send:disabled { opacity: 0.4; cursor: default; }
+.airail .send:disabled { opacity: 0.35; cursor: default; }
+
+/* 底部小工具行：模型 / 安全策略 / 思考 */
+.ai-in-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-foot-sp { flex: 1; }
+
+.ai-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.ai-opt-l { color: var(--ink-faint); }
+
+.ai-sel {
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  background-color: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 3px 22px 3px 9px;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-faint) 50%),
+    linear-gradient(135deg, var(--ink-faint) 50%, transparent 50%);
+  background-position: calc(100% - 13px) calc(50% - 1px), calc(100% - 9px) calc(50% - 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  transition: border-color 0.14s, color 0.14s, box-shadow 0.14s;
+}
+
+.ai-sel:hover { border-color: var(--ink-dim); color: var(--ink); }
+.ai-sel:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-dim);
+}
+
+/* 开启思考：开关（不支持时置灰 + 不支持字样） */
+.ai-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  background: transparent;
+  border: 0;
+  padding: 2px 0;
+  cursor: pointer;
+  transition: color 0.14s;
+}
+
+.ai-toggle .tg-track {
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  position: relative;
+  flex: none;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+
+.ai-toggle .tg-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  transition: transform 0.16s var(--ease), background 0.16s var(--ease);
+}
+
+.ai-toggle.on { color: var(--ink); }
+.ai-toggle.on .tg-track { background: var(--teal); border-color: var(--teal); }
+.ai-toggle.on .tg-knob { transform: translateX(14px); background: #fff; }
+
+.ai-toggle:disabled { cursor: default; opacity: 0.5; }
+.ai-toggle:disabled .tg-track { background: var(--bg-2); border-color: var(--line); }
+.ai-toggle:disabled .tg-knob { background: var(--ink-faint); }
+
+.ai-toggle .tg-note {
+  color: var(--ink-faint);
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+}
 
 /* toast */
 .rail-toast {
@@ -2353,29 +2561,39 @@ body.resizing {
 }
 
 .sch-tb {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border: 0;
   background: transparent;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: 15px;
+  line-height: 1;
   cursor: pointer;
-  transition: all 0.12s;
+  border-radius: 6px;
+  transition: color 0.14s, background 0.14s;
+}
+
+/* 顶部「全部展开/收起」按钮（按需隐藏，未删除） */
+.sch-expandall {
+  display: none;
+}
+
+.sch-chev {
+  width: 14px;
+  height: 14px;
+  display: block;
+  transform-origin: center;
 }
 
 .sch-tb:hover {
   color: var(--teal);
-  border-color: rgba(10, 109, 255, 0.35);
   background: var(--teal-dim);
 }
 
 .sch-tb.on {
   color: var(--teal);
-  border-color: rgba(10, 109, 255, 0.4);
-  background: var(--teal-dim);
 }
 
 /* AI 栏头部：对话标题 + 新建/历史 */

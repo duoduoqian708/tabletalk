@@ -294,17 +294,21 @@ class SettingsStore:
             self._data["ai_models"] = []
             self._data["default_ai_model"] = ""
 
-        env_emb = EmbeddingModelConfig(
-            id=_new_id("emb"),
-            name="环境配置嵌入" if env.embedding_provider != "hash" else "Hash（离线）",
-            provider=env.embedding_provider,
-            base_url=env.embedding_base_url,
-            api_key=env.embedding_api_key,
-            model=env.embedding_model,
-        )
-        hash_emb = EmbeddingModelConfig(id="emb_hash", name="Hash（离线）", provider="hash")
-        self._data["embedding_models"] = [asdict(hash_emb), asdict(env_emb)] if env.embedding_provider != "hash" else [asdict(hash_emb)]
-        self._data["default_embedding_model"] = self._data["embedding_models"][0]["id"]
+        if env.embedding_provider != "hash":
+            env_emb = EmbeddingModelConfig(
+                id=_new_id("emb"),
+                name="环境配置嵌入",
+                provider=env.embedding_provider,
+                base_url=env.embedding_base_url,
+                api_key=env.embedding_api_key,
+                model=env.embedding_model,
+            )
+            self._data["embedding_models"] = [asdict(env_emb)]
+            self._data["default_embedding_model"] = env_emb.id
+        else:
+            # 离线兜底由知识库内部 HashingEmbedder 提供，UI 不再暴露 Hash 向量模型
+            self._data["embedding_models"] = []
+            self._data["default_embedding_model"] = ""
 
         self._lock = threading.Lock()
         self._load()
@@ -328,19 +332,37 @@ class SettingsStore:
     def _ensure_builtins(self) -> bool:
         """不再内置任何模型。这里只做收尾：
         ① 剔除历史遗留的 builtin 标记模型（如旧的 llm_deepseek / llm_mock，用不起来）；
-        ② default_ai_model 指向不存在 / 空时，回退到列表第一条（列表空则留空）。
+        ② 剔除离线 Hash 向量模型（知识库内部仍有 HashingEmbedder 兜底，UI 不再暴露）；
+        ③ default_ai_model / default_embedding_model 指向不存在 / 空时回退到列表第一条（空则留空）。
         返回是否有剔除发生（调用方可据此落盘）。"""
+        removed = False
         models = self._data["ai_models"]
         # ① 剔除遗留内置项
         kept = [m for m in models if not m.get("builtin")]
-        removed = len(kept) != len(models)
+        if len(kept) != len(models):
+            removed = True
         self._data["ai_models"] = kept
-        # ② 默认模型校正
+
+        # ② 剔除离线 Hash 向量模型
+        emb = self._data.get("embedding_models", [])
+        emb_kept = [m for m in emb if m.get("provider") != "hash"]
+        if len(emb_kept) != len(emb):
+            removed = True
+        self._data["embedding_models"] = emb_kept
+
+        # ③ 默认模型校正（文本）
         cur = self._data["ai_models"]
         cur_ids = {m.get("id") for m in cur}
         default = self._data.get("default_ai_model", "")
         if not default or default not in cur_ids:
             self._data["default_ai_model"] = cur[0]["id"] if cur else ""
+
+        # ③ 默认模型校正（向量）
+        emb_ids = {m.get("id") for m in emb_kept}
+        emb_def = self._data.get("default_embedding_model", "")
+        if not emb_def or emb_def not in emb_ids:
+            self._data["default_embedding_model"] = emb_kept[0]["id"] if emb_kept else ""
+
         return removed
 
     def save(self) -> None:

@@ -241,9 +241,8 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
 const STEP_MS = 1500      // 每步停留时长
 
 /* ---------- 主组件 ---------- */
-export function AiRail({ width, provider }: { width: number; provider?: string | null }): React.JSX.Element {
+export function AiRail({ width, providerName, modelLabel }: { width: number; providerName?: string | null; modelLabel?: string | null }): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
-  const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const connDialect = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.dialect ?? 'sqlite')
   const selectedTable = useSchema((s) => s.selectedTable)
   const push = useResults((s) => s.push)
@@ -262,16 +261,21 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     return () => { alive = false }
   }, [])
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
-  // 按对话选模型：null=跟随默认模型；否则用选中的 ai_models id
-  const [modelId, setModelId] = useState<string | null>(null)
+  // 按对话选模型：null=跟随默认模型（模型在接入侧统一配置）
+  const [modelId] = useState<string | null>(null)
   // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
   const effectiveModel = settings?.ai_models.find(
     (m) => m.id === (modelId ?? settings.default_ai_model),
   )
   const supportsReasoning = !!effectiveModel?.reasoning
-  // 报告模式：点击「报告」按钮下一句发送 mode=report（绕过意图分类）
-  const [forceReport, setForceReport] = useState(false)
-  const [activeSkill, setActiveSkill] = useState<'query' | 'report'>('query')
+  // 输入框自动增高
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  function autoGrow(): void {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(150, el.scrollHeight) + 'px'
+  }
   // 澄清挂起：报告中等待用户回答澄清问题时渲染内联输入
   const [clarifyPending, setClarifyPending] = useState<{ q: string; field: string } | null>(null)
   const [clarifyInput, setClarifyInput] = useState('')
@@ -408,32 +412,19 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
   }
 
   /** 自动执行：流结束 + 安全评估完成 + 最后一张卡是读（allow）→ 直接运行出结果。 */
+  /** 自动执行：流结束 + 安全评估完成 + 最后一张卡是读（allow）→ 直接运行出结果。 */
   function maybeAutoRun(card: AiCard | undefined): void {
-    if (autoRanRef.current) {
-      console.log('[DATUM][autorun] skipped (already ran)') // TODO: 测试后删除
-      return
-    }
-    if (!card || card.verdict !== 'allow') {
-      console.log(`[DATUM][autorun] skipped (verdict=${card?.verdict ?? 'nocard'}, streamDone=${streamDoneRef.current}, gateDone=${gateDoneRef.current})`) // TODO: 测试后删除
-      return
-    }
-    if (!streamDoneRef.current || !gateDoneRef.current) {
-      console.log(`[DATUM][autorun] deferred (streamDone=${streamDoneRef.current}, gateDone=${gateDoneRef.current})`) // TODO: 测试后删除
-      return
-    }
-    if (trustLevel === 'all_confirm') {
-      console.log('[DATUM][autorun] BLOCKED by trustLevel=all_confirm (读卡不自动执行)') // TODO: 测试后删除
-      return
-    }
+    if (autoRanRef.current) return
+    if (!card || card.verdict !== 'allow') return
+    if (!streamDoneRef.current || !gateDoneRef.current) return
+    if (trustLevel === 'all_confirm') return
     autoRanRef.current = true
     const loopRes = (card as { result?: Record<string, any> }).result
     if (loopRes) {
-      console.log('[DATUM][autorun] USE loop-internal result (no double POST)') // TODO: 测试后删除
       loopResultRef.current = null
       handleQueryResult({ ...loopRes, verdict: 'allow' } as QueryResponse, card.sql, curQuestionRef.current)
       return
     }
-    console.log('[DATUM][autorun] fallback POST /query') // TODO: 测试后删除
     void exec(card.sql, false, curQuestionRef.current)
   }
 
@@ -480,11 +471,8 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     const q = input.trim()
     if (!q || !currentId) return
     const mode = opts?.mode
-    setActiveSkill(mode === 'report' ? 'report' : 'query')
-    // TODO: 测试后删除——提交对话（含信任级别/model/reasoning 供排查）
-    console.log(`[DATUM][send] mode=${mode ?? 'query'} trustLevel=${trustLevel} modelId=${modelId} reasoning=${reasoningEffort} q=${q.slice(0, 40)}`)
     setInput('')
-    if (mode === 'report') setForceReport(false)
+    if (inputRef.current) inputRef.current.style.height = 'auto'
     setBusy(true)
     const isFirstQ = userCountRef.current === 0
     userCountRef.current += 1
@@ -868,24 +856,6 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
         <span className="conv-title" title={activeConv?.title ?? '新对话'}>
           {activeConv?.title ?? '新对话'}
         </span>
-        <span className="meta mono">{connName} · model: {provider ?? 'mock'}</span>
-        <span className="skill-badge" title="当前对话使用的技能">
-          {activeSkill === 'report' ? '报告' : '查询'}
-        </span>
-        <select
-          className="ah-btn trust"
-          value={trustLevel}
-          onChange={(e) => {
-            const v = e.target.value as TrustLevel
-            setTrustLevel(v)
-            toastMsg(v === 'all_confirm' ? '信任级别：全部介入（读也需人工确认）' : '信任级别：读自动 · 写确认')
-          }}
-          title="会话信任级别"
-          style={{ fontSize: 11, padding: '2px 6px', borderRadius: 6, border: '1px solid var(--line)', background: 'transparent', color: 'inherit', marginRight: 6 }}
-        >
-          <option value="all_confirm">全部介入</option>
-          <option value="read_auto">读自动·写确认</option>
-        </select>
         <span className="spacer" />
         <button className="ah-btn" title="新建对话" disabled={busy} onClick={newChat}>＋</button>
         <div className="ah-dd" ref={histDdRef}>
@@ -996,56 +966,57 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
       )}
 
       <div className="airail-in">
-        <div className="ai-in-row">
-          <select
-            className="a-field model-sel"
-            value={modelId ?? ''}
-            disabled={busy}
-            title="为本次对话选择模型（空=默认）"
-            onChange={(e) => setModelId(e.target.value || null)}
-          >
-            <option value="">· 默认模型 ·</option>
-            {(settings?.ai_models ?? []).map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}（{m.provider}）
-              </option>
-            ))}
-          </select>
-          <button
-            className={`rpt-btn${forceReport ? ' on' : ''}`}
-            title="以报告模式发送（绕过意图分类，出分析报告）"
-            disabled={busy}
-            onClick={() => {
-              setForceReport((v) => !v)
-              toastMsg(forceReport ? '已切回查询模式' : '下一句将以报告模式发送')
-            }}
-          >
-            报告{forceReport ? ' ✓' : ''}
-          </button>
-          {supportsReasoning && (
-            <select
-              className="rpt-btn think"
-              value={reasoningEffort}
-              disabled={busy}
-              title="思考强度：关闭 / 低 / 中 / 高（仅支持推理的模型）"
-              onChange={(e) => setReasoningEffort(e.target.value as ReasoningEffort)}
-            >
-              <option value="off">思考：关</option>
-              <option value="low">思考：低</option>
-              <option value="medium">思考：中</option>
-              <option value="high">思考：高</option>
-            </select>
-          )}
-          <input
-            className="a-field"
+        <div className="ai-compose">
+          <textarea
+            ref={inputRef}
+            className="compose-input"
             value={input}
-            placeholder={forceReport ? '描述想要的分析报告…（报告模式）' : 'ask your database…'}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void send(forceReport ? { mode: 'report' } : undefined) }}
+            placeholder="问你的数据库…"
+            onChange={(e) => { setInput(e.target.value); autoGrow() }}
+            onInput={autoGrow}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                void send()
+              }
+            }}
             disabled={busy}
+            rows={1}
           />
-          <button className="send" disabled={busy || !input.trim()} onClick={() => void send(forceReport ? { mode: 'report' } : undefined)}>→</button>
+          <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title="发送">→</button>
         </div>
+        <div className="ai-in-foot">
+          <label className="ai-opt" title="会话安全策略">
+            <span className="ai-opt-l">安全策略</span>
+            <select
+              className="ai-sel"
+              value={trustLevel}
+              onChange={(e) => {
+                const v = e.target.value as TrustLevel
+                setTrustLevel(v)
+                toastMsg(v === 'all_confirm' ? '安全策略：全部人工确认' : '安全策略：读自动 · 写确认')
+              }}
+            >
+              <option value="read_auto">读自动·写确认</option>
+              <option value="all_confirm">全部人工确认</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            className={`ai-toggle${reasoningEffort !== 'off' ? ' on' : ''}`}
+            disabled={!supportsReasoning}
+            onClick={() => setReasoningEffort(reasoningEffort === 'off' ? 'medium' : 'off')}
+            title={supportsReasoning ? '开启思考（仅支持推理的模型可用）' : '当前模型不支持思考'}
+          >
+            <span className="ai-opt-l">开启思考</span>
+            <span className="tg-track"><span className="tg-knob" /></span>
+            {!supportsReasoning && <span className="tg-note">不支持</span>}
+          </button>
+        </div>
+      </div>
+      <div className="airail-foot">
+        <span>provider&nbsp;:&nbsp;<b>{providerName ?? '—'}</b></span>
+        <span>模型ID&nbsp;:&nbsp;<b>{modelLabel ?? '—'}</b></span>
       </div>
     </aside>
   )

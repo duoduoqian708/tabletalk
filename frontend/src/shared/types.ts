@@ -11,6 +11,7 @@ export interface HealthStatus {
   dialects: string[]
   ai_provider: string
   ai_model: string
+  ai_provider_name: string
   ai_effective_provider: string
   ai_mock_downgraded: boolean
   connections: number

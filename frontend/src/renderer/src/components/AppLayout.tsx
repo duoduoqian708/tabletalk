@@ -3,6 +3,7 @@ import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
+import { useSchema } from '@renderer/store/schema'
 import { useUi, type View } from '@renderer/store/ui'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
@@ -56,7 +57,7 @@ function DragHandle({ onDrag }: { onDrag: (dx: number) => void }): React.JSX.Ele
 }
 
 export function AppLayout({ health }: Props): React.JSX.Element {
-  const [schemaOn, setSchemaOn] = useState(true)
+  const [schemaCollapsed, setSchemaCollapsed] = useState(false)
   const [schemaW, setSchemaW] = useState(170)
   const [aiW, setAiW] = useState(450)
   const [modalOpen, setModalOpen] = useState(false)
@@ -65,18 +66,19 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const create = useConnections((s) => s.create)
   const result = useResults((s) => s.result)
   const report = useResults((s) => s.report)
+  const selectedTable = useSchema((s) => s.selectedTable)
   const view = useUi((s) => s.view)
   const setView = useUi((s) => s.setView)
   const rt = getRuntime()
 
-  // 结果来源主题：schema 点表 → 表名；AI 查询 → 问题主题；报告 → 报告标题
+  // 当前展示的表名（顶栏上下文指示）
   const subject = report
     ? report.title
     : result
-      ? result.title.startsWith('schema · ')
-        ? `表 ${result.title.slice('schema · '.length)}`
-        : result.title
-      : '—'
+      ? (result.title.startsWith('schema · ')
+        ? result.title.slice('schema · '.length)
+        : result.title)
+      : selectedTable ?? '—'
 
   async function useDemo(): Promise<void> {
     if (!rt) return
@@ -102,6 +104,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
             </button>
           ))}
         </nav>
+        <span className="cur-table mono" title="当前展示">{subject}</span>
         <span className="spacer" />
         <div className="gw mono">
           gateway&nbsp;:&nbsp;<b style={{ color: 'var(--ink-dim)', fontWeight: 500 }}>{health?.ai_effective_provider ?? health?.ai_provider ?? '—'}</b>
@@ -117,17 +120,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       <main className="stage" key={view}>
         {view === 'workspace' ? (
           <>
-            <SchemaRail open={schemaOn} width={schemaW} />
-            <DragHandle onDrag={(dx) => setSchemaW((w) => Math.min(320, Math.max(96, w + dx)))} />
+            <SchemaRail collapsed={schemaCollapsed} width={schemaW} onToggleRail={() => setSchemaCollapsed((c) => !c)} />
+            {!schemaCollapsed && (
+              <DragHandle onDrag={(dx) => setSchemaW((w) => Math.min(320, Math.max(96, w + dx)))} />
+            )}
             <section className="workspace">
-              <div className="ws-ctx">
-                <button className={`iconbtn${schemaOn ? ' on' : ''}`} onClick={() => setSchemaOn(!schemaOn)}>
-                  ⌘ schema
-                </button>
-                <span className="arrow">→</span>
-                <span className="pill subj" title={subject}>{subject}</span>
-              </div>
-
               {list.length === 0 ? (
                 <div className="onboarding">
                   <div className="card">
@@ -148,7 +145,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               )}
             </section>
             <DragHandle onDrag={(dx) => setAiW((w) => Math.min(720, Math.max(320, w - dx)))} />
-            <AiRail width={aiW} provider={health?.ai_effective_provider ?? health?.ai_provider} />
+            <AiRail
+              width={aiW}
+              providerName={health?.ai_provider_name}
+              modelLabel={health?.ai_model}
+            />
           </>
         ) : view === 'gate' ? (
           <GatePage health={health} />
@@ -160,14 +161,6 @@ export function AppLayout({ health }: Props): React.JSX.Element {
           <AuditPage />
         )}
       </main>
-
-      <footer className="statusline mono">
-        <span className="guard">gate&nbsp;:&nbsp;{health?.gate ?? '…'}</span>
-        <span className="mid">
-          <span>model&nbsp;:&nbsp;<b>{health?.ai_model ?? '—'}</b>&nbsp;<span style={{ color: 'var(--ink-dim)' }}>({health?.ai_effective_provider ?? health?.ai_provider})</span></span>
-          <span>dialect&nbsp;:&nbsp;<b>{health?.dialects?.join(' / ') ?? '—'}</b></span>
-        </span>
-      </footer>
 
       <ConnectionModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onNewConnection={() => { setSettingsOpen(false); setModalOpen(true) }} />

@@ -27,6 +27,7 @@ async def health() -> dict:
         "dialects": registry.names(),
         "ai_provider": default.provider,
         "ai_model": default.model or default.name,
+        "ai_provider_name": default.name,
         "ai_effective_provider": effective,
         "ai_mock_downgraded": effective == "mock" and default.provider != "mock",
         "connections": len(state.connections.list()),
