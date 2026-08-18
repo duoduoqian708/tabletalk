@@ -555,7 +555,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
             {sec === 'general' && (
               <section className="set-sec">
                 <div className="sec-h">通用<span className="sec-s mono">本地 sidecar · 同源托管</span></div>
-                <div className="sec-d">服务运行参数。</div>
+                <div className="sec-d">本地 AI 优先数据库查询工具（浏览器访问 · 本机 sidecar 同源托管）。</div>
                 <div className="panel">
                   <div className="p-h">服务<span className="p-s mono">本机 · 127.0.0.1</span></div>
                   <div className="p-b">

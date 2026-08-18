@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Product
 
-AI-first desktop database client for developers. Hero feature: natural-language → SQL, backed by a **local, model-independent safety gate**. Positioned against DBeaver/DataGrip/Navicat by the trust story ("the AI can write, but it can never write dangerously"). Enterprise data privacy is the moat.
+AI-first database query tool (self-hosting Web) for developers. Hero feature: natural-language → SQL, backed by a **local, model-independent safety gate**. Positioned against DBeaver/DataGrip/Navicat by the trust story ("the AI can write, but it can never write dangerously"). Enterprise data privacy is the moat.
 
 ## Commands (backend)
 
