@@ -15,7 +15,7 @@ from app.ai.context import assemble_context, system_prompt
 from app.ai.intent import MODE_QUERY, MODE_REPORT, classify_mode
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
-from app.ai.schemas import ChatRequest
+from app.ai.dto import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS, execute_tool
 from app.core.schema import get_schema
 from app.core.sensitive import filter_sensitive

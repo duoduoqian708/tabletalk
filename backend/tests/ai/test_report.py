@@ -13,7 +13,7 @@ import pytest
 
 from app.ai.intent import is_report_intent
 from app.ai.report import _run_report_query, report_stream
-from app.ai.schemas import ChatRequest
+from app.ai.dto import ChatRequest
 
 
 async def _collect(state, conn_id, messages, mode="report"):

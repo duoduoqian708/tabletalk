@@ -25,7 +25,7 @@ from app.ai.context import (
     report_system_prompt,
 )
 from app.ai.intent import classify_tags
-from app.ai.schemas import ChatRequest
+from app.ai.dto import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS_READONLY, execute_tool
 from app.core.schema import get_schema
 from app.safety import gate as safety_gate

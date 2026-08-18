@@ -5,7 +5,7 @@ import pytest
 
 from app.ai.loop import chat_stream
 from app.ai.provider_cfg import resolve_provider_cfg
-from app.ai.schemas import ChatRequest
+from app.ai.dto import ChatRequest
 from app.core.settings import ModelConfig
 
 

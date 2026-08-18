@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.ai import gateway as gw
 from app.ai.loop import stream
-from app.ai.schemas import ChatRequest
+from app.ai.dto import ChatRequest
 from app.state import get_state
 
 router = APIRouter(prefix="/api/v1", tags=["ai"])
