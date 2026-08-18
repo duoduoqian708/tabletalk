@@ -107,13 +107,15 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         <span className="cur-table mono" title="当前展示">{subject}</span>
         <span className="spacer" />
         <div className="gw mono">
-          gateway&nbsp;:&nbsp;<b style={{ color: 'var(--ink-dim)', fontWeight: 500 }}>{health?.ai_effective_provider ?? health?.ai_provider ?? '—'}</b>
+          <span className="gw-provider">{health?.ai_provider_name ?? '—'}</span>
+          <span className="gw-divider" />
+          <span>{health?.ai_model ?? '—'}</span>
           {health?.ai_mock_downgraded && (
-            <span style={{ marginLeft: 6, color: '#c8871e', fontSize: 11 }} title="cloud 无 key，已静默降级为 mock">· mock降级</span>
+            <span className="gw-warn" title="cloud 无 key，已静默降级为 mock">· mock降级</span>
           )}
         </div>
-        <button className="sys-btn" onClick={() => setSettingsOpen(true)}>
-          <span className="gear">⚙</span>系统设置
+        <button className="sys-btn" title="系统设置" onClick={() => setSettingsOpen(true)}>
+          <span className="gear">⚙</span>
         </button>
       </header>
 

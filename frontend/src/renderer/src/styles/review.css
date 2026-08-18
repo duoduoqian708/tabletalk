@@ -13,7 +13,7 @@
   gap: 14px;
   padding: 0 18px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(13, 14, 18, 0.85);
 }
 
 .review-bar .rv-title {
@@ -176,7 +176,7 @@
 
 .mini-acts button:hover {
   color: var(--teal);
-  border-color: rgba(10, 109, 255, 0.3);
+  border-color: rgba(124, 140, 255, 0.3);
 }
 
 .rv-tags {
@@ -202,13 +202,13 @@
 .tag-chip.confirmed {
   color: var(--teal);
   background: var(--teal-dim);
-  border-color: rgba(10, 109, 255, 0.3);
+  border-color: rgba(124, 140, 255, 0.3);
 }
 
 .tag-chip.draft {
   color: var(--amber);
   background: var(--amber-dim);
-  border-color: rgba(200, 135, 30, 0.3);
+  border-color: rgba(246, 173, 85, 0.3);
 }
 
 .tag-acts {
@@ -242,7 +242,7 @@
 
 .tag-add-btn:hover {
   color: var(--teal);
-  border-color: rgba(10, 109, 255, 0.4);
+  border-color: rgba(124, 140, 255, 0.4);
 }
 
 .tag-add {
@@ -362,7 +362,7 @@
 
 .route-chip.on {
   color: var(--teal);
-  border-color: rgba(10, 109, 255, 0.4);
+  border-color: rgba(124, 140, 255, 0.4);
   background: var(--teal-dim);
 }
 
@@ -404,7 +404,7 @@
 
 .kg-node.tagged circle {
   fill: var(--teal-dim);
-  stroke: rgba(10, 109, 255, 0.5);
+  stroke: rgba(124, 140, 255, 0.5);
 }
 
 .kg-node.hl circle {

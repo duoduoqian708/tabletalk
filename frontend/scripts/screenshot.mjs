@@ -62,7 +62,7 @@ try {
   }
   await page.waitForSelector('.sch-item', { timeout: 20000 })
 
-  await page.click('text=知识审查')
+  await page.click('button:has-text("知识库")')
   await page.waitForSelector('.review', { timeout: 20000 })
 
   const genBtn = await page.$('button:has-text("AI 生成标签")')

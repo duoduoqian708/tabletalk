@@ -1,26 +1,69 @@
 :root {
-  --bg: #fbfbfc;
-  --bg-2: #f5f6f8;
-  --panel: #ffffff;
-  --card: #ffffff;
-  --card-hi: #f5f6f8;
-  --rail: #ffffff;
-  --ink: #14181d;
-  --ink-dim: #5c6675;
-  --ink-faint: #9aa3b1;
-  --line: #f0f1f4;
-  --line-strong: #e0e3e9;
-  --teal: #0a6dff;
-  --teal-dim: rgba(10, 109, 255, 0.07);
-  --amber: #c8871e;
-  --amber-dim: rgba(200, 135, 30, 0.07);
-  --red: #d4453a;
-  --red-dim: rgba(212, 69, 58, 0.06);
-  --green: #0a9d6a;
-  --green-dim: rgba(10, 157, 106, 0.08);
-  --blue: #0a6dff;
-  --blue-dim: rgba(10, 109, 255, 0.07);
+  /* ── Void 深色调色板 ── */
+  --void-0: #0a0b0e; /* 应用底色 */
+  --void-1: #0d0e12; /* 面板 / 栏 */
+  --void-2: #111318; /* 浮层面板 */
+  --void-3: #14161d; /* 卡片 */
+  --void-4: #1c1f27; /* hover */
+  --void-5: #232936; /* 输入底 / 活动 */
+  --ink: #e8eaf0; /* 主文字 */
+  --ink-dim: #8b93a3; /* 次要文字 */
+  --ink-faint: #5b6472; /* 弱化文字 */
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --accent: #7c8cff; /* 电光紫强调 */
+  --accent-dim: rgba(124, 140, 255, 0.14);
+  --accent-soft: #aeb6ff;
+  --accent-ink: #0a0b0e; /* 强调色上的文字 */
+  --green: #6ee7b7;
+  --green-dim: rgba(110, 231, 183, 0.12);
+  --amber: #f6ad55;
+  --amber-dim: rgba(246, 173, 85, 0.12);
+  --red: #f87171;
+  --red-dim: rgba(248, 113, 113, 0.12);
+  --blue: #7c8cff;
+  --blue-dim: rgba(124, 140, 255, 0.14);
+
+  /* ── V1 兼容别名（迁移期使用，逐步替换后删除） ── */
+  --bg: var(--void-0);
+  --bg-2: var(--void-1);
+  --panel: var(--void-1);
+  --card: var(--void-3);
+  --card-hi: var(--void-4);
+  --rail: var(--void-1);
+  --teal: var(--accent);
+  --teal-dim: var(--accent-dim);
+
+  /* ── 几何 ── */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-full: 99px;
+  --shadow-1: 0 2px 12px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --topbar-h: 42px;
+  --rail-w: 36px;
+  --ai-w: 340px;
+  --z-sticky: 30;
+  --z-pop: 60;
+  --z-modal: 90;
+  --z-drawer: 100;
   --ease: cubic-bezier(0.2, 0.8, 0.24, 1);
+  --dur: 160ms;
+
+  /* ── 域色（图谱） ── */
+  --domain-1: #7c8cff;
+  --domain-2: #6ee7b7;
+  --domain-3: #f6ad55;
+
+  /* ── 字体 ── */
+  --font-sans: 'Hanken Grotesk', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 
 * {
@@ -36,12 +79,11 @@ body,
 }
 
 body {
-  font-family:
-    'Hanken Grotesk', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  font-family: var(--font-sans);
   background:
-    radial-gradient(1100px 500px at 88% -8%, rgba(10, 109, 255, 0.04), transparent 60%),
-    radial-gradient(900px 460px at -6% 108%, rgba(10, 109, 255, 0.03), transparent 55%),
-    var(--bg);
+    radial-gradient(1100px 500px at 88% -8%, rgba(124, 140, 255, 0.05), transparent 60%),
+    radial-gradient(900px 460px at -6% 108%, rgba(124, 140, 255, 0.03), transparent 55%),
+    var(--void-0);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
@@ -49,11 +91,11 @@ body {
 }
 
 ::selection {
-  background: rgba(10, 109, 255, 0.16);
+  background: rgba(124, 140, 255, 0.25);
 }
 
 .mono {
-  font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 button {
@@ -63,4 +105,23 @@ button {
 input,
 textarea {
   font-family: inherit;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--void-5);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #3a4150;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
