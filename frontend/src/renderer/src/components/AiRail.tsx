@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { useSchema } from '@renderer/store/schema'
 import { useResults } from '@renderer/store/results'
+import { useUi } from '@renderer/store/ui'
 import { runQuery, formatSql } from '@renderer/api/query'
 import type { QueryResponse } from '@renderer/api/types'
 import {
@@ -263,6 +264,16 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
   // 按对话选模型：null=跟随默认模型（模型在接入侧统一配置）
   const [modelId] = useState<string | null>(null)
+  // 图谱"问 AI 这张表"→ 预填输入并聚焦
+  const askDraft = useUi((s) => s.askDraft)
+  const setAskDraft = useUi((s) => s.setAskDraft)
+  useEffect(() => {
+    if (askDraft) {
+      setInput(askDraft)
+      setAskDraft(null)
+      requestAnimationFrame(() => inputRef.current?.focus())
+    }
+  }, [askDraft, setAskDraft])
   // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
   const effectiveModel = settings?.ai_models.find(
     (m) => m.id === (modelId ?? settings.default_ai_model),

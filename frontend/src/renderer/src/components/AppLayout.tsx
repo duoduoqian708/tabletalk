@@ -1,13 +1,13 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
 import { useSchema } from '@renderer/store/schema'
-import { useUi, type View } from '@renderer/store/ui'
+import { useUi, type MainView, type View } from '@renderer/store/ui'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
-import { SchemaRail } from './SchemaRail'
+import { GraphCanvas } from './GraphCanvas'
 import { DataTable } from './DataTable'
 import { ReportCard } from './ReportCard'
 import { AiRail } from './AiRail'
@@ -57,8 +57,6 @@ function DragHandle({ onDrag }: { onDrag: (dx: number) => void }): React.JSX.Ele
 }
 
 export function AppLayout({ health }: Props): React.JSX.Element {
-  const [schemaCollapsed, setSchemaCollapsed] = useState(false)
-  const [schemaW, setSchemaW] = useState(170)
   const [aiW, setAiW] = useState(450)
   const [modalOpen, setModalOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -69,7 +67,30 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const selectedTable = useSchema((s) => s.selectedTable)
   const view = useUi((s) => s.view)
   const setView = useUi((s) => s.setView)
+  const mainView = useUi((s) => s.mainView)
+  const setMainView = useUi((s) => s.setMainView)
   const rt = getRuntime()
+
+  // 新结果到达（AI 查询 / 预览）→ 自动切到表格视图
+  useEffect(() => {
+    if (result || report) setMainView('table')
+  }, [result?.id, report?.id, setMainView])
+
+  // ⌘1 图谱 / ⌘2 表格 秒切
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '1') {
+        e.preventDefault()
+        setMainView('graph')
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === '2') {
+        e.preventDefault()
+        setMainView('table')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setMainView])
 
   // 当前展示的表名（顶栏上下文指示）
   const subject = report
@@ -84,6 +105,16 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     if (!rt) return
     await create({ name: '演示库', dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
   }
+
+  const MainToggle = ({ target }: { target: MainView }): React.JSX.Element => (
+    <button
+      className={`ws-tb${mainView === target ? ' on' : ''}`}
+      onClick={() => setMainView(target)}
+      title={target === 'graph' ? '图谱（⌘1）' : '表格（⌘2）'}
+    >
+      {target === 'graph' ? '◧ 图谱' : '▤ 表格'}
+    </button>
+  )
 
   return (
     <div className="app">
@@ -122,10 +153,6 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       <main className="stage" key={view}>
         {view === 'workspace' ? (
           <>
-            <SchemaRail collapsed={schemaCollapsed} width={schemaW} onToggleRail={() => setSchemaCollapsed((c) => !c)} />
-            {!schemaCollapsed && (
-              <DragHandle onDrag={(dx) => setSchemaW((w) => Math.min(320, Math.max(96, w + dx)))} />
-            )}
             <section className="workspace">
               {list.length === 0 ? (
                 <div className="onboarding">
@@ -140,10 +167,30 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                     <button className="primary" onClick={useDemo}>使用演示库</button>
                   </div>
                 </div>
-              ) : report ? (
-                <ReportCard report={report} />
               ) : (
-                <DataTable />
+                <>
+                  <div className="ws-toolbar">
+                    <MainToggle target="graph" />
+                    <MainToggle target="table" />
+                    <span className="ws-crumb mono">{subject}</span>
+                    <span className="spacer" />
+                    {mainView === 'table' && !report && !result && (
+                      <span className="ws-empty-hint">双击图谱节点打开数据</span>
+                    )}
+                  </div>
+                  {mainView === 'graph' ? (
+                    <GraphCanvas />
+                  ) : report ? (
+                    <ReportCard report={report} />
+                  ) : result ? (
+                    <DataTable />
+                  ) : (
+                    <div className="ws-table-empty">
+                      <div className="kicker">no data</div>
+                      <div className="hint">从图谱双击一个表，或让 AI 跑一条查询，结果会出现在这里。</div>
+                    </div>
+                  )}
+                </>
               )}
             </section>
             <DragHandle onDrag={(dx) => setAiW((w) => Math.min(720, Math.max(320, w - dx)))} />

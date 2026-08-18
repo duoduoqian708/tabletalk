@@ -3324,3 +3324,339 @@ body.resizing {
   border: 1px dashed var(--line);
   border-radius: 10px;
 }
+
+/* ============ V2 图谱画布 ============ */
+.gcanvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 38% 42%, rgba(124, 140, 255, 0.05), transparent 55%),
+    var(--void-0);
+  cursor: grab;
+}
+body.g-panning,
+body.g-panning .gcanvas {
+  cursor: grabbing;
+}
+.g-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.g-node.dim {
+  opacity: 0.55;
+}
+.g-node.sel {
+  cursor: pointer;
+}
+.g-empty,
+.ws-table-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ink-dim);
+}
+.g-mode {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 2px;
+}
+.g-mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.g-mode-btn:hover {
+  color: var(--ink);
+}
+.g-mode-btn.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.g-hint {
+  position: absolute;
+  top: 16px;
+  left: 216px;
+  font-size: 9px;
+  color: var(--ink-faint);
+}
+.g-hint b {
+  color: var(--accent-soft);
+  font-weight: 500;
+}
+.g-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: rgba(13, 14, 18, 0.9);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 9px;
+  color: var(--ink-dim);
+}
+.g-legend i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  margin-right: 4px;
+}
+.g-legend .dim {
+  color: var(--ink-faint);
+}
+.g-zoom {
+  position: absolute;
+  bottom: 12px;
+  right: 14px;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  background: rgba(13, 14, 18, 0.9);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 2px;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.g-zoom button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.g-zoom button:hover {
+  color: var(--ink);
+  background: var(--void-4);
+}
+.g-zoom span {
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+/* 检查器 */
+.g-inspector {
+  position: absolute;
+  width: 224px;
+  background: var(--void-2);
+  border: 1px solid rgba(124, 140, 255, 0.3);
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: var(--shadow-2);
+  z-index: var(--z-pop);
+  cursor: default;
+  user-select: text;
+}
+.gi-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+.gi-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  flex: none;
+}
+.gi-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gi-x {
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.gi-x:hover {
+  color: var(--ink);
+}
+.gi-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 7px;
+  max-height: 84px;
+  overflow: auto;
+}
+.gi-fld {
+  font-size: 9px;
+  color: var(--ink-dim);
+  background: var(--void-4);
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.gi-fld.pk {
+  color: var(--accent-soft);
+}
+.gi-fld i {
+  font-style: normal;
+  color: var(--ink-faint);
+  margin-left: 4px;
+  font-size: 8px;
+}
+.gi-comment {
+  background: var(--accent-dim);
+  border: 1px solid rgba(124, 140, 255, 0.25);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 9px;
+  color: var(--accent-soft);
+  margin-bottom: 7px;
+  line-height: 1.5;
+}
+.gi-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.gi-tag {
+  font-size: 8.5px;
+  color: var(--accent-soft);
+  background: rgba(124, 140, 255, 0.1);
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+.gi-tag.draft {
+  color: var(--amber);
+  background: var(--amber-dim);
+}
+.gi-actions {
+  display: flex;
+  gap: 5px;
+}
+.gi-btn {
+  flex: 1;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink-dim);
+  border-radius: 6px;
+  padding: 5px 0;
+  font-size: 9px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.gi-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.gi-btn.pri {
+  flex: 1.2;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.gi-btn.pri:hover {
+  background: #8f9dff;
+  border-color: #8f9dff;
+}
+
+/* 右键菜单 */
+.g-menu {
+  position: absolute;
+  min-width: 150px;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: var(--shadow-2);
+  z-index: var(--z-pop);
+  display: flex;
+  flex-direction: column;
+}
+.g-menu button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 10px;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.g-menu button:hover {
+  background: var(--void-4);
+  color: var(--ink);
+}
+.g-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 工作区工具栏（图谱⇄表格） */
+.ws-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--void-1);
+}
+.ws-tb {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 10px;
+  padding: 4px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.ws-tb:hover {
+  color: var(--ink);
+}
+.ws-tb.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+.ws-crumb {
+  font-size: 10px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.ws-empty-hint {
+  font-size: 9px;
+  color: var(--ink-faint);
+}
