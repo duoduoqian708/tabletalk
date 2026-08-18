@@ -332,6 +332,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
   const histRef = useRef<{ role: 'user' | 'assistant'; content: string }[]>([])
   const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const cardsRef = useRef<AiCard[]>([])
+  const loopResultRef = useRef<Record<string, any> | null>(null)
   const userCountRef = useRef(0)
   const firstQRef = useRef('')
   const histDdRef = useRef<HTMLDivElement>(null)
@@ -476,6 +477,13 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     if (!card || card.verdict !== 'allow') return
     if (!streamDoneRef.current || !gateDoneRef.current) return
     autoRanRef.current = true
+    // 卡片已带循环内执行的结果 → 直接渲染，不再 POST /query（消除同 SQL 双执行）
+    const loopRes = (card as { result?: Record<string, any> }).result
+    if (loopRes) {
+      loopResultRef.current = null
+      handleQueryResult({ ...loopRes, verdict: 'allow' } as QueryResponse, card.sql, curQuestionRef.current)
+      return
+    }
     void exec(card.sql, false, curQuestionRef.current)
   }
 
@@ -540,6 +548,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
     streamDoneRef.current = false
     gateDoneRef.current = false
     autoRanRef.current = false
+    loopResultRef.current = null
     histRef.current.push({ role: 'user', content: q })
     const cur = histRef.current
     const reportTitle = q.replace(/[？?。.!！\s]+$/, '').slice(0, 24)
@@ -662,6 +671,7 @@ export function AiRail({ width, provider }: { width: number; provider?: string |
             })
           } else if (ev.type === 'sql_card') {
             cardsRef.current = [...cardsRef.current, ev.card]
+            if (ev.card?.result) loopResultRef.current = ev.card.result
             attachCards()
           } else if (ev.type === 'error') {
             setTurns((t) => {

@@ -135,7 +135,21 @@ async def execute_tool(
             }
             if include_data:
                 result["rows"] = res["rows"]
-            card = {"tier": "read", "verdict": "allow", "sql": sql, "sub": _sub(sql, dialect)}
+            # 卡片带完整结果（含 rows 供前端直接渲染，消除同 SQL 二次执行）；喂模型的 result 保持不含行
+            card = {
+                "tier": "read", "verdict": "allow", "sql": sql, "sub": _sub(sql, dialect),
+                "result": {
+                    "columns": res["columns"], "types": res["types"],
+                    "rows": res["rows"], "row_count": res["row_count"],
+                    "truncated": res["truncated"], "elapsed_ms": res["elapsed_ms"],
+                },
+            }
+            # 审计：对话内部真实读必须留痕（此前是盲区）
+            state.audit.log(
+                connection=cfg.name, origin="ai", tier="read", verdict="allow",
+                status="对话内读（循环内测量）", sql=sql,
+                elapsed_ms=res.get("elapsed_ms"), source="loop_internal",
+            )
             return ToolOutcome(
                 result=result,
                 card=card,

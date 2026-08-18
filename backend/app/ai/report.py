@@ -199,7 +199,7 @@ async def _run_report_query(
     """执行一章的只读查询：过闸门 → 执行 → 写审计（挂 report_id）→ 返回数据集。
 
     这是报告模式与手动查询的审计对齐点：每章子查询照常进审计，可由 report_id 回溯。
-    现有 AI run_query 工具不走审计——报告路径补上，保持报告"每个数字可回溯"叙事。
+    报告子查询标 source="report"，与对话循环内读(source=loop_internal)/手动执行区分来源。
     """
     cfg = state.connections.get(conn_id)
     dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
@@ -207,7 +207,8 @@ async def _run_report_query(
     # 报告只读：闸门非 ALLOW 直接转 block 记录（工具集本就只读，理论不会出现写）
     if assessment.verdict != Verdict.ALLOW:
         state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier=assessment.tier.value,
-                        verdict="block", status="报告查询拦截", sql=sql, report_id=report_id)
+                        verdict="block", status="报告查询拦截", sql=sql, report_id=report_id,
+                        source="report")
         return {"ok": False, "result_id": result_id, "sql": sql,
                 "reason": "; ".join(assessment.reasons)}
     from app.core.query import execute as run_query
@@ -215,7 +216,7 @@ async def _run_report_query(
     res = await run_query(state, conn_id, sql, max_rows=200)   # 报告聚合，200 行足够
     state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier="read", verdict="allow",
                     status="报告查询", sql=sql, elapsed_ms=res.get("elapsed_ms"),
-                    report_id=report_id)
+                    report_id=report_id, source="report")
     return {
         "ok": True,
         "result_id": result_id,

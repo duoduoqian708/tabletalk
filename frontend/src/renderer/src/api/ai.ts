@@ -16,6 +16,15 @@ export interface AiCard {
   sub?: string
   preview_rows?: number | null
   reason?: string
+  /** 循环内 run_query 工具的真实执行结果（含 rows，供前端直接渲染、消除双执行） */
+  result?: {
+    columns: string[]
+    types: string[]
+    rows: unknown[][]
+    row_count: number
+    truncated?: boolean
+    elapsed_ms?: number
+  } | null
 }
 
 /* 报告模式：章节计划/执行/图表数据/数字回溯 */

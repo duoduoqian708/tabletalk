@@ -24,6 +24,7 @@ class AuditLogger:
         sql: str,
         elapsed_ms: float | None = None,
         report_id: str | None = None,
+        source: str | None = None,
     ) -> None:
         first_line = " ".join((sql or "").strip().splitlines()[:1])[:200]
         entry: dict[str, Any] = {
@@ -39,6 +40,8 @@ class AuditLogger:
             entry["elapsed_ms"] = elapsed_ms
         if report_id is not None:
             entry["report_id"] = report_id
+        if source is not None:
+            entry["source"] = source
         line = json.dumps(entry, ensure_ascii=False)
         with self._lock:
             try:
@@ -55,6 +58,7 @@ class AuditLogger:
         from_ts: str | None = None,
         to_ts: str | None = None,
         report_id: str | None = None,
+        source: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
@@ -76,6 +80,8 @@ class AuditLogger:
                 if to_ts and e.get("ts", "") > to_ts:
                     continue
                 if report_id and e.get("report_id") != report_id:
+                    continue
+                if source and e.get("source") != source:
                     continue
                 entries.append(e)
         return entries[-limit:]
