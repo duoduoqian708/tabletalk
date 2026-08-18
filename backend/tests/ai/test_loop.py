@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.ai.loop import _provider_cfg, chat_stream
+from app.ai.loop import chat_stream
+from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.schemas import ChatRequest
 from app.core.settings import ModelConfig
 
@@ -33,18 +34,18 @@ class _FakeState:
 
 async def test_provider_cfg_resolves_model_id():
     """model_id 命中 ai_models 时优先；缺省走默认；显式覆盖最高优先。"""
-    cfg = _provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2"))
+    cfg = resolve_provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2"))
     assert cfg["provider"] == "cloud"
     assert cfg["model"] == "m2-model"
     assert cfg["temperature"] == 0.5
     assert cfg["reasoning"] is True
 
     # 缺省 model_id → 默认模型
-    cfg_def = _provider_cfg(_FakeState(), ChatRequest(connection_id="c"))
+    cfg_def = resolve_provider_cfg(_FakeState(), ChatRequest(connection_id="c"))
     assert cfg_def["provider"] == "mock"
 
     # 显式 reasoning 覆盖选中模型（强度字符串）
-    cfg_ov = _provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2", reasoning="off"))
+    cfg_ov = resolve_provider_cfg(_FakeState(), ChatRequest(connection_id="c", model_id="m2", reasoning="off"))
     assert cfg_ov["reasoning"] == "off"
 
 

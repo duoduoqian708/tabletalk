@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from app.ai import gateway as gw
 from app.ai.context import assemble_context, system_prompt
 from app.ai.intent import MODE_QUERY, MODE_REPORT, classify_mode
+from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
 from app.ai.schemas import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS, execute_tool
@@ -43,37 +44,6 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         yield ev
 
 
-def _provider_cfg(state: "AppState", req: ChatRequest) -> dict[str, Any]:
-    rs = state.runtime.get()
-    mid = getattr(req, "model_id", None)
-    if mid:
-        target = next((m for m in rs.ai_models if m.id == mid), None)
-        if target is not None:
-            cfg = {
-                "provider": target.provider,
-                "base_url": target.base_url,
-                "api_key": target.api_key,
-                "model": target.model,
-                "temperature": target.temperature,
-                "timeout": target.timeout,
-                "reasoning": target.reasoning,
-            }
-        else:
-            cfg = rs.provider_config()
-    else:
-        cfg = rs.provider_config()
-    # 显式覆盖（优先级高于 model_id 选中项）
-    for key in ("provider", "base_url", "api_key", "model"):
-        override = getattr(req, key, None)
-        if override is not None:
-            cfg[key] = override
-    if getattr(req, "reasoning", None) is not None:
-        cfg["reasoning"] = req.reasoning
-    if getattr(req, "temperature", None) is not None:
-        cfg["temperature"] = req.temperature
-    return cfg
-
-
 def _normalize_messages(messages: list) -> list[dict]:
     out: list[dict] = []
     for m in messages:
@@ -99,7 +69,7 @@ def _last_user_text(messages: list[dict]) -> str:
 
 
 async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
-    provider = gw.build_provider(_provider_cfg(state, req))
+    provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
 
     # 知识库：未构建过才构建（真实库不每次对话重采样）；schema 变化由显式 rebuild 刷新

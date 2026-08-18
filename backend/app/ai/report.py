@@ -19,6 +19,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
+from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.context import (
     assemble_context,
     report_system_prompt,
@@ -38,12 +39,7 @@ CLARIFY_MAX_QUESTIONS = 3    # 一轮澄清最多 3 个问题
 
 
 def _provider_cfg(state: "AppState", req: ChatRequest) -> dict[str, Any]:
-    base = state.runtime.get().provider_config()
-    for key in ("provider", "base_url", "api_key", "model"):
-        override = getattr(req, key, None)
-        if override is not None:
-            base[key] = override
-    return base
+    return resolve_provider_cfg(state, req)
 
 
 def _normalize_messages(messages: list) -> list[dict]:
