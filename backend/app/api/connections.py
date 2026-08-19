@@ -22,6 +22,7 @@ class ConnectionCreate(BaseModel):
     read_only: bool = False
     timeout: int = 10
     credential_ref: str | None = None
+    sensitive: list[str] = Field(default_factory=list)  # 敏感表/列 glob 名单（不进模型上下文与知识库）
 
 
 class ConnectionUpdate(BaseModel):
@@ -37,6 +38,7 @@ class ConnectionUpdate(BaseModel):
     read_only: bool | None = None
     timeout: int | None = None
     credential_ref: str | None = None
+    sensitive: list[str] | None = None
 
 
 def _get_cfg(state, conn_id):

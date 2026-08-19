@@ -23,6 +23,62 @@ const SECTIONS = [
 type Sec = (typeof SECTIONS)[number]['key']
 type ModelTab = 'chat' | 'embedding'
 
+/** 连接行：敏感名单可展开编辑（数据边界由用户画）。 */
+function ConnRow({ conn, onSelect, onRemove, isCurrent }: {
+  conn: { id: string; name: string; dialect: string; read_only?: boolean; sensitive?: string[] }
+  onSelect: () => void
+  onRemove: () => void
+  isCurrent: boolean
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState((conn.sensitive ?? []).join(', '))
+  const [saving, setSaving] = useState(false)
+  const update = useConnections((s) => s.update)
+
+  async function save(): Promise<void> {
+    setSaving(true)
+    try {
+      await update(conn.id, {
+        sensitive: draft.split(',').map((x) => x.trim()).filter(Boolean)
+      })
+      setOpen(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className={`conn-row${isCurrent ? ' cur' : ''}`}>
+      <span className={`st${isCurrent ? ' live' : ' idle'}`} />
+      <span className="cn mono">{conn.name}</span>
+      <span className="cd mono">{conn.dialect}</span>
+      {conn.read_only && <span className="ro-tag mono">只读</span>}
+      {(conn.sensitive ?? []).length > 0 && (
+        <span className="sens-tag mono" title={conn.sensitive!.join(', ')}>屏蔽 {(conn.sensitive ?? []).length} 项</span>
+      )}
+      <span className="spacer" />
+      <button className="mini-btn" onClick={() => { setOpen((o) => !o); setDraft((conn.sensitive ?? []).join(', ')) }}>
+        敏感名单{open ? ' ▴' : ' ▾'}
+      </button>
+      <button className="mini-btn set" onClick={onSelect}>设为当前</button>
+      <button className="mini-btn dang" onClick={onRemove}>删除</button>
+      {open && (
+        <div className="conn-sens">
+          <input
+            className="sens-input mono"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="payroll_*, *secret*（表/列 glob，逗号分隔）"
+            onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
+          />
+          <span className="sens-hint">屏蔽的表/列不进 AI 上下文与知识库，不影响你直接查询。</span>
+          <button className="mini-btn set" disabled={saving} onClick={() => void save()}>保存</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function uid(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 }
@@ -312,15 +368,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                 <div className="sec-d">平台级连接清单。顶栏「数据源切换」是全局锚，切换后所有模块跟随；这里的连接本身与数据源无关。</div>
                 <div className="conn-list">
                   {list.map((c) => (
-                    <div key={c.id} className={`conn-row${c.id === currentId ? ' cur' : ''}`}>
-                      <span className={`st${c.id === currentId ? ' live' : ' idle'}`} />
-                      <span className="cn mono">{c.name}</span>
-                      <span className="cd mono">{c.dialect}</span>
-                      {c.read_only && <span className="ro-tag mono">只读</span>}
-                      <span className="spacer" />
-                      <button className="mini-btn set" onClick={() => select(c.id)}>设为当前</button>
-                      <button className="mini-btn dang" onClick={() => remove(c.id)}>删除</button>
-                    </div>
+                    <ConnRow key={c.id} conn={c} onSelect={() => select(c.id)} onRemove={() => void remove(c.id)} isCurrent={c.id === currentId} />
                   ))}
                   {list.length === 0 && <div className="mpage-empty">暂无连接</div>}
                   <button className="conn-add" onClick={onNewConnection}>＋ 添加连接</button>

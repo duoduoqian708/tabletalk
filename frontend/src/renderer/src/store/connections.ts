@@ -9,6 +9,7 @@ interface ConnectionsState {
   error: string | null
   load: () => Promise<void>
   create: (input: api.ConnectionInput) => Promise<ConnectionConfig | null>
+  update: (id: string, patch: Partial<api.ConnectionInput>) => Promise<void>
   remove: (id: string) => Promise<void>
   select: (id: string | null) => void
   clearError: () => void
@@ -42,6 +43,15 @@ export const useConnections = create<ConnectionsState>((set, get) => ({
     } catch (e) {
       set({ error: (e as Error).message })
       return null
+    }
+  },
+
+  async update(id, patch) {
+    try {
+      const cfg = await api.updateConnection(id, patch)
+      set((s) => ({ list: s.list.map((c) => (c.id === id ? cfg : c)), error: null }))
+    } catch (e) {
+      set({ error: (e as Error).message })
     }
   },
 

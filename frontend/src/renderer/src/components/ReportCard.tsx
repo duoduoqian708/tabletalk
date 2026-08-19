@@ -105,8 +105,16 @@ function ChartBlock({ section }: { section: ReportSectionResult }): React.JSX.El
 }
 
 /* ---------- 单章折叠数据块（复用表格观感，简化版） ---------- */
-function SectionData({ section }: { section: ReportSectionResult }): React.JSX.Element {
+function SectionData({ section, openFlag }: { section: ReportSectionResult; openFlag?: number }): React.JSX.Element {
   const [open, setOpen] = useState(false)
+  const [sqlOpen, setSqlOpen] = useState(false)
+  // 数字回溯：外部请求展开（openFlag 变化时）
+  const [prevFlag, setPrevFlag] = useState(openFlag ?? 0)
+  const flag = openFlag ?? 0
+  if (flag !== prevFlag) {
+    setPrevFlag(flag)
+    if (flag > 0) setOpen(true)
+  }
   const cols: string[] = section.columns ?? []
   const rows: unknown[][] = section.rows ?? []
   if (!section.ok) {
@@ -114,9 +122,19 @@ function SectionData({ section }: { section: ReportSectionResult }): React.JSX.E
   }
   return (
     <div className="rpt-sec-data">
-      <button className="rpt-fold" onClick={() => setOpen((o) => !o)}>
-        {open ? '▾ 折叠明细' : '▸ 展开明细'}（{section.row_count} 行 · {section.elapsed_ms ?? 0}ms）
-      </button>
+      <div className="rpt-sec-acts">
+        <button className="rpt-fold" onClick={() => setOpen((o) => !o)}>
+          {open ? '▾ 折叠明细' : '▸ 展开明细'}（{section.row_count} 行 · {section.elapsed_ms ?? 0}ms）
+        </button>
+        {section.sql && (
+          <button className="rpt-fold sql" onClick={() => setSqlOpen((o) => !o)}>
+            {sqlOpen ? '▾ 收起 SQL' : '▸ 来源 SQL'}
+          </button>
+        )}
+      </div>
+      {sqlOpen && section.sql && (
+        <pre className="rpt-sec-sql mono">{section.sql}</pre>
+      )}
       {open && (
         <div className="rpt-table-wrap">
           <table className="rpt-table mono">
@@ -138,23 +156,20 @@ function SectionData({ section }: { section: ReportSectionResult }): React.JSX.E
   )
 }
 
-/* ---------- 叙述：支持 [rN] 上标 → 跳转该章来源 ---------- */
-function Narration({ text }: { text: string }): React.JSX.Element {
+/* ---------- 叙述：支持 [rN] 上标 → 跳转该章来源（滚动 + 展开 + 高亮） ---------- */
+function Narration({ text, onJump }: { text: string; onJump: (id: string) => void }): React.JSX.Element {
   if (!text) {
     return <div className="rpt-narr mono muted">（叙述生成中…）</div>
   }
-  // 把 [r1] 标注转为上标，点击时滚到对应章
+  // 把 [r1] 标注转为上标，点击时跳到对应章的来源查询
   const parts = text.split(/(\[r\d+\])/g)
-  const scrollTo = (id: string): void => {
-    document.getElementById(`rpt-sec-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
   return (
     <div className="rpt-narr">
       {parts.map((p: string, i: number) => {
         const m = /^\[r(\d+)\]$/.exec(p)
         if (m) {
           return (
-            <button key={i} className="rpt-ref" onClick={() => scrollTo(`r${m[1]}`)} title={`跳到来源查询 r${m[1]}`}>
+            <button key={i} className="rpt-ref" onClick={() => onJump(`r${m[1]}`)} title={`跳到来源查询 r${m[1]}`}>
               r{m[1]}
             </button>
           )
@@ -167,12 +182,28 @@ function Narration({ text }: { text: string }): React.JSX.Element {
 
 /* ---------- 报告卡主体 ---------- */
 export function ReportCard({ report }: { report: ReportView }): React.JSX.Element {
+  // 数字回溯：跳到某章的来源查询（滚动 + 展开明细 + 高亮闪烁）
+  const [jumpFlag, setJumpFlag] = useState<{ id: string; ts: number } | null>(null)
+  const [expandId, setExpandId] = useState<string | null>(null)
+
+  function jumpToSection(id: string): void {
+    const el = document.getElementById(`rpt-sec-${id}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setExpandId(id)
+    setJumpFlag({ id, ts: Date.now() })
+    // 高亮闪烁：加类 → 移除
+    el.classList.add('jump-hl')
+    window.setTimeout(() => el.classList.remove('jump-hl'), 1600)
+  }
+
   return (
     <div className="rpt-card">
       <header className="rpt-h">
         <div className="rpt-title">{report.title}</div>
         <div className="rpt-meta mono">
           快照 {report.snapshotTs} · {report.sections.length} 章 · {report.refs.length} 个可回溯来源 · 模型可见聚合结果集
+          <span className="rpt-meta-tip">点 [rN] 或来源行 → 跳到该章 SQL 与明细</span>
         </div>
       </header>
 
@@ -184,14 +215,14 @@ export function ReportCard({ report }: { report: ReportView }): React.JSX.Elemen
             <span className="rpt-sec-intent mono">{s.intent ?? ''}</span>
           </div>
           {s.ok && <ChartBlock section={s} />}
-          <SectionData section={s} />
+          <SectionData section={s} openFlag={expandId === s.id ? jumpFlag?.ts ?? 0 : 0} />
         </section>
       ))}
 
       {report.narration && (
         <section className="rpt-sec narr-sec">
           <div className="rpt-sec-h"><span className="rpt-sec-t">总结</span></div>
-          <Narration text={report.narration} />
+          <Narration text={report.narration} onJump={jumpToSection} />
         </section>
       )}
 
@@ -199,8 +230,7 @@ export function ReportCard({ report }: { report: ReportView }): React.JSX.Elemen
         <footer className="rpt-refs mono">
           <div className="rpt-refs-t">数字回溯</div>
           {report.refs.map((r: ReportView['refs'][number]) => (
-            <button key={r.result_id} className="rpt-ref-line"
-              onClick={() => document.getElementById(`rpt-sec-${r.result_id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>
+            <button key={r.result_id} className="rpt-ref-line" onClick={() => jumpToSection(r.result_id)}>
               <span className="rid">{r.result_id}</span> {r.title}
               <span className="muted"> · {r.row_count} 行</span>
               <span className="muted sq"> {r.sql_head}</span>

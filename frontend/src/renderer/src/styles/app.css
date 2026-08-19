@@ -1461,7 +1461,10 @@ body.resizing {
 /* connections list in settings */
 .conn-list { display: flex; flex-direction: column; gap: 7px; }
 .conn-row {
-  display: flex; align-items: center; gap: 10px;
+  display: grid;
+  grid-template-columns: auto auto auto auto 1fr auto auto auto;
+  align-items: center;
+  gap: 10px;
   padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
   background: var(--panel);
 }
@@ -4413,4 +4416,74 @@ body.g-panning .gcanvas {
 }
 .g-qnode:hover rect {
   filter: drop-shadow(0 0 8px rgba(124, 140, 255, 0.35));
+}
+
+/* ============ V2 报告数字回溯增强 ============ */
+.rpt-sec-acts {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.rpt-fold.sql {
+  color: var(--accent-soft);
+}
+.rpt-sec-sql {
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  overflow-x: auto;
+  margin: 6px 0;
+  white-space: pre;
+}
+.rpt-sec.jump-hl {
+  animation: rpt-jump 1.6s var(--ease);
+}
+@keyframes rpt-jump {
+  0%, 60% { box-shadow: 0 0 0 2px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.rpt-meta-tip {
+  margin-left: 10px;
+  color: var(--ink-faint);
+  font-size: 8.5px;
+}
+
+/* ============ V2 敏感名单 ============ */
+.sens-tag {
+  font-size: 8px;
+  color: var(--red);
+  background: var(--red-dim);
+  border-radius: 99px;
+  padding: 1px 7px;
+  flex: none;
+}
+.conn-sens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1 / -1;
+  padding: 8px 0 4px;
+}
+.sens-input {
+  flex: 1;
+  min-width: 260px;
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 10px;
+  padding: 5px 9px;
+  outline: none;
+}
+.sens-input:focus {
+  border-color: var(--red);
+}
+.sens-hint {
+  font-size: 8.5px;
+  color: var(--ink-faint);
 }

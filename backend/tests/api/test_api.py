@@ -317,3 +317,19 @@ async def test_sql_format(client):
     r = await client.post("/api/v1/sql/format", json={"sql": "select * from orders where id=1", "dialect": "sqlite"})
     assert r.status_code == 200
     assert "SELECT" in r.json()["formatted"].upper()
+
+
+async def test_connection_sensitive_roundtrip(client):
+    """敏感名单：创建时写入 → 列表可见 → 更新可改（数据边界由用户画）。"""
+    r = await client.post("/api/v1/connections", json={
+        "name": "sensitive-db", "dialect": "sqlite", "file": "/tmp/sens.db",
+        "sensitive": ["payroll_*", "*.email"],
+    })
+    assert r.status_code == 201
+    cid = r.json()["id"]
+    assert r.json()["sensitive"] == ["payroll_*", "*.email"]
+    # 更新
+    r = await client.put(f"/api/v1/connections/{cid}", json={"sensitive": ["hr_*"]})
+    assert r.status_code == 200
+    assert r.json()["sensitive"] == ["hr_*"]
+    await client.delete(f"/api/v1/connections/{cid}")
