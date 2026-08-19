@@ -58,3 +58,20 @@ export function saveDoc(connId: string, table: string, note: string): Promise<un
 export function routeTables(connId: string, tagNames: string[]): Promise<RouteResult> {
   return request(`/api/v1/knowledge/${connId}/route`, { method: 'POST', body: JSON.stringify({ table: '', tags: tagNames }) })
 }
+
+/** 知识文档 top-N 检索（关键词 + 向量 + 图谱邻居扩散的混合打分）。 */
+export interface KbDoc {
+  id: string
+  kind: string
+  title: string
+  body: string
+  table: string | null
+  column: string | null
+  status: string
+  source: string
+  tags: string[]
+}
+
+export function retrieve(connId: string, q: string, k = 10): Promise<{ count: number; docs: KbDoc[] }> {
+  return request(`/api/v1/knowledge/${connId}/retrieve?q=${encodeURIComponent(q)}&k=${k}`)
+}

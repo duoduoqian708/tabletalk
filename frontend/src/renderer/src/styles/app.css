@@ -4487,3 +4487,59 @@ body.g-panning .gcanvas {
   font-size: 8.5px;
   color: var(--ink-faint);
 }
+
+/* ============ V2 图上 k 跳检索 ============ */
+.g-node.out-hop {
+  opacity: 0.15;
+  transition: opacity 0.2s var(--ease);
+}
+.g-hop-bar {
+  position: absolute;
+  top: 44px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(13, 14, 18, 0.92);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 5px 10px;
+  z-index: 5;
+}
+.ghb-label {
+  font-size: 9px;
+  color: var(--ink-dim);
+  font-weight: 600;
+}
+.ghb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 9px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.ghb-btn:hover {
+  color: var(--ink);
+}
+.ghb-btn.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+.ghb-n {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  opacity: 0.8;
+}
+.ghb-hint {
+  font-size: 8px;
+  color: var(--ink-faint);
+  margin-left: 6px;
+}

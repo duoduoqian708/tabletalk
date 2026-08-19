@@ -476,3 +476,107 @@
   background: var(--green-dim);
   border: 1px solid rgba(110, 231, 183, 0.3);
 }
+
+/* 知识 top-N 检索 */
+.review-search {
+  display: flex;
+  gap: 8px;
+  padding: 8px 18px 0;
+}
+.rs-input {
+  flex: 1;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 10.5px;
+  padding: 7px 12px;
+  outline: none;
+}
+.rs-input:focus {
+  border-color: var(--accent);
+}
+.rs-btn {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 10px;
+  padding: 0 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.rs-btn:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+.rs-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.review-results {
+  margin: 10px 18px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--void-3);
+  overflow: hidden;
+}
+.rr-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 9.5px;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--line);
+}
+.rr-x {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 10px;
+}
+.rr-empty {
+  padding: 14px;
+  color: var(--ink-faint);
+  font-size: 9.5px;
+}
+.rr-item {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 9.5px;
+}
+.rr-item:last-child {
+  border-bottom: 0;
+}
+.rr-kind {
+  font-size: 8px;
+  border-radius: 5px;
+  padding: 1px 6px;
+  background: var(--void-5);
+  color: var(--ink-faint);
+}
+.rr-kind.table { color: var(--accent-soft); background: var(--accent-dim); }
+.rr-kind.column { color: var(--green); background: var(--green-dim); }
+.rr-title {
+  color: var(--ink);
+  white-space: nowrap;
+}
+.rr-body {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rr-status {
+  font-size: 8px;
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+.rr-status.confirmed { color: var(--green); background: var(--green-dim); }
+.rr-status.draft { color: var(--amber); background: var(--amber-dim); }

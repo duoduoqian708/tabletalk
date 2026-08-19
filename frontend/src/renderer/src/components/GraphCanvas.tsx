@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { NODE_H, NODE_W, buildJoinSkeleton, useGraph, type GraphNode } from '@renderer/store/graph'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useSchema } from '@renderer/store/schema'
@@ -104,6 +104,56 @@ export function GraphCanvas(): React.JSX.Element {
   const [skeleton, setSkeleton] = useState<{ sql: string; missing: string[]; tables: string[] } | null>(null)
   const [skelDraft, setSkelDraft] = useState('')
   const [running, setRunning] = useState(false)
+  // 图谱检索：选中节点的 k 跳探索（1/2/3 跳圈定子图）
+  const [hop, setHop] = useState(2)
+
+  // 从 FK 边 BFS 算选中节点的 k 跳邻居（"从图上找一步两步"）
+  const hopSet = useMemo(() => {
+    if (!selected || mode !== 'browse') return null
+    const adj = new Map<string, string[]>()
+    for (const e of edges) {
+      adj.set(e.from, [...(adj.get(e.from) ?? []), e.to])
+      adj.set(e.to, [...(adj.get(e.to) ?? []), e.from])
+    }
+    const reach = new Set<string>([selected])
+    let frontier = [selected]
+    for (let h = 0; h < hop; h++) {
+      const next: string[] = []
+      for (const t of frontier) {
+        for (const nb of adj.get(t) ?? []) {
+          if (!reach.has(nb)) {
+            reach.add(nb)
+            next.push(nb)
+          }
+        }
+      }
+      frontier = next
+    }
+    return reach
+  }, [selected, edges, hop, mode])
+  const hopCounts = useMemo(() => {
+    if (!selected) return null
+    const adj = new Map<string, string[]>()
+    for (const e of edges) {
+      adj.set(e.from, [...(adj.get(e.from) ?? []), e.to])
+      adj.set(e.to, [...(adj.get(e.to) ?? []), e.from])
+    }
+    const countAt = (h: number): number => {
+      const reach = new Set<string>([selected])
+      let frontier = [selected]
+      for (let i = 0; i < h; i++) {
+        const next: string[] = []
+        for (const t of frontier) {
+          for (const nb of adj.get(t) ?? []) {
+            if (!reach.has(nb)) { reach.add(nb); next.push(nb) }
+          }
+        }
+        frontier = next
+      }
+      return reach.size - 1
+    }
+    return { h1: countAt(1), h2: countAt(2), h3: countAt(3) }
+  }, [selected, edges])
 
   // 连接就绪 → 拉知识概览（供领域色/注释状态）
   useEffect(() => {
@@ -378,13 +428,15 @@ export function GraphCanvas(): React.JSX.Element {
           {nodes.map((n) => {
             const isSel = n.id === selected
             const dim = mode === 'govern' && n.annotated && !n.pending
+            // 图上检索：浏览模式选中节点 → k 跳圈定子图，圈外淡化
+            const outHop = mode === 'browse' && hopSet !== null && !hopSet.has(n.id) && !isSel
             const inBuild = mode === 'build' && buildSel.includes(n.id)
             const buildIdx = buildSel.indexOf(n.id)
             return (
               <g
                 key={n.id}
                 transform={`translate(${n.x},${n.y})`}
-                className={`g-node${isSel ? ' sel' : ''}${n.pending ? ' pend' : ''}${dim ? ' dim' : ''}${inBuild ? ' in-build' : ''}`}
+                className={`g-node${isSel ? ' sel' : ''}${n.pending ? ' pend' : ''}${dim ? ' dim' : ''}${inBuild ? ' in-build' : ''}${outHop ? ' out-hop' : ''}`}
                 style={{ cursor: 'pointer' }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
@@ -471,7 +523,7 @@ export function GraphCanvas(): React.JSX.Element {
       </svg>
 
       {/* 模式切换 */}
-      <div className="g-mode">
+      <div className="g-mode" onMouseDown={(e) => e.stopPropagation()}>
         {MODES.map((m) => (
           <button
             key={m.key}
@@ -483,11 +535,29 @@ export function GraphCanvas(): React.JSX.Element {
         ))}
       </div>
 
+      {/* 图上检索：k 跳探索控件（浏览模式选中节点时） */}
+      {mode === 'browse' && selected && hopSet && hopCounts && (
+        <div className="g-hop-bar" onMouseDown={(e) => e.stopPropagation()}>
+          <span className="ghb-label">图上检索</span>
+          {[1, 2, 3].map((h) => (
+            <button
+              key={h}
+              className={`ghb-btn${hop === h ? ' on' : ''}`}
+              onClick={() => setHop(h)}
+              title={`圈定 ${h} 跳内关联表`}
+            >
+              {h} 跳<span className="ghb-n">{h === 1 ? hopCounts.h1 : h === 2 ? hopCounts.h2 : hopCounts.h3}</span>
+            </button>
+          ))}
+          <span className="ghb-hint">圈内 = 可达关联（路由同款 2 跳）· 圈外淡化</span>
+        </div>
+      )}
+
       {/* 搭查（积木台）工具条 */}
       {mode === 'build' && <BuildBar onGenerate={generateSkeleton} disabled={running} />}
 
       {/* 治理模式统计条 */}
-      {mode === 'govern' && <GovernanceBar />}
+      {mode === 'govern' && <div onMouseDown={(e) => e.stopPropagation()}><GovernanceBar /></div>}
       <div className="g-hint">
         {mode === 'build'
           ? '单击 = 加入搭查集合 · <b>双击 = 打开数据</b> · 右键 = 更多'
@@ -540,7 +610,7 @@ export function GraphCanvas(): React.JSX.Element {
       </div>
 
       {/* 缩放 */}
-      <div className="g-zoom">
+      <div className="g-zoom" onMouseDown={(e) => e.stopPropagation()}>
         <button onClick={() => setViewport({ ...viewport, scale: Math.min(3, viewport.scale * 1.2) })}>＋</button>
         <span>{Math.round(viewport.scale * 100)}%</span>
         <button onClick={() => setViewport({ ...viewport, scale: Math.max(0.2, viewport.scale / 1.2) })}>－</button>

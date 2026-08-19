@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { routeTables } from '@renderer/api/knowledge'
+import { retrieve, routeTables, type KbDoc } from '@renderer/api/knowledge'
 import type { RouteResult } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
@@ -33,6 +33,24 @@ export function KnowledgeReview(): React.JSX.Element {
   const [routeSel, setRouteSel] = useState<Set<string>>(new Set())
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [adding, setAdding] = useState<string | null>(null)
+  // 知识 top-N 检索（关键词 + 向量 + 图谱邻居扩散）
+  const [kq, setKq] = useState('')
+  const [kdocs, setKdocs] = useState<KbDoc[] | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  async function doSearch(): Promise<void> {
+    const q = kq.trim()
+    if (!q || !currentId) return
+    setSearching(true)
+    try {
+      const r = await retrieve(currentId, q, 10)
+      setKdocs(r.docs)
+    } catch {
+      setKdocs([])
+    } finally {
+      setSearching(false)
+    }
+  }
 
   useEffect(() => {
     if (currentId) void load(currentId)
@@ -83,6 +101,38 @@ export function KnowledgeReview(): React.JSX.Element {
         <div className="review-loading mono">加载中…</div>
       ) : overview ? (
         <>
+          <div className="review-search">
+            <input
+              className="rs-input"
+              value={kq}
+              placeholder="检索知识库：输入问题，按语义+图谱召回最相关的表与注释（top-N）…"
+              onChange={(e) => setKq(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void doSearch() }}
+            />
+            <button className="rs-btn" disabled={searching || !kq.trim()} onClick={() => void doSearch()}>
+              {searching ? '检索中…' : '检索'}
+            </button>
+          </div>
+          {kdocs && (
+            <div className="review-results">
+              <div className="rr-h mono">
+                检索结果 · {kdocs.length} 条
+                <button className="rr-x" onClick={() => setKdocs(null)}>✕</button>
+              </div>
+              {kdocs.length === 0 ? (
+                <div className="rr-empty mono">无匹配（未配置嵌入模型时仅词面+图谱邻居检索）</div>
+              ) : (
+                kdocs.map((d) => (
+                  <div key={d.id} className="rr-item">
+                    <span className={`rr-kind mono ${d.kind}`}>{d.kind}</span>
+                    <span className="rr-title mono">{d.title}</span>
+                    <span className="rr-body">{d.body}</span>
+                    <span className={`rr-status mono ${d.status}`}>{d.status === 'confirmed' ? '已确认' : '草案'}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
           <div className="review-subbar">
             <span className="rv-title">{connName} · 知识审查</span>
             <span className="rv-counts">
