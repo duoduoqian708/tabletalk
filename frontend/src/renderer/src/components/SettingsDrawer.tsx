@@ -124,6 +124,16 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
   const { list, currentId, select, remove } = useConnections()
   const [savedMsg, setSavedMsg] = useState('')
 
+  // 主题：亮色（默认）/ 深色，localStorage 记忆
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try { return (localStorage.getItem('tabletalk-theme') as 'light' | 'dark') || 'light' } catch { return 'light' }
+  })
+  const applyTheme = (t: 'light' | 'dark'): void => {
+    setTheme(t)
+    try { localStorage.setItem('tabletalk-theme', t) } catch { /* ignore */ }
+    document.documentElement.setAttribute('data-theme', t)
+  }
+
   // 平台级运行参数（安全闸门 / 通用）
   const [settings, setSettings] = useState<SettingsPublic | null>(null)
   const [maxRows, setMaxRows] = useState<number>(1000)
@@ -378,22 +388,20 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
 
             {sec === 'theme' && (
               <section className="set-sec">
-                <div className="sec-h">主题风格<span className="sec-s mono">视觉方向 · 当前锁定</span></div>
-                <div className="sec-d">产品视觉方向当前锁定为北欧极简（唯一开发方向），此处预留多风格切换位。</div>
-                <div className="theme-card">
-                  <div className="tc-swatch" />
-                  <div className="tc-info">
-                    <div className="tcn">北欧极简</div>
-                    <div className="tcd mono">近白底 · 纯白面板 · 细边框 · 蓝强调 · 大留白</div>
-                    <div className="tc-pal">
-                      <i style={{ background: '#fbfbfc', border: '1px solid var(--line-strong)' }} />
-                      <i style={{ background: '#ffffff', border: '1px solid var(--line-strong)' }} />
-                      <i style={{ background: '#0a6dff' }} />
-                      <i style={{ background: '#c8871e' }} />
-                      <i style={{ background: '#d4453a' }} />
-                    </div>
-                  </div>
-                  <span className="badge allow" style={{ marginLeft: 'auto' }}>已锁定</span>
+                <div className="sec-h">主题风格<span className="sec-s mono">日光图纸 / 深空仪表台</span></div>
+                <div className="sec-d">亮色（默认）与深色两套主题，选择即时生效并记忆。</div>
+                <div className="theme-row">
+                  {(['light', 'dark'] as const).map((t) => (
+                    <button
+                      key={t}
+                      className={`theme-opt${theme === t ? ' on' : ''}`}
+                      onClick={() => applyTheme(t)}
+                    >
+                      <span className="theme-opt-swatch" style={{ background: t === 'light' ? '#f2f0e9' : '#08090d' }} />
+                      <span className="theme-opt-name">{t === 'light' ? '日光图纸' : '深空仪表台'}</span>
+                      {theme === t && <span className="theme-opt-check mono">✓</span>}
+                    </button>
+                  ))}
                 </div>
               </section>
             )}

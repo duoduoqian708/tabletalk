@@ -59,16 +59,16 @@ try {
     return el ? getComputedStyle(el)[p] : null
   }, [sel, prop])
 
-  check('body 背景深色', (await cs('body', 'backgroundColor')) === 'rgb(8, 9, 13)', await cs('body', 'backgroundColor'))
-  check('body 文字亮色', (await cs('body', 'color')) === 'rgb(242, 244, 248)', await cs('body', 'color'))
-  check('appbar 背景深色面板', (await cs('.appbar', 'backgroundColor')) === 'rgb(14, 16, 21)' || (await cs('.appbar', 'backgroundColor')).startsWith('rgba(14, 16, 21'), await cs('.appbar', 'backgroundColor'))
-  check('airail 背景深色面板', (await cs('.airail', 'backgroundColor')) === 'rgb(14, 16, 21)', await cs('.airail', 'backgroundColor'))
-  check('图谱画布背景深色', (await cs('.gcanvas', 'backgroundColor')) === 'rgb(8, 9, 13)', await cs('.gcanvas', 'backgroundColor'))
+  check('body 背景亮色米白', (await cs('body', 'backgroundColor')) === 'rgb(242, 240, 233)', await cs('body', 'backgroundColor'))
+  check('body 文字墨色', (await cs('body', 'color')) === 'rgb(28, 31, 39)', await cs('body', 'color'))
+  check('appbar 背景亮面板', (await cs('.appbar', 'backgroundColor')) === 'rgb(248, 247, 242)', await cs('.appbar', 'backgroundColor'))
+  check('airail 背景亮面板', (await cs('.airail', 'backgroundColor')) === 'rgb(248, 247, 242)', await cs('.airail', 'backgroundColor'))
+  check('图谱画布背景亮色', (await cs('.gcanvas', 'backgroundColor')) === 'rgb(242, 240, 233)', await cs('.gcanvas', 'backgroundColor'))
 
   // 设置抽屉
   await page.click('.sys-btn')
   await page.waitForSelector('.set-drawer', { timeout: 10000 })
-  check('设置抽屉背景深色', (await cs('.set-drawer', 'backgroundColor')) === 'rgb(14, 16, 21)', await cs('.set-drawer', 'backgroundColor'))
+  check('设置抽屉背景亮面板', (await cs('.set-drawer', 'backgroundColor')) === 'rgb(248, 247, 242)', await cs('.set-drawer', 'backgroundColor'))
   await page.click('.set-x')
   await page.waitForSelector('.set-drawer', { state: 'detached', timeout: 10000 })
 

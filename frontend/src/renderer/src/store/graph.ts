@@ -65,9 +65,6 @@ const NO_DOMAIN = '#8b93a3'
 
 const NODE_W = 150
 const NODE_H = 46
-const GAP_X = 200
-const GAP_Y = 96
-const PAD = 40
 
 function hash(s: string): number {
   let h = 0
@@ -81,55 +78,106 @@ function domainColor(domain: string | null): string {
 }
 
 /**
- * 布局：按领域分组纵向堆叠，领域列横向排列；无标签/孤立表收进末尾"无标签"列。
- * 全部居中到原点附近（组件 fit 时再整体适配视口）。
+ * 力导向布局（Fruchterman-Reingold 简化版）：
+ * - FK 边作为引力 → 关联表自然聚簇
+ * - 节点间斥力 + 尺寸感知（避免重叠）
+ * - 度大的节点（核心表）初始放中心，孤立表散向外圈
+ * - 收敛后整体居中到原点（组件 fit 时再适配视口）
  */
-function layout(nodes: GraphNode[]): void {
-  const groups = new Map<string, GraphNode[]>()
-  const iso: GraphNode[] = []
-  for (const n of nodes) {
-    if (n.domain) {
-      const arr = groups.get(n.domain) ?? []
-      arr.push(n)
-      groups.set(n.domain, arr)
-    } else {
-      iso.push(n)
+function layout(nodes: GraphNode[], edges: { from: string; to: string }[]): void {
+  const N = nodes.length
+  if (N === 0) return
+  const idx = new Map(nodes.map((n, i) => [n.id, i]))
+  const adj: number[][] = nodes.map(() => [])
+  for (const e of edges) {
+    const a = idx.get(e.from)
+    const b = idx.get(e.to)
+    if (a !== undefined && b !== undefined && a !== b) {
+      adj[a].push(b)
+      adj[b].push(a)
     }
   }
-  // 领域列顺序：按表数降序，稳定
-  const cols = [...groups.entries()].sort((a, b) => b[1].length - a[1].length)
-  let x = PAD
-  for (const [, group] of cols) {
-    let y = PAD
-    for (const n of group) {
-      n.x = x
-      n.y = y
-      y += NODE_H + GAP_Y
+  const deg = adj.map((a) => a.length)
+
+  // 画布尺寸随节点数缩放；核心表（度高）放中心
+  const W = Math.max(760, Math.sqrt(N) * 300)
+  const H = Math.max(560, Math.sqrt(N) * 240)
+  const order = nodes.map((_, i) => i).sort((a, b) => deg[b] - deg[a])
+  const pos: { x: number; y: number }[] = new Array(N)
+  order.forEach((i, k) => {
+    const t = (k / Math.max(1, N)) * Math.PI * 2
+    const r = W * 0.4
+    pos[i] = { x: W / 2 + Math.cos(t) * r, y: H / 2 + Math.sin(t) * r }
+  })
+
+  const k = Math.sqrt((W * H) / N) // 理想间距
+  const minGap = NODE_W * 0.72 // 节点间最小间距（尺寸感知）
+  let temp = W / 8 // 温度（最大位移），随迭代冷却
+
+  for (let iter = 0; iter < 280; iter++) {
+    const disp = pos.map(() => ({ x: 0, y: 0 }))
+    // 斥力：所有节点对
+    for (let i = 0; i < N; i++) {
+      for (let j = i + 1; j < N; j++) {
+        let dx = pos[i].x - pos[j].x
+        let dy = pos[i].y - pos[j].y
+        let d2 = dx * dx + dy * dy
+        if (d2 < 1) {
+          dx = (Math.random() - 0.5) * 2
+          dy = (Math.random() - 0.5) * 2
+          d2 = dx * dx + dy * dy
+        }
+        const d = Math.sqrt(d2)
+        // 距离近时增强斥力（防节点重叠）
+        const boost = d < minGap ? 1.8 : 1
+        const f = ((k * k) / d) * boost
+        const fx = (dx / d) * f
+        const fy = (dy / d) * f
+        disp[i].x += fx
+        disp[i].y += fy
+        disp[j].x -= fx
+        disp[j].y -= fy
+      }
     }
-    x += GAP_X
-  }
-  // 无标签列（最右侧）
-  if (iso.length > 0) {
-    let y = PAD
-    for (const n of iso) {
-      n.x = x
-      n.y = y
-      y += NODE_H + GAP_Y
+    // 引力：FK 边两端拉近
+    for (let i = 0; i < N; i++) {
+      for (const j of adj[i]) {
+        if (j <= i) continue
+        const dx = pos[i].x - pos[j].x
+        const dy = pos[i].y - pos[j].y
+        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+        const f = (d * d) / k
+        const fx = (dx / d) * f
+        const fy = (dy / d) * f
+        disp[i].x -= fx
+        disp[i].y -= fy
+        disp[j].x += fx
+        disp[j].y += fy
+      }
     }
+    // 中心引力 + 位移应用 + 边界钳制
+    for (let i = 0; i < N; i++) {
+      disp[i].x += (W / 2 - pos[i].x) * 0.02
+      disp[i].y += (H / 2 - pos[i].y) * 0.02
+      const d = Math.max(0.001, Math.sqrt(disp[i].x ** 2 + disp[i].y ** 2))
+      const lim = Math.min(temp, d)
+      pos[i].x += (disp[i].x / d) * lim
+      pos[i].y += (disp[i].y / d) * lim
+      pos[i].x = Math.max(minGap, Math.min(W - minGap, pos[i].x))
+      pos[i].y = Math.max(minGap, Math.min(H - minGap, pos[i].y))
+    }
+    temp *= 0.972
   }
-  // 居中：平移使内容包围盒中心 ≈ 原点
-  const xs = nodes.map((n) => n.x)
-  const ys = nodes.map((n) => n.y)
-  const minX = Math.min(...xs)
-  const maxX = Math.max(...xs) + NODE_W
-  const minY = Math.min(...ys)
-  const maxY = Math.max(...ys) + NODE_H
-  const dx = (minX + maxX) / 2
-  const dy = (minY + maxY) / 2
-  for (const n of nodes) {
-    n.x -= dx
-    n.y -= dy
-  }
+
+  // 输出 + 居中到原点
+  const xs = pos.map((p) => p.x)
+  const ys = pos.map((p) => p.y)
+  const dx = (Math.min(...xs) + Math.max(...xs)) / 2
+  const dy = (Math.min(...ys) + Math.max(...ys)) / 2
+  nodes.forEach((n, i) => {
+    n.x = pos[i].x - dx
+    n.y = pos[i].y - dy
+  })
 }
 
 export const useGraph = create<GraphState>((set, get) => ({
@@ -180,7 +228,7 @@ export const useGraph = create<GraphState>((set, get) => ({
       seen.add(key)
       edges.push({ from: fk.table, to: fk.ref_table, label: fk.column })
     }
-    layout(nodes)
+    layout(nodes, edges)
     const xs = nodes.map((n) => n.x)
     const ys = nodes.map((n) => n.y)
     const bounds = {

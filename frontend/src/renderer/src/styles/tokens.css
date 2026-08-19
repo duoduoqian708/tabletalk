@@ -1,38 +1,38 @@
-:root {
-  /* ── 深空仪表台 · 高对比 Void ──
-     可读性优先：正文 ≥13px，最小 11px；弱化文字对比度 ≥4.5:1；
-     层次靠「面板亮度差 + 1px 微光边」，不靠低透明度文字。 */
-  --void-0: #08090d; /* 应用底色（近纯黑，收敛径向渐变） */
-  --void-1: #0e1015; /* 面板 */
-  --void-2: #13161d; /* 浮层 / 卡片 */
-  --void-3: #181c25; /* 卡片高亮 / 输入底 */
-  --void-4: #1e2330; /* hover */
-  --void-5: #2a3040; /* 活动 / 选中底 */
+:root,
+:root[data-theme='light'] {
+  /* ── 日光图纸 · 亮色（默认） ──
+     暖米白底（非纯白）、墨色文字、电光紫点缀；可读性 ≥ 12:1 */
+  --void-0: #f2f0e9; /* 应用底色（暖米白） */
+  --void-1: #f8f7f2; /* 面板 */
+  --void-2: #ffffff; /* 浮层 / 卡片 */
+  --void-3: #f0eee6; /* 输入底 / hover 浅 */
+  --void-4: #e8e6dc; /* hover */
+  --void-5: #dedbd0; /* 活动 / 选中底 */
 
-  --ink: #f2f4f8;        /* 主文字（近白） */
-  --ink-dim: #aeb6c6;    /* 次要文字 12px+ 可读 */
-  --ink-faint: #7e8798;  /* 弱化文字（11px 仍可读，≥4.5:1） */
-  --ink-strong: #ffffff; /* 强调文字 */
+  --ink: #1c1f27;        /* 主文字（墨色） */
+  --ink-dim: #4d5468;    /* 次要文字 */
+  --ink-faint: #767e92;  /* 弱化文字（≥4.5:1） */
+  --ink-strong: #0e1017; /* 强调文字 */
 
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --line-soft: rgba(255, 255, 255, 0.04);
+  --line: rgba(24, 28, 38, 0.1);
+  --line-strong: rgba(24, 28, 38, 0.2);
+  --line-soft: rgba(24, 28, 38, 0.05);
 
-  --accent: #8b98ff;      /* 电光紫（提亮一档） */
-  --accent-bright: #aab4ff;
-  --accent-dim: rgba(139, 152, 255, 0.16);
-  --accent-soft: #c3caff;
-  --accent-ink: #0a0c14;  /* 强调底上的文字 */
-  --accent-glow: rgba(139, 152, 255, 0.35);
+  --accent: #5a6cff;       /* 电光紫（深一档保证白底对比） */
+  --accent-bright: #4254e8;
+  --accent-dim: rgba(90, 108, 255, 0.12);
+  --accent-soft: #4354e0;
+  --accent-ink: #ffffff;   /* 强调底上的文字 */
+  --accent-glow: rgba(90, 108, 255, 0.28);
 
-  --green: #7ce8b5;
-  --green-dim: rgba(124, 232, 181, 0.14);
-  --amber: #ffc46b;
-  --amber-dim: rgba(255, 196, 107, 0.14);
-  --red: #ff8a8a;
-  --red-dim: rgba(255, 138, 138, 0.14);
-  --blue: #8b98ff;
-  --blue-dim: rgba(139, 152, 255, 0.16);
+  --green: #0f9d6e;
+  --green-dim: rgba(15, 157, 110, 0.12);
+  --amber: #b26a00;
+  --amber-dim: rgba(178, 106, 0, 0.12);
+  --red: #d64545;
+  --red-dim: rgba(214, 69, 69, 0.12);
+  --blue: #5a6cff;
+  --blue-dim: rgba(90, 108, 255, 0.12);
 
   /* ── V1 兼容别名 ── */
   --bg: var(--void-0);
@@ -44,13 +44,12 @@
   --teal: var(--accent);
   --teal-dim: var(--accent-dim);
 
-  /* ── 几何 ── */
   --r-sm: 8px;
   --r-md: 10px;
   --r-lg: 14px;
   --r-full: 99px;
-  --shadow-1: 0 2px 14px rgba(0, 0, 0, 0.5);
-  --shadow-2: 0 10px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-1: 0 2px 14px rgba(24, 28, 38, 0.12);
+  --shadow-2: 0 10px 36px rgba(24, 28, 38, 0.18), 0 0 0 1px rgba(24, 28, 38, 0.05);
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -66,24 +65,92 @@
   --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
   --dur: 160ms;
 
-  /* ── 字号阶梯（最小 11px） ── */
-  --fs-1: 11px;  /* 徽标 / 角标 */
-  --fs-2: 12px;  /* 辅助 / 元信息 */
-  --fs-3: 13px;  /* 正文小 */
-  --fs-4: 14px;  /* 正文 */
-  --fs-5: 16px;  /* 小节标题 */
-  --fs-6: 20px;  /* 面板标题 */
-  --fs-7: 30px;  /* 大标题 */
+  --fs-1: 11px;
+  --fs-2: 12px;
+  --fs-3: 13px;
+  --fs-4: 14px;
+  --fs-5: 16px;
+  --fs-6: 20px;
+  --fs-7: 30px;
 
-  /* ── 域色（图谱） ── */
+  --domain-1: #5a6cff;
+  --domain-2: #0f9d6e;
+  --domain-3: #b26a00;
+
+  --font-display: 'Sora', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Manrope', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* ── 图谱画布主题变量 ── */
+  --g-canvas-bg: var(--void-0);
+  --g-grid: rgba(24, 28, 38, 0.05);
+  --g-node-fill: #ffffff;
+  --g-node-stroke: rgba(24, 28, 38, 0.22);
+  --g-node-fill-sel: #5a6cff;
+  --g-node-stroke-sel: #4254e8;
+  --g-node-text: var(--ink);
+  --g-node-text-sel: #ffffff;
+  --g-edge: rgba(24, 28, 38, 0.22);
+  --g-edge-hot: #5a6cff;
+  --g-edge-build: #0f9d6e;
+  --g-edge-pending: rgba(178, 106, 0, 0.55);
+  --g-node-build-fill: rgba(15, 157, 110, 0.1);
+}
+
+:root[data-theme='dark'] {
+  /* ── 深空仪表台 · 深色（可选） ── */
+  --void-0: #08090d;
+  --void-1: #0e1015;
+  --void-2: #13161d;
+  --void-3: #181c25;
+  --void-4: #1e2330;
+  --void-5: #2a3040;
+
+  --ink: #f2f4f8;
+  --ink-dim: #aeb6c6;
+  --ink-faint: #7e8798;
+  --ink-strong: #ffffff;
+
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --line-soft: rgba(255, 255, 255, 0.04);
+
+  --accent: #8b98ff;
+  --accent-bright: #aab4ff;
+  --accent-dim: rgba(139, 152, 255, 0.16);
+  --accent-soft: #c3caff;
+  --accent-ink: #0a0c14;
+  --accent-glow: rgba(139, 152, 255, 0.35);
+
+  --green: #7ce8b5;
+  --green-dim: rgba(124, 232, 181, 0.14);
+  --amber: #ffc46b;
+  --amber-dim: rgba(255, 196, 107, 0.14);
+  --red: #ff8a8a;
+  --red-dim: rgba(255, 138, 138, 0.14);
+  --blue: #8b98ff;
+  --blue-dim: rgba(139, 152, 255, 0.16);
+
+  --shadow-1: 0 2px 14px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 10px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+
   --domain-1: #8b98ff;
   --domain-2: #7ce8b5;
   --domain-3: #ffc46b;
 
-  /* ── 字体：Sora(展示) + Manrope(正文) + IBM Plex Mono(数据) ── */
-  --font-display: 'Sora', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-sans: 'Manrope', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --g-canvas-bg: var(--void-0);
+  --g-grid: rgba(255, 255, 255, 0.05);
+  --g-node-fill: #14161d;
+  --g-node-stroke: rgba(255, 255, 255, 0.22);
+  --g-node-fill-sel: #8b98ff;
+  --g-node-stroke-sel: #aab4ff;
+  --g-node-text: #f2f4f8;
+  --g-node-text-sel: #0a0c14;
+  --g-edge: rgba(255, 255, 255, 0.22);
+  --g-edge-hot: #8b98ff;
+  --g-edge-build: #6ee7b7;
+  --g-edge-pending: rgba(246, 173, 85, 0.55);
+  --g-node-build-fill: rgba(110, 231, 183, 0.1);
 }
 
 * {
@@ -102,25 +169,22 @@ body {
   font-family: var(--font-sans);
   font-size: var(--fs-4);
   line-height: 1.55;
-  background:
-    radial-gradient(1200px 560px at 86% -10%, rgba(139, 152, 255, 0.07), transparent 62%),
-    radial-gradient(900px 500px at -8% 110%, rgba(139, 152, 255, 0.045), transparent 55%),
-    var(--void-0);
   color: var(--ink);
+  background-color: var(--void-0);
+  /* 细腻噪点 + 微弱紫晕（浅色下极淡） */
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.1 0 0 0 0 0.12 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(1200px 560px at 86% -10%, rgba(90, 108, 255, 0.05), transparent 62%),
+    radial-gradient(900px 500px at -8% 110%, rgba(90, 108, 255, 0.035), transparent 55%);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
   user-select: none;
-  /* 细腻噪点：赋予深空质感 */
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.025 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
-    radial-gradient(1200px 560px at 86% -10%, rgba(139, 152, 255, 0.07), transparent 62%),
-    radial-gradient(900px 500px at -8% 110%, rgba(139, 152, 255, 0.045), transparent 55%),
-    var(--void-0);
+  transition: background-color 200ms var(--ease), color 200ms var(--ease);
 }
 
 ::selection {
-  background: rgba(139, 152, 255, 0.3);
+  background: var(--accent-dim);
   color: var(--ink-strong);
 }
 
@@ -137,7 +201,6 @@ textarea {
   font-family: inherit;
 }
 
-/* 滚动条（更纤细、高对比） */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -149,14 +212,13 @@ textarea {
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #39415a;
+  background-color: var(--void-4);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* 焦点环：全站统一的键盘可达性 */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

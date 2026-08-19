@@ -374,10 +374,13 @@ export function GraphCanvas(): React.JSX.Element {
       <svg className="g-svg" viewBox={`0 0 ${wrapRef.current?.clientWidth ?? 800} ${wrapRef.current?.clientHeight ?? 480}`}>
         <defs>
           <pattern id="g-grid" width="26" height="26" patternUnits="userSpaceOnUse">
-            <circle cx="1" cy="1" r="1" fill="rgba(255,255,255,0.05)" />
+            <circle cx="1" cy="1" r="1" fill="var(--g-grid)" />
           </pattern>
+          <marker id="g-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0.8 L 7 4 L 0 7.2 Z" fill="var(--g-edge-hot)" />
+          </marker>
           <filter id="g-glow" x="-60%" y="-60%" width="220%" height="220%">
-            <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#7c8cff" flood-opacity="0.5" />
+            <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="var(--accent)" flood-opacity="0.55" />
           </filter>
         </defs>
         <g transform={`translate(${viewport.tx},${viewport.ty}) scale(${viewport.scale})`}>
@@ -404,17 +407,18 @@ export function GraphCanvas(): React.JSX.Element {
                 <path
                   d={`M ${ax},${ay} Q ${mx},${my + 18} ${bx},${by}`}
                   fill="none"
-                  stroke={hot ? 'rgba(124,140,255,0.6)' : 'rgba(255,255,255,0.12)'}
-                  strokeWidth={hot ? 1.4 : 1}
+                  stroke={hot ? 'var(--g-edge-hot)' : 'var(--g-edge)'}
+                  strokeWidth={hot ? 1.6 : 1.2}
+                  markerEnd="url(#g-arrow)"
                 />
                 {e.label && (
                   <text
                     x={mx}
                     y={my + 10}
                     textAnchor="middle"
-                    fontSize={9}
-                    fill={hot ? '#aeb6ff' : '#5b6472'}
-                    stroke="#0a0b0e"
+                    fontSize={11}
+                    fill={hot ? 'var(--g-edge-hot)' : 'var(--ink-faint)'}
+                    stroke="var(--g-canvas-bg)"
                     strokeWidth={3}
                     paintOrder="stroke"
                     style={{ fontFamily: 'var(--font-mono)' }}
@@ -460,30 +464,30 @@ export function GraphCanvas(): React.JSX.Element {
                   select(n.id)
                 }}
               >
-                {isSel && mode !== 'build' && <rect x={-4} y={-4} width={NODE_W + 8} height={NODE_H + 8} rx={10} fill="rgba(124,140,255,0.08)" />}
+                {isSel && mode !== 'build' && <rect x={-4} y={-4} width={NODE_W + 8} height={NODE_H + 8} rx={10} fill="var(--accent-dim)" />}
                 <rect
                   width={NODE_W}
                   height={NODE_H}
                   rx={8}
-                  fill={isSel ? '#161826' : inBuild ? 'rgba(110,231,183,0.08)' : '#14161d'}
-                  stroke={inBuild ? '#6ee7b7' : isSel ? '#7c8cff' : n.pending ? 'rgba(246,173,85,0.5)' : n.annotated ? n.color : 'rgba(255,255,255,0.18)'}
+                  fill={isSel ? 'var(--g-node-fill-sel)' : inBuild ? 'var(--g-node-build-fill)' : 'var(--g-node-fill)'}
+                  stroke={inBuild ? 'var(--g-edge-build)' : isSel ? 'var(--g-node-stroke-sel)' : n.pending ? 'var(--g-edge-pending)' : n.annotated ? n.color : 'var(--g-node-stroke)'}
                   strokeWidth={inBuild ? 1.6 : isSel ? 1.6 : 1}
                   strokeDasharray={n.annotated || isSel || inBuild ? undefined : '4 3'}
                   filter={isSel && mode !== 'build' ? 'url(#g-glow)' : undefined}
                 />
                 {inBuild && (
                   <g>
-                    <circle cx={NODE_W - 12} cy={12} r={7} fill="#6ee7b7" />
-                    <text x={NODE_W - 12} y={15} textAnchor="middle" fontSize={8} fontWeight={700} fill="#0a0b0e" style={{ fontFamily: 'var(--font-mono)' }}>
+                    <circle cx={NODE_W - 12} cy={12} r={7} fill="var(--g-edge-build)" />
+                    <text x={NODE_W - 12} y={15} textAnchor="middle" fontSize={8} fontWeight={700} fill="var(--g-canvas-bg)" style={{ fontFamily: 'var(--font-mono)' }}>
                       {buildIdx + 1}
                     </text>
                   </g>
                 )}
                 <circle cx={14} cy={17} r={3.5} fill={n.color} />
-                <text x={26} y={21} fontSize={12} fontWeight={600} fill={isSel ? '#ffffff' : '#e8eaf0'} style={{ fontFamily: 'var(--font-sans)' }}>
+                <text x={26} y={21} fontSize={12} fontWeight={600} fill={isSel ? 'var(--g-node-text-sel)' : 'var(--g-node-text)'} style={{ fontFamily: 'var(--font-sans)' }}>
                   {n.name}
                 </text>
-                <text x={26} y={37} fontSize={9} fill={n.pending ? '#e8b64c' : '#8b93a3'} style={{ fontFamily: 'var(--font-sans)' }}>
+                <text x={26} y={37} fontSize={11} fill={n.pending ? 'var(--amber)' : 'var(--ink-dim)'} style={{ fontFamily: 'var(--font-sans)' }}>
                   {n.domain ?? '无标签'} · {n.fields} 字段 · {n.annotated ? '✓' : n.pending ? '⚠ 待确认' : '✗ 未注释'}
                 </text>
               </g>
@@ -512,7 +516,7 @@ export function GraphCanvas(): React.JSX.Element {
                 }}
               >
                 <title>{q.sql}</title>
-                <rect width={178} height={54} rx={8} fill="rgba(124,140,255,0.08)" stroke="rgba(124,140,255,0.6)" strokeWidth={1.2} strokeDasharray="5 4" />
+                <rect width={178} height={54} rx={8} fill="var(--accent-dim)" stroke="rgba(124,140,255,0.6)" strokeWidth={1.2} strokeDasharray="5 4" />
                 <text x={10} y={18} fontSize={10.5} fontWeight={600} fill="#aeb6ff" style={{ fontFamily: 'var(--font-sans)' }}>▤ {q.title}</text>
                 <text x={10} y={34} fontSize={8.5} fill="#8b93a3" style={{ fontFamily: 'var(--font-mono)' }}>{(q.sql.split('\n')[0] ?? '').slice(0, 30)}{q.sql.split('\n').length > 1 ? '…' : ''}</text>
                 <text x={10} y={46} fontSize={8} fill="#5b6472" style={{ fontFamily: 'var(--font-sans)' }}>双击重跑 · 右键管理</text>
