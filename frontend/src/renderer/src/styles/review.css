@@ -26,7 +26,7 @@
   display: flex;
   gap: 10px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -77,7 +77,7 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -114,14 +114,14 @@
 
 .rv-table-row .caret {
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 11px;
   width: 12px;
 }
 
 .rv-table-row .tcols {
   margin-left: auto;
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .rv-desc {
@@ -165,7 +165,7 @@
 
 .mini-acts button {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: transparent;
   border: 1px solid var(--line-strong);
@@ -192,7 +192,7 @@
   align-items: center;
   gap: 5px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 9px;
   border-radius: 999px;
   border: 1px solid var(--line-strong);
@@ -221,7 +221,7 @@
   border: 0;
   color: var(--ink-faint);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
   padding: 0 2px;
 }
 
@@ -251,7 +251,7 @@
   color: var(--ink);
   border-radius: 6px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 6px;
 }
 
@@ -278,12 +278,12 @@
 
 .rv-col .ctype {
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .rv-col .ckey {
   color: var(--amber);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .rv-col .ccomment {
@@ -303,7 +303,7 @@
 
 .rv-taggrp-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -319,7 +319,7 @@
 
 .rv-tagdesc {
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -345,7 +345,7 @@
 
 .route-chip {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
@@ -369,7 +369,7 @@
 .rv-route-result {
   margin-top: 10px;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.8;
 }
 
@@ -414,7 +414,7 @@
 
 .kg-node .kg-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   fill: var(--ink-faint);
   pointer-events: none;
 }
@@ -430,7 +430,7 @@
   padding: 8px 14px;
   border-top: 1px solid var(--line);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
@@ -461,7 +461,7 @@
 
 /* 嵌入模型状态（模型必须用户配置——未配置时明确标注） */
 .emb-state {
-  font-size: 8.5px;
+  font-size: 11px;
   border-radius: 99px;
   padding: 2px 9px;
   font-family: 'JetBrains Mono', monospace;
@@ -500,7 +500,7 @@
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: 11px;
   padding: 0 16px;
   border-radius: 8px;
   cursor: pointer;
@@ -525,7 +525,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 12px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   border-bottom: 1px solid var(--line);
 }
@@ -535,12 +535,12 @@
   background: transparent;
   color: var(--ink-faint);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
 }
 .rr-empty {
   padding: 14px;
   color: var(--ink-faint);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 .rr-item {
   display: grid;
@@ -549,13 +549,13 @@
   align-items: center;
   padding: 7px 12px;
   border-bottom: 1px solid var(--line);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 .rr-item:last-child {
   border-bottom: 0;
 }
 .rr-kind {
-  font-size: 8px;
+  font-size: 11px;
   border-radius: 5px;
   padding: 1px 6px;
   background: var(--void-5);
@@ -574,7 +574,7 @@
   white-space: nowrap;
 }
 .rr-status {
-  font-size: 8px;
+  font-size: 11px;
   border-radius: 99px;
   padding: 1px 7px;
 }
@@ -691,7 +691,7 @@
 .kb-stats {
   display: flex;
   gap: 14px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-faint);
   padding: 8px 10px 0;
   border-top: 1px solid var(--line);
@@ -725,7 +725,7 @@
   border: 1px solid var(--line);
   color: var(--ink-dim);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   padding: 3px 9px;
   border-radius: 6px;
   cursor: pointer;
@@ -740,7 +740,7 @@
 }
 .kg2-sep { width: 1px; height: 16px; background: var(--line); }
 .kg2-spacer { flex: 1; }
-.kg2-hint { font-size: 9.5px; color: var(--ink-faint); }
+.kg2-hint { font-size: 11px; color: var(--ink-faint); }
 .kg2-canvas { flex: 1; min-height: 0; position: relative; }
 .kg2-svg {
   width: 100%;
@@ -760,7 +760,7 @@
 .kg2-edge.sel { stroke: var(--green); stroke-width: 2.4; }
 .kg2-edge-label {
   fill: var(--ink-faint);
-  font-size: 9px;
+  font-size: 11px;
   pointer-events: none;
 }
 .kg2-node { cursor: pointer; }
@@ -786,7 +786,7 @@
   bottom: 10px;
   display: flex;
   gap: 12px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   background: rgba(10, 12, 20, 0.7);
   border: 1px solid var(--line);
@@ -817,6 +817,6 @@
 .kg2-insp-comment { font-size: 11px; color: var(--ink-dim); margin-top: 6px; line-height: 1.6; }
 .kg2-insp-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
 .kb-synced {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }

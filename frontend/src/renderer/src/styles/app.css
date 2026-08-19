@@ -33,7 +33,7 @@
   font-weight: 500;
   color: var(--ink-faint);
   letter-spacing: 0.08em;
-  font-size: 8.5px;
+  font-size: 11px;
   margin-left: 4px;
 }
 
@@ -201,7 +201,7 @@
 
 .dd-trigger .chev {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .dd-trigger .sd {
@@ -229,7 +229,7 @@
 
 .menu .m-title {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -265,14 +265,14 @@
 
 .mi .m-sub {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-left: auto;
 }
 
 .mi .m-check {
   color: var(--teal);
-  font-size: 10px;
+  font-size: 11px;
   width: 12px;
   text-align: center;
 }
@@ -355,7 +355,7 @@
 
 .fld label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--ink-dim);
 }
@@ -413,7 +413,7 @@
 
 .btn {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   border-radius: 20px;
   padding: 7px 16px;
   cursor: pointer;
@@ -587,7 +587,7 @@ body.resizing {
 
 .sch-grp {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -674,7 +674,7 @@ body.resizing {
 
 .sch-item .tw {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-left: auto;
   flex: none;
@@ -696,7 +696,7 @@ body.resizing {
   gap: 5px;
   padding: 3px 8px 3px 24px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   cursor: pointer;
 }
@@ -715,13 +715,13 @@ body.resizing {
 
 .sch-col .ct {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 11px;
   flex: none;
 }
 
 .sch-col .pk {
   color: var(--amber);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 /* ============ workspace top ============ */
@@ -769,7 +769,7 @@ body.resizing {
 
 .iconbtn {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: transparent;
   border: 1px solid var(--line-strong);
@@ -878,7 +878,7 @@ body.resizing {
 
 .tv-head .n {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   background: var(--panel);
   border: 1px solid var(--line);
@@ -917,7 +917,7 @@ body.resizing {
 
 .tv-head .hint {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
@@ -974,7 +974,7 @@ body.resizing {
 
 .tableview thead th .ty {
   display: inline;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   font-weight: 400;
   letter-spacing: 0.06em;
@@ -1012,7 +1012,7 @@ body.resizing {
   padding: 7px 14px;
   border-top: 1px solid var(--line);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-faint);
   background: var(--bg-2);
 }
@@ -1027,7 +1027,7 @@ body.resizing {
 
 .pager button {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: var(--panel);
   border: 1px solid var(--line-strong);
@@ -1074,7 +1074,7 @@ body.resizing {
   border-top: 1px solid var(--line);
   background: var(--panel);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   white-space: nowrap;
   overflow: hidden;
@@ -1116,7 +1116,7 @@ body.resizing {
 
 .onboarding .kicker {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.3em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -1208,7 +1208,7 @@ body.resizing {
 }
 
 .badge {
-  font-size: 8px;
+  font-size: 11px;
   padding: 2.5px 8px;
   border-radius: 10px;
   letter-spacing: 0.05em;
@@ -1250,18 +1250,18 @@ body.resizing {
 .tier .t-t { font-size: 13px; font-weight: 600; }
 .tier .t-st {
   margin-left: auto; font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px; padding: 2.5px 9px; border-radius: 10px;
+  font-size: 11px; padding: 2.5px 9px; border-radius: 10px;
 }
-.tier .t-why { font-size: 9.5px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; }
+.tier .t-why { font-size: 11px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; }
 .tier .t-kw { display: flex; flex-wrap: wrap; gap: 6px; }
 .tier .t-kw span {
-  font-family: 'JetBrains Mono', monospace; font-size: 9.5px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
   color: var(--ink-dim); background: var(--bg-2);
   border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px;
 }
 .tier .t-d { font-size: 11px; color: var(--ink-dim); line-height: 1.65; }
 .tier .t-rule {
-  font-size: 9.5px; color: var(--teal); font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--teal); font-family: 'JetBrains Mono', monospace;
   border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto;
 }
 .tier.read .t-ic { background: var(--teal-dim); color: var(--teal); }
@@ -1288,7 +1288,7 @@ body.resizing {
   font-size: 12px; font-weight: 600;
 }
 
-.panel .p-h .p-s { margin-left: auto; font-size: 8.5px; color: var(--ink-faint); font-weight: 400; }
+.panel .p-h .p-s { margin-left: auto; font-size: 11px; color: var(--ink-faint); font-weight: 400; }
 
 .rule-table {
   width: 100%; border-collapse: collapse;
@@ -1297,7 +1297,7 @@ body.resizing {
 
 .rule-table th {
   text-align: left; padding: 9px 16px; color: var(--ink-faint);
-  font-weight: 500; font-size: 8.5px; border-bottom: 1px solid var(--line-strong);
+  font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--line-strong);
   letter-spacing: 0.06em; font-family: 'JetBrains Mono', monospace;
 }
 
@@ -1305,7 +1305,7 @@ body.resizing {
 .rule-table tr:last-child td { border-bottom: 0; }
 .rule-table td .sql-k {
   color: var(--ink); background: var(--bg-2); border-radius: 5px;
-  padding: 1px 6px; font-size: 9.5px;
+  padding: 1px 6px; font-size: 11px;
 }
 
 /* recent verdicts */
@@ -1317,14 +1317,14 @@ body.resizing {
 }
 .rec:last-child { border-bottom: 0; }
 .rec .sql { flex: 1; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rec .tme { color: var(--ink-faint); font-size: 9px; flex: none; }
-.rec .src { color: var(--ink-faint); font-size: 9px; flex: none; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+.rec .tme { color: var(--ink-faint); font-size: 11px; flex: none; }
+.rec .src { color: var(--ink-faint); font-size: 11px; flex: none; border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
 
 /* graph page */
 .graph-panel { padding: 14px; display: flex; flex-direction: column; }
 .g-legend {
   display: flex; gap: 16px; font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px; color: var(--ink-faint);
+  font-size: 11px; color: var(--ink-faint);
   padding: 10px 4px 2px; border-top: 1px solid var(--line); margin-top: 6px;
 }
 .g-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
@@ -1332,7 +1332,7 @@ body.resizing {
 /* audit */
 .filter-pills { display: flex; gap: 7px; }
 .fp {
-  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
   padding: 5px 13px; border-radius: 20px;
   border: 1px solid var(--line-strong); color: var(--ink-dim);
   background: transparent; cursor: pointer; transition: all 0.14s;
@@ -1343,14 +1343,14 @@ body.resizing {
 .audit-table { width: 100%; border-collapse: collapse; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; }
 .audit-table th {
   text-align: left; padding: 9px 16px; color: var(--ink-faint);
-  font-weight: 500; font-size: 8.5px; border-bottom: 1px solid var(--line-strong);
+  font-weight: 500; font-size: 11px; border-bottom: 1px solid var(--line-strong);
   letter-spacing: 0.06em; white-space: nowrap;
 }
 .audit-table td { padding: 9px 16px; border-bottom: 1px solid var(--line); color: var(--ink-dim); white-space: nowrap; }
 .audit-table tr:hover td { background: var(--bg-2); }
 .audit-table td.sql { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
-.audit-table td.tme { color: var(--ink-faint); font-size: 9px; }
-.audit-table td.ms { color: var(--ink-faint); font-size: 9px; }
+.audit-table td.tme { color: var(--ink-faint); font-size: 11px; }
+.audit-table td.ms { color: var(--ink-faint); font-size: 11px; }
 
 /* ============ 系统设置抽屉 ============ */
 .set-mask {
@@ -1386,7 +1386,7 @@ body.resizing {
 }
 
 .set-head .set-title { font-size: 14px; font-weight: 600; }
-.set-head .set-sub { font-size: 8.5px; color: var(--ink-faint); }
+.set-head .set-sub { font-size: 11px; color: var(--ink-faint); }
 .set-head .set-x {
   margin-left: auto; width: 26px; height: 26px; border-radius: 8px;
   border: 0; background: transparent; color: var(--ink-faint); cursor: pointer; font-size: 12px;
@@ -1418,7 +1418,7 @@ body.resizing {
 
 .set-sec { display: flex; flex-direction: column; gap: 11px; }
 .sec-h { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
-.sec-h .sec-s { margin-left: auto; font-size: 8.5px; color: var(--ink-faint); font-weight: 400; }
+.sec-h .sec-s { margin-left: auto; font-size: 11px; color: var(--ink-faint); font-weight: 400; }
 .sec-d { font-size: 11px; color: var(--ink-dim); line-height: 1.7; }
 
 .set-row { display: flex; flex-direction: column; gap: 5px; }
@@ -1430,7 +1430,7 @@ body.resizing {
 }
 .set-row input:focus, .set-row select:focus { border-color: var(--teal); background: var(--void-5); box-shadow: 0 0 0 3px var(--teal-dim); }
 .set-row.readonly input { color: var(--ink-faint); }
-.set-row .hint { font-size: 9.5px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; line-height: 1.6; }
+.set-row .hint { font-size: 11px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; line-height: 1.6; }
 .set-row.inline { flex-direction: row; align-items: center; gap: 11px; }
 .set-row.inline .sr-l { flex: none; width: 140px; }
 .set-row.inline input, .set-row.inline select { width: 220px; }
@@ -1454,7 +1454,7 @@ body.resizing {
   border: 1px solid var(--line-strong);
 }
 .tc-info .tcn { font-size: 12px; font-weight: 600; }
-.tc-info .tcd { font-size: 9.5px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
+.tc-info .tcd { font-size: 11px; color: var(--ink-faint); font-family: 'JetBrains Mono', monospace; margin-top: 3px; }
 .tc-pal { display: flex; gap: 6px; margin-top: 9px; }
 .tc-pal i { width: 18px; height: 18px; border-radius: 5px; }
 
@@ -1473,11 +1473,11 @@ body.resizing {
 .conn-row .st.live { background: var(--green); }
 .conn-row .st.idle { background: var(--line-strong); }
 .conn-row .cn { font-size: 12px; font-weight: 600; }
-.conn-row .cd { font-size: 9px; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px; }
-.conn-row .ro-tag { font-size: 8px; color: var(--teal); background: var(--teal-dim); border-radius: 10px; padding: 1px 7px; }
+.conn-row .cd { font-size: 11px; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 10px; padding: 1px 7px; }
+.conn-row .ro-tag { font-size: 11px; color: var(--teal); background: var(--teal-dim); border-radius: 10px; padding: 1px 7px; }
 .conn-row .spacer { flex: 1; }
 .mini-btn {
-  font-family: 'JetBrains Mono', monospace; font-size: 9.5px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
   padding: 4px 11px; border-radius: 8px;
   border: 1px solid var(--line-strong); color: var(--ink-dim);
   background: var(--panel); cursor: pointer; transition: all 0.14s;
@@ -1500,7 +1500,7 @@ body.resizing {
   padding: 13px 0 2px; border-top: 1px solid var(--line); background: var(--bg);
   margin-top: 2px;
 }
-.save-bar .sv-t { font-size: 9.5px; color: var(--ink-faint); }
+.save-bar .sv-t { font-size: 11px; color: var(--ink-faint); }
 
 /* ============ 知识审查 subbar ============ */
 .review-subbar {
@@ -1513,7 +1513,7 @@ body.resizing {
 }
 .review-subbar .rv-counts {
   display: flex; gap: 10px; font-family: 'JetBrains Mono', monospace;
-  font-size: 9px; color: var(--ink-faint);
+  font-size: 11px; color: var(--ink-faint);
   border: 1px solid var(--line); border-radius: 8px; padding: 3px 10px;
 }
 .review-subbar .spacer { flex: 1; }
@@ -1537,7 +1537,7 @@ body.resizing {
   padding: 11px 14px;
   border-bottom: 1px solid var(--line);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -1545,7 +1545,7 @@ body.resizing {
 
 .airail-head .meta {
   margin-left: auto;
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.02em;
   text-transform: none;
   color: var(--ink-faint);
@@ -1585,7 +1585,7 @@ body.resizing {
 }
 
 .airail-empty .e-t { font-size: 12px; color: var(--ink-dim); }
-.airail-empty .e-s { font-size: 10px; font-family: 'JetBrains Mono', monospace; }
+.airail-empty .e-s { font-size: 11px; font-family: 'JetBrains Mono', monospace; }
 
 .m-u {
   align-self: flex-end;
@@ -1610,7 +1610,7 @@ body.resizing {
 
 .think {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   line-height: 1.65;
   display: flex;
@@ -1620,7 +1620,7 @@ body.resizing {
 .think .tn {
   color: var(--teal);
   letter-spacing: 0.1em;
-  font-size: 8.5px;
+  font-size: 11px;
   flex: none;
   font-weight: 500;
 }
@@ -1648,14 +1648,14 @@ body.resizing {
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
-.sql .c-h .st { margin-left: auto; font-size: 8px; }
+.sql .c-h .st { margin-left: auto; font-size: 11px; }
 
 .fst {
-  font-size: 8px;
+  font-size: 11px;
   padding: 2.5px 8px;
   border-radius: 10px;
   letter-spacing: 0.06em;
@@ -1670,7 +1670,7 @@ body.resizing {
 
 .sql .c-s {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   padding: 10px 12px;
   line-height: 1.7;
@@ -1689,13 +1689,13 @@ body.resizing {
 
 .sql .c-f .spacer { flex: 1; }
 
-.c-p { font-size: 9px; color: var(--amber); }
+.c-p { font-size: 11px; color: var(--amber); }
 .c-p.warn { color: var(--red); }
-.c-r { font-size: 9px; color: var(--ink-faint); }
+.c-r { font-size: 11px; color: var(--ink-faint); }
 
 .airail .btn {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9.5px;
+  font-size: 11px;
   padding: 5.5px 13px;
   border-radius: 20px;
   border: 1px solid var(--line-strong);
@@ -1732,7 +1732,7 @@ body.resizing {
   border-top: 1px solid var(--line);
   background: var(--card);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.05em;
   color: var(--ink-faint);
 }
@@ -1810,7 +1810,7 @@ body.resizing {
   align-items: center;
   gap: 6px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--ink-faint);
   white-space: nowrap;
@@ -1851,7 +1851,7 @@ body.resizing {
   align-items: center;
   gap: 7px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--ink-faint);
   background: transparent;
@@ -1893,7 +1893,7 @@ body.resizing {
 
 .ai-toggle .tg-note {
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.02em;
 }
 
@@ -1932,7 +1932,7 @@ body.resizing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-dim);
 }
 
@@ -1954,7 +1954,7 @@ body.resizing {
   margin: 0;
   padding: 10px 12px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.7;
   white-space: pre;
   overflow-wrap: normal;
@@ -2061,7 +2061,7 @@ body.resizing {
 
 .step-label {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   display: flex;
   align-items: center;
@@ -2069,7 +2069,7 @@ body.resizing {
 }
 
 .step-label .tag {
-  font-size: 7px;
+  font-size: 10px;
   color: var(--teal);
   background: var(--teal-dim);
   border-radius: 5px;
@@ -2082,7 +2082,7 @@ body.resizing {
 
 .step-arrow {
   margin-left: auto;
-  font-size: 8px;
+  font-size: 11px;
   color: var(--ink-faint);
   transition: transform 0.18s var(--ease);
 }
@@ -2096,7 +2096,7 @@ body.resizing {
 .step-detail.open { max-height: 260px; overflow: auto; }
 
 .sd-line, .sd-empty {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   line-height: 1.7;
   padding: 2px 12px 7px 34px;
@@ -2169,7 +2169,7 @@ body.resizing {
 }
 
 .colfilter .cf-col {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   flex: none;
 }
@@ -2197,7 +2197,7 @@ body.resizing {
   border: 0;
   background: transparent;
   color: var(--ink-faint);
-  font-size: 10px;
+  font-size: 11px;
   cursor: pointer;
 }
 
@@ -2209,7 +2209,7 @@ body.resizing {
 /* 底部：总数 + 分页 */
 .tv-foot .ro {
   color: var(--teal);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 /* 卡片"评估中"态 */
@@ -2234,7 +2234,7 @@ body.resizing {
   width: 42px;
   text-align: right;
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 11px;
   user-select: none;
   padding-left: 8px;
   border-right: 1px solid var(--line-strong);
@@ -2252,7 +2252,7 @@ body.resizing {
 /* 大模型接入测试结果 */
 .test-result {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   margin-top: 2px;
   line-height: 1.6;
 }
@@ -2268,7 +2268,7 @@ body.resizing {
 }
 
 .sql .c-acts .ca {
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   background: transparent;
   border: 1px solid transparent;
@@ -2462,7 +2462,7 @@ body.resizing {
 }
 
 .cell-pop .cp-tag {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--teal);
   background: var(--teal-dim);
   border-radius: 6px;
@@ -2478,7 +2478,7 @@ body.resizing {
 }
 
 .cell-pop .cp-btn {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: transparent;
   border: 1px solid var(--line-strong);
@@ -2516,7 +2516,7 @@ body.resizing {
 .cell-pop .cp-err {
   flex: none;
   padding: 6px 12px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--red);
   font-family: 'JetBrains Mono', monospace;
   background: var(--red-dim);
@@ -2647,7 +2647,7 @@ body.resizing {
 
 .airail-head .meta {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2665,7 +2665,7 @@ body.resizing {
   margin-left: 6px;
   padding: 1px 7px;
   border-radius: 8px;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
   background: var(--teal, var(--accent));
   color: var(--accent-ink);
@@ -2726,7 +2726,7 @@ body.resizing {
 }
 
 .ah-mt {
-  font-size: 8.5px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
@@ -2771,12 +2771,12 @@ body.resizing {
 
 .ah-mi .ah-time {
   flex: none;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
 .ah-none {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-faint);
   padding: 10px 9px;
   text-align: center;
@@ -2882,7 +2882,7 @@ body.resizing {
 }
 .rpt-sec-id {
   flex: none;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--teal);
   background: var(--teal-dim);
   border: 1px solid var(--teal);
@@ -2915,7 +2915,7 @@ body.resizing {
 .rpt-chart .axis { stroke: var(--line-strong); stroke-width: 1; }
 .rpt-chart .ax-lab {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 11px;
   fill: var(--ink-dim);
 }
 .rpt-chart.empty {
@@ -3159,7 +3159,7 @@ body.resizing {
   flex: none;
 }
 .model-item .mi-provider {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -3168,7 +3168,7 @@ body.resizing {
   flex: none;
 }
 .model-item .mi-model {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   font-family: 'JetBrains Mono', monospace;
   flex: 1;
@@ -3190,7 +3190,7 @@ body.resizing {
   background: rgba(0, 0, 0, 0.015);
 }
 .cap-badge {
-  font-size: 8.5px;
+  font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
   padding: 1px 6px;
   border-radius: 6px;
@@ -3274,14 +3274,14 @@ body.resizing {
   box-shadow: 0 0 0 3px var(--teal-dim);
 }
 .model-edit .me-row .hint {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   font-family: 'JetBrains Mono', monospace;
   line-height: 1.6;
 }
 /* 推理能力 = 只读展示（测试连接探测出的结果，非开关） */
 .model-edit .me-row .re-status {
-  flex: none; font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  flex: none; font-family: 'JetBrains Mono', monospace; font-size: 11px;
   padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
   color: var(--ink-faint); background: var(--bg-2);
 }
@@ -3306,7 +3306,7 @@ body.resizing {
 /* 测试结果独立成行，避免挤压/顶歪 测试连接 / 取消 / 保存 按钮 */
 .model-edit .me-test {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   padding: 7px 10px;
   border-radius: 8px;
@@ -3380,7 +3380,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: 11px;
   padding: 4px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -3398,7 +3398,7 @@ body.g-panning .gcanvas {
   position: absolute;
   top: 16px;
   left: 216px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 .g-hint b {
@@ -3416,7 +3416,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 7px 12px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
 }
 .g-legend i {
@@ -3440,7 +3440,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 2px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
 }
 .g-zoom button {
@@ -3459,7 +3459,7 @@ body.g-panning .gcanvas {
 .g-zoom span {
   padding: 0 6px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 /* 检查器 */
@@ -3516,7 +3516,7 @@ body.g-panning .gcanvas {
   overflow: auto;
 }
 .gi-fld {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: var(--void-4);
   border-radius: 5px;
@@ -3530,14 +3530,14 @@ body.g-panning .gcanvas {
   font-style: normal;
   color: var(--ink-faint);
   margin-left: 4px;
-  font-size: 8px;
+  font-size: 11px;
 }
 .gi-comment {
   background: var(--accent-dim);
   border: 1px solid rgba(124, 140, 255, 0.25);
   border-radius: 6px;
   padding: 5px 8px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--accent-soft);
   margin-bottom: 7px;
   line-height: 1.5;
@@ -3549,7 +3549,7 @@ body.g-panning .gcanvas {
   margin-bottom: 8px;
 }
 .gi-tag {
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--accent-soft);
   background: rgba(124, 140, 255, 0.1);
   border-radius: 99px;
@@ -3570,7 +3570,7 @@ body.g-panning .gcanvas {
   color: var(--ink-dim);
   border-radius: 6px;
   padding: 5px 0;
-  font-size: 9px;
+  font-size: 11px;
   cursor: pointer;
   transition: all var(--dur) var(--ease);
 }
@@ -3607,7 +3607,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: 11px;
   text-align: left;
   padding: 6px 10px;
   border-radius: 5px;
@@ -3636,7 +3636,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 10px;
+  font-size: 11px;
   padding: 4px 12px;
   border-radius: 7px;
   cursor: pointer;
@@ -3652,7 +3652,7 @@ body.g-panning .gcanvas {
   font-weight: 600;
 }
 .ws-crumb {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3660,7 +3660,7 @@ body.g-panning .gcanvas {
   max-width: 280px;
 }
 .ws-empty-hint {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
@@ -3719,7 +3719,7 @@ body.g-panning .gcanvas {
   transform: scale(1.35);
 }
 .er-caption {
-  font-size: 7.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   font-family: var(--font-mono);
 }
@@ -3743,7 +3743,7 @@ body.g-panning .gcanvas {
   gap: 6px;
   flex: none;
   max-width: 240px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: var(--void-3);
   border: 1px solid var(--line);
@@ -3763,7 +3763,7 @@ body.g-panning .gcanvas {
 }
 .ws-tab-ic {
   color: var(--accent-soft);
-  font-size: 9px;
+  font-size: 11px;
 }
 .ws-tab-t {
   overflow: hidden;
@@ -3774,7 +3774,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 11px;
   cursor: pointer;
   padding: 1px 3px;
   border-radius: 4px;
@@ -3803,7 +3803,7 @@ body.g-panning .gcanvas {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   padding: 4px 8px;
   border-radius: 6px;
@@ -3826,7 +3826,7 @@ body.g-panning .gcanvas {
 }
 .think-line .step-arrow {
   color: var(--ink-faint);
-  font-size: 8px;
+  font-size: 11px;
 }
 @keyframes gspin {
   to { transform: rotate(360deg); }
@@ -3841,13 +3841,13 @@ body.g-panning .gcanvas {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 9px;
+  font-size: 11px;
   margin-bottom: 6px;
 }
 .risk-panel .rp-title {
   color: var(--amber);
   font-weight: 600;
-  font-size: 9.5px;
+  font-size: 11px;
 }
 .risk-panel .rp-line {
   color: var(--ink-dim);
@@ -3864,7 +3864,7 @@ body.g-panning .gcanvas {
 /* 已执行留痕 */
 .exec-stamp {
   color: var(--green);
-  font-size: 9px;
+  font-size: 11px;
   padding: 3px 0;
 }
 .c-p.done {
@@ -3882,7 +3882,7 @@ body.g-panning .gcanvas {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--accent-soft);
   background: var(--accent-dim);
   border: 1px solid rgba(124, 140, 255, 0.35);
@@ -3893,7 +3893,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   color: var(--accent-soft);
-  font-size: 8px;
+  font-size: 11px;
   cursor: pointer;
   padding: 1px 3px;
   border-radius: 4px;
@@ -3913,7 +3913,7 @@ body.g-panning .gcanvas {
   border: 1px dashed rgba(124, 140, 255, 0.4);
   background: transparent;
   color: var(--accent-soft);
-  font-size: 8.5px;
+  font-size: 11px;
   border-radius: 99px;
   padding: 2px 9px;
   cursor: pointer;
@@ -3945,7 +3945,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   z-index: 5;
 }
@@ -3958,7 +3958,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: 11px;
   padding: 3px 10px;
   border-radius: 6px;
   cursor: pointer;
@@ -3973,7 +3973,7 @@ body.g-panning .gcanvas {
   cursor: not-allowed;
 }
 .gi-gov {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--amber);
   background: var(--amber-dim);
   border-radius: 99px;
@@ -3986,7 +3986,7 @@ body.g-panning .gcanvas {
   display: block;
   margin-top: 3px;
   color: var(--amber);
-  font-size: 8px;
+  font-size: 11px;
 }
 .gi-note-edit {
   display: flex;
@@ -3999,7 +3999,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  font-size: 9px;
+  font-size: 11px;
   padding: 6px 8px;
   resize: vertical;
   outline: none;
@@ -4027,7 +4027,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   cursor: pointer;
-  font-size: 8px;
+  font-size: 11px;
   margin-left: 3px;
   padding: 0 2px;
 }
@@ -4044,7 +4044,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  font-size: 9px;
+  font-size: 11px;
   padding: 4px 8px;
   outline: none;
 }
@@ -4079,7 +4079,7 @@ body.g-panning .gcanvas {
   color: var(--ink);
 }
 .sp-badge {
-  font-size: 8px;
+  font-size: 11px;
   border-radius: 99px;
   padding: 1px 7px;
   flex: none;
@@ -4105,7 +4105,7 @@ body.g-panning .gcanvas {
   background: var(--red-dim);
 }
 .sp-desc {
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4150,7 +4150,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: 11px;
   padding: 3px 9px;
   border-radius: 6px;
   cursor: pointer;
@@ -4172,7 +4172,7 @@ body.g-panning .gcanvas {
   gap: 10px;
 }
 .sp-label {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   width: 52px;
   flex: none;
@@ -4191,7 +4191,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   padding: 4px 8px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   cursor: pointer;
   transition: all var(--dur) var(--ease);
@@ -4206,11 +4206,11 @@ body.g-panning .gcanvas {
   font-weight: 600;
 }
 .sp-tool-d {
-  font-size: 8px;
+  font-size: 11px;
   opacity: 0.75;
 }
 .sp-trig {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--amber);
   background: var(--amber-dim);
   border-radius: 6px;
@@ -4218,7 +4218,7 @@ body.g-panning .gcanvas {
 }
 .sp-prompt {
   flex: 1;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   background: var(--void-4);
   border-radius: 6px;
@@ -4232,7 +4232,7 @@ body.g-panning .gcanvas {
   border: 1px dashed var(--accent);
   background: transparent;
   color: var(--accent-soft);
-  font-size: 10px;
+  font-size: 11px;
   padding: 8px;
   border-radius: 8px;
   cursor: pointer;
@@ -4261,7 +4261,7 @@ body.g-panning .gcanvas {
   gap: 10px;
 }
 .sp-f-row label {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-faint);
   width: 52px;
   flex: none;
@@ -4272,7 +4272,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
   padding: 6px 9px;
   outline: none;
   font-family: inherit;
@@ -4281,12 +4281,12 @@ body.g-panning .gcanvas {
   border-color: var(--accent);
 }
 .sp-hint {
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 .sp-error {
   color: var(--red);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 .sp-f-acts {
   display: flex;
@@ -4307,7 +4307,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 6px 12px;
-  font-size: 9.5px;
+  font-size: 11px;
   color: var(--ink-dim);
   z-index: 5;
 }
@@ -4318,7 +4318,7 @@ body.g-panning .gcanvas {
 }
 .gbb-empty {
   color: var(--ink-faint);
-  font-size: 9px;
+  font-size: 11px;
 }
 .gbb-chip {
   display: inline-flex;
@@ -4328,7 +4328,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--green);
   border-radius: 99px;
   padding: 2px 6px 2px 10px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--green);
   font-family: var(--font-mono);
 }
@@ -4336,7 +4336,7 @@ body.g-panning .gcanvas {
   border: 0;
   background: transparent;
   color: var(--green);
-  font-size: 8px;
+  font-size: 11px;
   cursor: pointer;
   padding: 1px 3px;
   border-radius: 4px;
@@ -4386,7 +4386,7 @@ body.g-panning .gcanvas {
 }
 .gsk-warn {
   color: var(--amber);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 400;
 }
 .gsk-ta {
@@ -4411,7 +4411,7 @@ body.g-panning .gcanvas {
 }
 .gsk-tip {
   flex: 1;
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 .g-qnode:hover rect {
@@ -4432,7 +4432,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   padding: 8px 10px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
   color: var(--ink-dim);
   overflow-x: auto;
@@ -4449,12 +4449,12 @@ body.g-panning .gcanvas {
 .rpt-meta-tip {
   margin-left: 10px;
   color: var(--ink-faint);
-  font-size: 8.5px;
+  font-size: 11px;
 }
 
 /* ============ V2 敏感名单 ============ */
 .sens-tag {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--red);
   background: var(--red-dim);
   border-radius: 99px;
@@ -4476,7 +4476,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--ink);
-  font-size: 10px;
+  font-size: 11px;
   padding: 5px 9px;
   outline: none;
 }
@@ -4484,7 +4484,7 @@ body.g-panning .gcanvas {
   border-color: var(--red);
 }
 .sens-hint {
-  font-size: 8.5px;
+  font-size: 11px;
   color: var(--ink-faint);
 }
 
@@ -4507,7 +4507,7 @@ body.g-panning .gcanvas {
   z-index: 5;
 }
 .ghb-label {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ink-dim);
   font-weight: 600;
 }
@@ -4518,7 +4518,7 @@ body.g-panning .gcanvas {
   border: 1px solid var(--line-strong);
   background: transparent;
   color: var(--ink-dim);
-  font-size: 9px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -4535,11 +4535,11 @@ body.g-panning .gcanvas {
 }
 .ghb-n {
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   opacity: 0.8;
 }
 .ghb-hint {
-  font-size: 8px;
+  font-size: 11px;
   color: var(--ink-faint);
   margin-left: 6px;
 }
@@ -4592,7 +4592,7 @@ body.g-panning .gcanvas {
 .kb-gate-x:hover { color: var(--ink); background: var(--void-1); }
 .kb-badge {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 20px;
   border: 1px solid var(--line-strong);
@@ -4642,7 +4642,7 @@ body.g-panning .gcanvas {
   transition: width 300ms var(--ease);
 }
 .kb-bar-stage {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ink-dim);
   text-align: right;
 }

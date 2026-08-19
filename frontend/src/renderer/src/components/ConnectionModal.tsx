@@ -145,7 +145,7 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
             <div className="fld">
               <label>SQLite 文件路径</label>
               <input value={form.file} onChange={(e) => set('file', e.target.value)} placeholder="~/.tabletalk/demo.db" />
-              <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 10.5, color: 'var(--ink-dim)' }}>
+              <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: 'var(--ink-dim)' }}>
                 SQLite 无“库”概念：测试 = 文件可读且能列出表
               </div>
             </div>
@@ -186,12 +186,12 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
             <input value={form.sensitive} onChange={(e) => set('sensitive', e.target.value)} placeholder="payroll_*, *secret*" />
           </div>
           {testMsg && (
-            <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 10.5, color: testMsg.ok ? 'var(--accent)' : 'var(--danger, #e57)' }}>
+            <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: testMsg.ok ? 'var(--accent)' : 'var(--danger, #e57)' }}>
               {testMsg.text}
             </div>
           )}
           {!canSave && testedAt !== null && (
-            <div className="note" style={{ fontSize: 10.5, color: 'var(--ink-dim)' }}>
+            <div className="note" style={{ fontSize: 12, color: 'var(--ink-dim)' }}>
               表单已改动，需重新测试
             </div>
           )}

@@ -168,7 +168,7 @@ export function KnowledgeGraph({ overview, highlight, onSelect }: Props): React.
         <div className="kg2-inspector">
           <div className="kg2-insp-head">
             <span className="mono" style={{ fontWeight: 600 }}>{selTable.name}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'var(--ink-faint)' }}>{selTable.column_count} 列</span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--ink-faint)' }}>{selTable.column_count} 列</span>
             <button className="kg2-insp-x" onClick={() => setSelected(null)}>✕</button>
           </div>
           <div className="kg2-insp-comment">{selTable.comment || <span className="kg2-none">无注释</span>}</div>

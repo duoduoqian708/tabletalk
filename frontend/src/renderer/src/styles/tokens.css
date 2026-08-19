@@ -1,69 +1,89 @@
 :root {
-  /* ── Void 深色调色板 ── */
-  --void-0: #0a0b0e; /* 应用底色 */
-  --void-1: #0d0e12; /* 面板 / 栏 */
-  --void-2: #111318; /* 浮层面板 */
-  --void-3: #14161d; /* 卡片 */
-  --void-4: #1c1f27; /* hover */
-  --void-5: #232936; /* 输入底 / 活动 */
-  --ink: #e8eaf0; /* 主文字 */
-  --ink-dim: #8b93a3; /* 次要文字 */
-  --ink-faint: #5b6472; /* 弱化文字 */
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.14);
-  --accent: #7c8cff; /* 电光紫强调 */
-  --accent-dim: rgba(124, 140, 255, 0.14);
-  --accent-soft: #aeb6ff;
-  --accent-ink: #0a0b0e; /* 强调色上的文字 */
-  --green: #6ee7b7;
-  --green-dim: rgba(110, 231, 183, 0.12);
-  --amber: #f6ad55;
-  --amber-dim: rgba(246, 173, 85, 0.12);
-  --red: #f87171;
-  --red-dim: rgba(248, 113, 113, 0.12);
-  --blue: #7c8cff;
-  --blue-dim: rgba(124, 140, 255, 0.14);
+  /* ── 深空仪表台 · 高对比 Void ──
+     可读性优先：正文 ≥13px，最小 11px；弱化文字对比度 ≥4.5:1；
+     层次靠「面板亮度差 + 1px 微光边」，不靠低透明度文字。 */
+  --void-0: #08090d; /* 应用底色（近纯黑，收敛径向渐变） */
+  --void-1: #0e1015; /* 面板 */
+  --void-2: #13161d; /* 浮层 / 卡片 */
+  --void-3: #181c25; /* 卡片高亮 / 输入底 */
+  --void-4: #1e2330; /* hover */
+  --void-5: #2a3040; /* 活动 / 选中底 */
 
-  /* ── V1 兼容别名（迁移期使用，逐步替换后删除） ── */
+  --ink: #f2f4f8;        /* 主文字（近白） */
+  --ink-dim: #aeb6c6;    /* 次要文字 12px+ 可读 */
+  --ink-faint: #7e8798;  /* 弱化文字（11px 仍可读，≥4.5:1） */
+  --ink-strong: #ffffff; /* 强调文字 */
+
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --line-soft: rgba(255, 255, 255, 0.04);
+
+  --accent: #8b98ff;      /* 电光紫（提亮一档） */
+  --accent-bright: #aab4ff;
+  --accent-dim: rgba(139, 152, 255, 0.16);
+  --accent-soft: #c3caff;
+  --accent-ink: #0a0c14;  /* 强调底上的文字 */
+  --accent-glow: rgba(139, 152, 255, 0.35);
+
+  --green: #7ce8b5;
+  --green-dim: rgba(124, 232, 181, 0.14);
+  --amber: #ffc46b;
+  --amber-dim: rgba(255, 196, 107, 0.14);
+  --red: #ff8a8a;
+  --red-dim: rgba(255, 138, 138, 0.14);
+  --blue: #8b98ff;
+  --blue-dim: rgba(139, 152, 255, 0.16);
+
+  /* ── V1 兼容别名 ── */
   --bg: var(--void-0);
   --bg-2: var(--void-1);
   --panel: var(--void-1);
-  --card: var(--void-3);
+  --card: var(--void-2);
   --card-hi: var(--void-4);
   --rail: var(--void-1);
   --teal: var(--accent);
   --teal-dim: var(--accent-dim);
 
   /* ── 几何 ── */
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 12px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
   --r-full: 99px;
-  --shadow-1: 0 2px 12px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --shadow-1: 0 2px 14px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 10px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
-  --topbar-h: 42px;
-  --rail-w: 36px;
-  --ai-w: 340px;
+  --topbar-h: 48px;
+  --rail-w: 40px;
+  --ai-w: 380px;
   --z-sticky: 30;
   --z-pop: 60;
   --z-modal: 90;
   --z-drawer: 100;
-  --ease: cubic-bezier(0.2, 0.8, 0.24, 1);
+  --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
   --dur: 160ms;
 
-  /* ── 域色（图谱） ── */
-  --domain-1: #7c8cff;
-  --domain-2: #6ee7b7;
-  --domain-3: #f6ad55;
+  /* ── 字号阶梯（最小 11px） ── */
+  --fs-1: 11px;  /* 徽标 / 角标 */
+  --fs-2: 12px;  /* 辅助 / 元信息 */
+  --fs-3: 13px;  /* 正文小 */
+  --fs-4: 14px;  /* 正文 */
+  --fs-5: 16px;  /* 小节标题 */
+  --fs-6: 20px;  /* 面板标题 */
+  --fs-7: 30px;  /* 大标题 */
 
-  /* ── 字体 ── */
-  --font-sans: 'Hanken Grotesk', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  /* ── 域色（图谱） ── */
+  --domain-1: #8b98ff;
+  --domain-2: #7ce8b5;
+  --domain-3: #ffc46b;
+
+  /* ── 字体：Sora(展示) + Manrope(正文) + IBM Plex Mono(数据) ── */
+  --font-display: 'Sora', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Manrope', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 }
 
 * {
@@ -80,18 +100,28 @@ body,
 
 body {
   font-family: var(--font-sans);
+  font-size: var(--fs-4);
+  line-height: 1.55;
   background:
-    radial-gradient(1100px 500px at 88% -8%, rgba(124, 140, 255, 0.05), transparent 60%),
-    radial-gradient(900px 460px at -6% 108%, rgba(124, 140, 255, 0.03), transparent 55%),
+    radial-gradient(1200px 560px at 86% -10%, rgba(139, 152, 255, 0.07), transparent 62%),
+    radial-gradient(900px 500px at -8% 110%, rgba(139, 152, 255, 0.045), transparent 55%),
     var(--void-0);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   overflow: hidden;
   user-select: none;
+  /* 细腻噪点：赋予深空质感 */
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.025 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(1200px 560px at 86% -10%, rgba(139, 152, 255, 0.07), transparent 62%),
+    radial-gradient(900px 500px at -8% 110%, rgba(139, 152, 255, 0.045), transparent 55%),
+    var(--void-0);
 }
 
 ::selection {
-  background: rgba(124, 140, 255, 0.25);
+  background: rgba(139, 152, 255, 0.3);
+  color: var(--ink-strong);
 }
 
 .mono {
@@ -107,10 +137,10 @@ textarea {
   font-family: inherit;
 }
 
-/* 滚动条 */
+/* 滚动条（更纤细、高对比） */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-thumb {
   background: var(--void-5);
@@ -119,9 +149,16 @@ textarea {
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #3a4150;
+  background-color: #39415a;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* 焦点环：全站统一的键盘可达性 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
 }

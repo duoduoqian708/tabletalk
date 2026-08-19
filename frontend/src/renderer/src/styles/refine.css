@@ -1,0 +1,436 @@
+/* ============================================================
+   深空仪表台 · 设计系统精修层
+   统一升级：appbar 品牌 / 按钮体系 / 输入框 / 面板 / AI 栏 /
+   SQL 卡 / 数据表 / 图谱 / 动效。覆盖在 app.css 之后加载。
+   ============================================================ */
+
+/* ── 顶栏：品牌 + 导航 ── */
+.appbar {
+  height: var(--topbar-h);
+  gap: 12px;
+  padding: 0 16px;
+  background: rgba(14, 16, 21, 0.85);
+  border-bottom: 1px solid var(--line-strong);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+}
+.appbar .wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  color: var(--ink-strong);
+  gap: 10px;
+}
+.appbar .wordmark .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.appbar .wordmark small {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  padding: 2px 7px;
+  border-radius: 6px;
+  margin-left: 2px;
+}
+.appbar .tab {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 7px 14px;
+  border-radius: 10px;
+  color: var(--ink-dim);
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.appbar .tab:hover {
+  color: var(--ink);
+  background: var(--void-2);
+}
+.appbar .tab.on {
+  color: var(--ink-strong);
+  background: linear-gradient(180deg, rgba(139, 152, 255, 0.14), rgba(139, 152, 255, 0.06));
+}
+.appbar .tab.on::after {
+  left: 14px;
+  right: 14px;
+  bottom: 3px;
+  height: 2.5px;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+.appbar .gw,
+.appbar .cur-table {
+  font-size: 12px;
+}
+.gw-provider {
+  color: var(--ink-strong);
+}
+
+/* ── 按钮体系 ── */
+.btn {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  letter-spacing: 0.01em;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn.save {
+  background: linear-gradient(135deg, var(--accent) 0%, #6d7cff 100%);
+  color: var(--accent-ink);
+  box-shadow: 0 4px 18px rgba(139, 152, 255, 0.28);
+}
+.btn.save:hover {
+  box-shadow: 0 6px 24px rgba(139, 152, 255, 0.42);
+  filter: brightness(1.08);
+}
+.btn.tl {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent-soft);
+}
+.btn.tl:hover {
+  background: var(--accent-dim);
+}
+.btn.ghost {
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-dim);
+}
+.btn.ghost:hover {
+  color: var(--ink);
+  background: var(--void-4);
+}
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.iconbtn {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 7px 12px;
+  border-radius: 9px;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  background: var(--void-1);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.iconbtn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--void-3);
+}
+.iconbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ── 输入框 ── */
+.rs-input,
+.kb-search input,
+.modal input[type='text'],
+.modal input[type='password'],
+.modal input:not([type]) {
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--void-1);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.rs-input:focus,
+.kb-search input:focus,
+.modal input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.modal input::placeholder,
+.rs-input::placeholder,
+.compose-input::placeholder {
+  color: var(--ink-faint);
+  opacity: 1;
+}
+
+/* ── 模态 / 抽屉 ── */
+.modal {
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-2);
+  border-radius: 16px;
+  background: linear-gradient(170deg, var(--void-2), var(--void-1));
+}
+.modal .mh {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.modal .mh .t {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.modal .mb {
+  padding: 18px 20px;
+  font-size: 13px;
+}
+.modal .mb label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  letter-spacing: 0.03em;
+}
+.modal .mb .fld input {
+  font-size: 13px;
+  padding: 9px 12px;
+}
+.modal .mf {
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  gap: 10px;
+}
+.modal-mask {
+  backdrop-filter: blur(6px);
+  background: rgba(5, 6, 9, 0.6);
+}
+
+/* ── AI 栏 ── */
+.airail {
+  border-left: 1px solid var(--line-strong);
+  background-color: var(--void-1);
+  background-image: linear-gradient(180deg, rgba(14, 16, 21, 0.96), rgba(10, 11, 15, 0.98));
+}
+.compose-input {
+  font-size: 13.5px;
+  line-height: 1.5;
+  background: var(--void-2) !important;
+  border: 1px solid var(--line-strong) !important;
+  border-radius: 12px !important;
+  padding: 11px 14px !important;
+  color: var(--ink) !important;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.compose-input:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-dim) !important;
+}
+.airail .send {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent), #6d7cff);
+  color: var(--accent-ink);
+  border: none;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  box-shadow: 0 3px 14px rgba(139, 152, 255, 0.25);
+}
+.airail .send:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 5px 20px rgba(139, 152, 255, 0.4);
+}
+
+/* ── 对话轮次 ── */
+.turn-text {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+.turn-user {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink-strong);
+}
+
+/* ── SQL 卡 ── */
+.sql {
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--void-2);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.sql:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+.sql .sq-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 10px;
+  border-radius: 99px;
+}
+.sql .sq-sql {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.sql.allow { border-left: 3px solid var(--green); }
+.sql.review { border-left: 3px solid var(--amber); }
+.sql.block { border-left: 3px solid var(--red); }
+
+/* 风险面板 */
+.risk-panel {
+  border-radius: 10px;
+  border: 1px solid var(--amber-dim);
+  background: linear-gradient(180deg, rgba(255, 196, 107, 0.08), rgba(255, 196, 107, 0.02));
+}
+.risk-panel .rp-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+}
+.risk-panel .rp-line {
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+}
+.exec-stamp {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--green);
+  background: var(--green-dim);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+/* ── 数据表 ── */
+.dt-head th {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--ink-dim);
+  background: var(--void-2);
+}
+.dt-body td {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dt-row:hover {
+  background: var(--void-3);
+}
+
+/* ── 知识库页 ── */
+.kb-topbar {
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, rgba(19, 22, 29, 0.9), rgba(14, 16, 21, 0.9));
+  padding: 10px 14px;
+}
+.kb-left,
+.kb-right {
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+}
+.rv-table-row {
+  font-size: 13px;
+}
+.rv-table-row .tname {
+  font-size: 13px;
+  font-weight: 600;
+}
+.rv-desc .desc-text {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+.rv-col .cname {
+  font-size: 12px;
+}
+.rv-col .ccomment {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* ── 图谱画布 ── */
+.kg2-node .kg2-label {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: rgba(8, 9, 13, 0.9);
+  stroke-width: 3px;
+}
+.kg2-edge-label {
+  fill: var(--ink-dim);
+}
+.kg2-btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 8px;
+}
+
+/* ── 徽标 / 状态点 ── */
+.kb-badge,
+.emb-state {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 99px;
+}
+.emb-state.off {
+  color: var(--ink-dim);
+  background: var(--void-2);
+  border: 1px solid var(--line);
+}
+.emb-state.on {
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid rgba(124, 232, 181, 0.25);
+}
+
+/* ── 空状态 / 引导 ── */
+.onboarding .big {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.onboarding .hint {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink-dim);
+}
+.onboarding .kicker {
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: var(--accent-soft);
+}
+
+/* ── 面板标题统一 ── */
+.rv-panel-head,
+.kb-tabs,
+.rr-h {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+/* ── 页切入场（轻量、克制） ── */
+.stage {
+  animation: stage-in 240ms var(--ease);
+}
+@keyframes stage-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
