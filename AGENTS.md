@@ -17,6 +17,9 @@ easy-to-miss, verified facts.
 ## Backend commands
 
 ```bash
+# 一键启动（从零到可用：自动建 venv → 装依赖 → 构建前端 → 起 sidecar → 开浏览器）
+python3 backend/cleared.py        # 重复运行幂等秒起；--check 只检查环境
+
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python scripts/seed_demo_db.py     # creates ~/.cleared/demo.db demo DB

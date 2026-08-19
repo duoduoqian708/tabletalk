@@ -7,4 +7,5 @@ psycopg[binary]==3.2.3
 aiomysql==0.2.0
 httpx==0.28.1
 python-dotenv==1.0.1
-numpy
+numpy==2.5.2
+sqlite-vec==0.1.9

@@ -13,6 +13,9 @@ AI-first database query tool (self-hosting Web) for developers. Hero feature: na
 ## Commands (backend)
 
 ```bash
+# 一键启动（推荐）：自动 venv + 依赖 + 前端构建 + 起服务 + 开浏览器，幂等秒起
+python3 backend/cleared.py
+
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python scripts/seed_demo_db.py     # 生成 ~/.cleared/demo.db 演示库
