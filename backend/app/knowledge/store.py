@@ -236,6 +236,9 @@ class KnowledgeBase:
         """
         cur = self._emb_fingerprint()
         stored = self._artifact_fingerprint.get(conn_id, "")
+        # 无条件同步嵌入器到当前配置：进程重启后 _emb 可能仍是默认哈希嵌入器，
+        # 即使指纹一致不重嵌，查询向量维度也必须与库中一致（避免 matmul 不匹配）。
+        self._emb = self._embedder()
         # 维度自愈：活跃文档向量维度混杂（旧模型残留）也触发重嵌，避免检索 matmul 不匹配。
         # 只统计活跃文档（archived 残留向量不参与检索，不触发重嵌循环）。
         active_ids = {d.id for d in self._docs(conn_id)}
@@ -248,7 +251,6 @@ class KnowledgeBase:
         schema = self._schema.get(conn_id)
         if schema is None:
             return False
-        self._emb = self._embedder()  # 用当前嵌入模型重嵌（修复旧嵌入器残留）
         # 顺带清理归档文档的残留向量（不在活跃文档集合）
         self._vec[conn_id] = {k: v for k, v in self._vec.get(conn_id, {}).items() if k in active_ids}
         await self._embed_docs(conn_id, self._docs(conn_id))

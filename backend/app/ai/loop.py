@@ -17,7 +17,7 @@ from app.ai.intent import MODE_QUERY, MODE_REPORT
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
 from app.ai.dto import ChatRequest
-from app.ai.skills.registry import skill_tool_schemas
+from app.ai.skills.registry import get_skill, skill_tool_schemas
 from app.ai.tools import execute_tool
 from app.core.schema import get_schema
 from app.core.sensitive import filter_sensitive
@@ -95,6 +95,11 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         {"role": "system", "content": context},
         *_normalize_messages(req.messages),
     ]
+    # 技能注入：自定义技能的 system_prompt（使用指导书）在上下文后追加，指导本次执行
+    if req.skill_id:
+        skill = get_skill(req.skill_id)
+        if skill is not None and skill.system_prompt:
+            messages.insert(2, {"role": "system", "content": skill.system_prompt})
 
     yield {"type": "turn_start", "connection": conn_id}
     # 四步展示的阶段元数据：意图 + 候选表（始终下发，未命中路由则如实空态——结构恒可见、零定制）

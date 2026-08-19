@@ -5,10 +5,17 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.schema import get_schema, sample_values
+from app.core.sensitive import filter_sensitive
 from app.knowledge.annotator import annotate_domain, annotate_knowledge
 from app.state import get_state
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
+
+
+async def _kb_schema(state, conn_id: str, refresh: bool = False) -> dict:
+    """取结构并应用连接级敏感名单（屏蔽表/列不进知识库文档/向量/图谱）。"""
+    cfg = state.connections.get(conn_id)
+    return filter_sensitive(await get_schema(state, conn_id, refresh=refresh), cfg.sensitive)
 
 
 class AnnotateRequest(BaseModel):
@@ -65,7 +72,7 @@ async def build_index(conn_id: str) -> dict:
 
     async def _run(report):
         report("发现结构", 5)
-        schema = await get_schema(state, conn_id)
+        schema = await _kb_schema(state, conn_id)
         report("发现结构", 10)
         rt = state.runtime.get()
         samples: dict[str, dict[str, list]] = {}
@@ -132,7 +139,7 @@ async def sync_kb(conn_id: str) -> dict:
         })
     if state.build_jobs.is_running(conn_id):
         raise HTTPException(status_code=409, detail="构建/同步已在运行")
-    schema = await get_schema(state, conn_id, refresh=True)  # 手动检查：强制最新结构
+    schema = await _kb_schema(state, conn_id, refresh=True)  # 手动检查：强制最新结构
     if not state.knowledge.needs_sync(conn_id, schema):
         return {
             "changed": False, "tables_added": 0, "tables_removed": 0,

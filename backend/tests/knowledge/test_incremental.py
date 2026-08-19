@@ -167,3 +167,29 @@ async def test_sync_no_change_zero_side_effect(tmp_path):
     assert r["changed"] is False
     assert len(kb.list_docs("c1")) == docs_before
     assert len(kb.graph("c1")["edges"]) == edges_before
+
+
+async def test_filter_sensitive_tables_and_columns(tmp_path):
+    """敏感名单：表名与顶层列名 glob 均被剔除，FK 悬空清理。"""
+    from app.core.sensitive import filter_sensitive
+
+    schema = {
+        "tables": [
+            {"name": "orders", "kind": "table", "column_count": 3},
+            {"name": "secret_log", "kind": "table", "column_count": 2},
+        ],
+        "columns": [
+            {"table": "orders", "name": "id", "type": "int"},
+            {"table": "orders", "name": "customer_email", "type": "text"},
+            {"table": "secret_log", "name": "id", "type": "int"},
+        ],
+        "foreign_keys": [
+            {"table": "orders", "column": "customer_id", "ref_table": "secret_log", "ref_column": "id"},
+        ],
+    }
+    out = filter_sensitive(schema, ["secret_*", "*email*"])
+    assert [t["name"] for t in out["tables"]] == ["orders"]
+    assert [c["name"] for c in out["columns"]] == ["id"]
+    assert out["foreign_keys"] == []  # 引用了被剔除表的 FK 移除
+    # 无名单 → 原样返回（同一对象）
+    assert filter_sensitive(schema, []) is schema

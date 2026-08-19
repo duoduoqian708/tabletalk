@@ -57,6 +57,14 @@ async def _run_query(state, args, conn_id, include_data=False):
 
 async def _run_dml(state, args, conn_id, include_data=False):
     _cfg, dialect = _get_ctx(state, conn_id)
+    # 只读连接硬边界：AI 不生成写卡（最终执行也会被 POST /query 拦截，这里提前告知）
+    if _cfg.read_only:
+        return ToolOutcome(
+            result={"ok": False, "verdict": "block", "reason": "该连接标记为只读，禁止写操作"},
+            card={"tier": "dml", "verdict": "block", "sql": args.get("sql", ""),
+                  "sub": "只读连接", "reason": "该连接标记为只读，禁止写操作"},
+            think="只读连接，写操作已拦截。",
+        )
     sql = args.get("sql", "")
     assessment = safety_gate.assess_sql(sql, dialect, Origin.AI)
     if assessment.verdict == Verdict.BLOCK:
