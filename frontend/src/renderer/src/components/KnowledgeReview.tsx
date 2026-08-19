@@ -3,6 +3,7 @@ import { retrieve, type KbDoc } from '@renderer/api/knowledge'
 import type { RouteResult } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
+import { toastMsg } from '@renderer/utils/toast'
 import { KnowledgeGraph } from './KnowledgeGraph'
 
 function Tag({ name, status, onConfirm, onReject }: {
@@ -45,6 +46,7 @@ export function KnowledgeReview(): React.JSX.Element {
   const [kdocs, setKdocs] = useState<KbDoc[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [buildPct, setBuildPct] = useState<number | null>(null)
+  const [syncing, setSyncing] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [confirming, setConfirming] = useState(false)
@@ -112,6 +114,25 @@ export function KnowledgeReview(): React.JSX.Element {
     setBuildPct(null)
   }
 
+  async function doSync(): Promise<void> {
+    if (!currentId) return
+    setSyncing(true)
+    try {
+      const { syncKb } = await import('@renderer/api/knowledge')
+      const r = await syncKb(currentId)
+      if (r.changed) {
+        toastMsg(`已同步：新增 ${r.tables_added} 表 · 变更 ${r.tables_changed} 表 · 删除 ${r.tables_removed} 表`)
+      } else {
+        toastMsg(r.message ?? '结构无变化')
+      }
+      await load(currentId)
+    } catch (e) {
+      toastMsg(`同步失败：${(e as Error).message}`)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   function beginEdit(table: string, comment: string): void {
     setEditing(table)
     setEditText(comment)
@@ -148,6 +169,14 @@ export function KnowledgeReview(): React.JSX.Element {
               <span className="emb-state on" title="用户配置的嵌入模型已生效">语义嵌入已启用</span>
             )}
             <span className="spacer" />
+            {overview.synced_at && (
+              <span className="kb-synced mono" title="最近一次结构增量同步时间">
+                上次同步 {overview.synced_at.replace('T', ' ').slice(5, 16)}
+              </span>
+            )}
+            <button className="iconbtn" onClick={() => void doSync()} disabled={busy} title="检查结构变化并增量同步">
+              {syncing ? '同步中…' : '检查更新'}
+            </button>
             <button className="iconbtn" onClick={() => void startBuild()} disabled={busy} title="重新构建（全自动）">
               {busy ? `构建中 ${buildPct ?? 0}%` : '重新构建'}
             </button>

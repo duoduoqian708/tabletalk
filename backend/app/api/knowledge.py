@@ -106,7 +106,7 @@ async def build_cancel(conn_id: str) -> dict:
 
 @router.get("/{conn_id}/status")
 async def kb_status(conn_id: str) -> dict:
-    """状态机查询：{kb_status, kb_updated_at, pending, building}。"""
+    """状态机查询：{kb_status, kb_updated_at, synced_at, pending, building}。"""
     _have(conn_id)
     state = get_state()
     cfg = state.connections.get(conn_id)
@@ -114,9 +114,39 @@ async def kb_status(conn_id: str) -> dict:
     return {
         "kb_status": cfg.kb_status,
         "kb_updated_at": cfg.kb_updated_at,
+        "synced_at": state.knowledge.synced_at(conn_id),
         "pending": state.knowledge.pending_counts(conn_id),
         "building": state.build_jobs.is_running(conn_id),
     }
+
+
+@router.post("/{conn_id}/sync")
+async def sync_kb(conn_id: str) -> dict:
+    """手动增量同步：指纹对比 → 变化则抽样 + 增量构建（返回 diff 摘要）。"""
+    _have(conn_id)
+    state = get_state()
+    cfg = state.connections.get(conn_id)
+    if cfg.kb_status != "ready":
+        raise HTTPException(status_code=409, detail={
+            "code": "kb_not_ready", "message": "知识库未就绪，无法同步",
+        })
+    if state.build_jobs.is_running(conn_id):
+        raise HTTPException(status_code=409, detail="构建/同步已在运行")
+    schema = await get_schema(state, conn_id, refresh=True)  # 手动检查：强制最新结构
+    if not state.knowledge.needs_sync(conn_id, schema):
+        return {
+            "changed": False, "tables_added": 0, "tables_removed": 0,
+            "tables_changed": 0, "message": "结构无变化",
+        }
+    rt = state.runtime.get()
+    samples: dict[str, dict[str, list]] = {}
+    if rt.kb_sample_rows > 0:
+        for t in schema["tables"]:
+            try:
+                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
+            except Exception:
+                samples[t["name"]] = {}
+    return await state.knowledge.sync(conn_id, schema, samples)
 
 
 @router.post("/{conn_id}/confirm-all")
@@ -146,7 +176,8 @@ async def overview(conn_id: str) -> dict:
     # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
     state.knowledge.ensure_loaded(conn_id)
     await state.knowledge.reembed_if_needed(conn_id)  # 用户更换嵌入模型 → 向量重嵌
-    return {**state.knowledge.overview(conn_id), "built": True, "kb_status": cfg.kb_status}
+    return {**state.knowledge.overview(conn_id), "built": True, "kb_status": cfg.kb_status,
+            "synced_at": state.knowledge.synced_at(conn_id)}
 
 
 @router.get("/{conn_id}/graph")

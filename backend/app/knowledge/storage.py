@@ -48,6 +48,9 @@ class KbSnapshot:
     table_tags: dict[str, list[str]] = field(default_factory=dict)
     schema: dict[str, Any] = field(default_factory=dict)
     emb_fingerprint: str = ""
+    schema_fingerprint: str = ""          # 结构指纹（增量对比用）
+    edge_tombstones: list[dict] = field(default_factory=list)  # 用户删除的 overlap 边（不复活）
+    synced_at: str = ""                   # 最近一次增量同步时间
 
 
 class KbStorage(Protocol):
@@ -104,6 +107,9 @@ class JsonStorage:
                 snap.table_tags = data.get("table_tags", {})
                 snap.schema = data.get("schema", {})
                 snap.emb_fingerprint = data.get("emb_fingerprint", "")
+                snap.schema_fingerprint = data.get("schema_fingerprint", "")
+                snap.edge_tombstones = data.get("edge_tombstones", [])
+                snap.synced_at = data.get("synced_at", "")
             except Exception:
                 pass
         return snap
@@ -131,6 +137,9 @@ class JsonStorage:
                 "table_tags": snap.table_tags,
                 "schema": snap.schema,
                 "emb_fingerprint": snap.emb_fingerprint,
+                "schema_fingerprint": snap.schema_fingerprint,
+                "edge_tombstones": snap.edge_tombstones,
+                "synced_at": snap.synced_at,
             }, ensure_ascii=False),
             encoding="utf-8",
         )
@@ -150,7 +159,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS docs (
   id TEXT PRIMARY KEY, kind TEXT, title TEXT, body TEXT,
   table_name TEXT, column_name TEXT, status TEXT, source TEXT, tags TEXT,
-  conn_id TEXT, updated_at TEXT
+  conn_id TEXT, updated_at TEXT, archived INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS edges (
   from_table TEXT, from_col TEXT, to_table TEXT, to_col TEXT,
@@ -212,6 +221,11 @@ class SqliteStorage:
 
     def _init(self, conn: Any) -> None:
         conn.executescript(_SCHEMA)
+        # 旧库迁移：docs 表补 archived 列（已存在则跳过）
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(docs)")}
+        if "archived" not in cols:
+            conn.execute("ALTER TABLE docs ADD COLUMN archived INTEGER DEFAULT 0")
+            conn.commit()
         if self._vec_ok:
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
@@ -237,6 +251,11 @@ class SqliteStorage:
             conn = self._conn()
             try:
                 snap.emb_fingerprint = self._meta(conn, "emb_fingerprint")
+                snap.schema_fingerprint = self._meta(conn, "schema_fingerprint")
+                snap.synced_at = self._meta(conn, "synced_at")
+                tombs = self._meta(conn, "edge_tombstones")
+                if tombs:
+                    snap.edge_tombstones = json.loads(tombs)
                 for row in conn.execute("SELECT * FROM docs"):
                     d = dict(row)
                     d["table"] = d.pop("table_name")
@@ -244,6 +263,7 @@ class SqliteStorage:
                     d["tags"] = json.loads(d.get("tags") or "[]")
                     d.setdefault("conn_id", self._conn_id)
                     d.setdefault("updated_at", "")
+                    d["archived"] = bool(d.get("archived"))
                     (snap.drafts if d["source"] == "ai_draft" else snap.auto if d["source"] != "user" else snap.user).append(d)
                 for row in conn.execute("SELECT * FROM edges"):
                     e = dict(row)
@@ -291,12 +311,12 @@ class SqliteStorage:
                 for src, docs in (("auto", snap.auto), ("drafts", snap.drafts), ("user", snap.user)):
                     for d in docs:
                         conn.execute(
-                            "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at, archived) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                             (d.get("id"), d.get("kind"), d.get("title"), d.get("body"),
                              d.get("table"), d.get("column"), d.get("status"), d.get("source", src),
                              json.dumps(d.get("tags") or [], ensure_ascii=False),
-                             d.get("conn_id"), d.get("updated_at", "")),
+                             d.get("conn_id"), d.get("updated_at", ""), int(bool(d.get("archived")))),
                         )
                 for e in snap.edges:
                     conn.execute(
@@ -315,6 +335,10 @@ class SqliteStorage:
                 for table, vec in snap.table_vec.items():
                     conn.execute("INSERT INTO table_embeddings (table_name, vec) VALUES (?,?)", (table, _f32_blob(vec)))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('emb_fingerprint', ?)", (snap.emb_fingerprint,))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('schema_fingerprint', ?)", (snap.schema_fingerprint,))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('synced_at', ?)", (snap.synced_at,))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('edge_tombstones', ?)",
+                             (json.dumps(snap.edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
                 # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）

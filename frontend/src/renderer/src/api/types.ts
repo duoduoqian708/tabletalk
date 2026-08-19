@@ -153,6 +153,7 @@ export interface GraphEdge {
 export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
+  synced_at?: string
   tables: ReviewTable[]
   columns: ReviewColumn[]
   graph: { edges: GraphEdge[] }

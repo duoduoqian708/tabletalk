@@ -108,3 +108,72 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
             state.connections.set_kb_status(conn_id, "none")
         job.progress.update({"stage": "失败", "percent": 0, "done": True, "error": str(e)})
         raise
+
+
+class SyncLoop:
+    """知识库增量同步周期任务：按 kb_sync_minutes 遍历 ready 连接，
+    指纹对比（get_schema 复用 30s 缓存）→ 有变化则抽样并增量同步。
+    与构建任务同连接互斥；失败静默（保持 ready，下周期再试）。
+    """
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+        self._sleep = 30  # 检查节拍（秒）；实际间隔由 kb_sync_minutes 控制
+
+    def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = None
+
+    async def tick(self) -> None:
+        from app.state import get_state  # noqa: PLC0415 - 延迟导入避免循环
+
+        state = get_state()
+        minutes = state.runtime.get().kb_sync_minutes
+        if minutes <= 0:
+            return
+        from app.core.schema import get_schema, sample_values  # noqa: PLC0415
+        rt = state.runtime.get()
+        for c in state.connections.list():
+            if c.kb_status != "ready":
+                continue
+            if state.build_jobs.is_running(c.id):
+                continue
+            try:
+                schema = await get_schema(state, c.id)
+                if not state.knowledge.needs_sync(c.id, schema):
+                    continue
+                samples = {}
+                if rt.kb_sample_rows > 0:
+                    for t in schema["tables"]:
+                        try:
+                            samples[t["name"]] = await sample_values(state, c.id, t["name"], rt.kb_sample_rows)
+                        except Exception:
+                            samples[t["name"]] = {}
+                result = await state.knowledge.sync(c.id, schema, samples)
+                if result.get("changed"):
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "[kb.sync] %s 增量同步：+%s表 -%s表 变更%s表",
+                        c.name, result.get("tables_added", 0),
+                        result.get("tables_removed", 0), result.get("tables_changed", 0),
+                    )
+            except Exception:  # noqa: BLE001 - 单个连接失败不影响其他
+                continue
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                try:
+                    await self.tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001
+                    pass
+                await asyncio.sleep(self._sleep)
+        except asyncio.CancelledError:
+            pass

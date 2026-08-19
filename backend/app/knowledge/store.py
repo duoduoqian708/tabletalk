@@ -45,6 +45,9 @@ class KnowledgeBase:
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
+        self._schema_fingerprint_map: dict[str, str] = {}                 # conn -> 结构指纹（增量对比）
+        self._edge_tombstones: dict[str, list[dict]] = {}                 # conn -> 用户删除的 overlap 边（不复活）
+        self._synced_at: dict[str, str] = {}                              # conn -> 最近增量同步时间
         self._vstore: dict[str, VectorStore] = {}                        # conn -> 统一向量索引（doc+table 归一，collection 区分）
         self._lock = threading.Lock()
 
@@ -84,6 +87,9 @@ class KnowledgeBase:
         self._table_tags[conn_id] = snap.table_tags
         self._schema[conn_id] = snap.schema
         self._artifact_fingerprint[conn_id] = snap.emb_fingerprint
+        self._schema_fingerprint_map[conn_id] = snap.schema_fingerprint
+        self._edge_tombstones[conn_id] = snap.edge_tombstones
+        self._synced_at[conn_id] = snap.synced_at
         self._rebuild_vstore(conn_id)
 
     def _save_conn(self, conn_id: str) -> None:
@@ -102,13 +108,17 @@ class KnowledgeBase:
                 table_tags=self._table_tags.get(conn_id, {}),
                 schema=self._schema.get(conn_id, {}),
                 emb_fingerprint=self._artifact_fingerprint.get(conn_id, ""),
+                schema_fingerprint=self._schema_fingerprint_map.get(conn_id, ""),
+                edge_tombstones=self._edge_tombstones.get(conn_id, []),
+                synced_at=self._synced_at.get(conn_id, ""),
             )
             self._storage(conn_id).save(snap)
         except Exception:
             pass
 
     # ---------- 自动抽取 ----------
-    def _from_schema(self, schema: dict[str, Any]) -> list[KnowledgeDoc]:
+    @staticmethod
+    def _from_schema(schema: dict[str, Any]) -> list[KnowledgeDoc]:
         conn_id = schema.get("_conn_id", "")
         docs: list[KnowledgeDoc] = []
         tables = {t["name"]: t for t in schema.get("tables", [])}
@@ -148,16 +158,27 @@ class KnowledgeBase:
         return docs
 
     # ---------- 图谱构建 ----------
+    # 墓碑匹配：用户删除的 overlap 边（重建/增量不复活）
+    @staticmethod
+    def _tombstone_key(e: dict) -> tuple[str, str, str, str]:
+        a, b = sorted([(e["from"], e["from_col"]), (e["to"], e["to_col"])])
+        return (a[0], a[1], b[0], b[1])
+
+    def _is_tombstoned(self, conn_id: str, e: dict) -> bool:
+        return self._tombstone_key(e) in {
+            self._tombstone_key(t) for t in self._edge_tombstones.get(conn_id, [])
+        }
+
     def _build_graph(self, conn_id: str, schema: dict[str, Any], samples: dict[str, dict[str, list[Any]]]) -> dict[str, Any]:
         edges: list[dict[str, Any]] = []
-        # FK 边
+        # FK 边（结构事实，墓碑不适用）
         for fk in schema.get("foreign_keys", []):
             edges.append({
                 "from": fk["table"], "from_col": fk["column"],
                 "to": fk["ref_table"], "to_col": fk["ref_column"],
                 "kind": "fk", "weight": 1.0,
             })
-        # 值重叠边：同一样本值出现在两列 → 疑似 join（无 FK 也能连）
+        # 值重叠边：同一样本值出现在两列 → 疑似 join（无 FK 也能连）；用户删除过的边跳过
         cols_by_table: dict[str, dict[str, set[Any]]] = {}
         for t, cols in samples.items():
             cols_by_table[t] = {c: {str(v) for v in vals if v is not None} for c, vals in cols.items()}
@@ -180,13 +201,15 @@ class KnowledgeBase:
                         if key in seen:
                             continue
                         seen.add(key)
-                        weight = round(len(inter) / max(1, min(len(sa), len(sb))), 3)
-                        edges.append({
+                        edge = {
                             "from": ta, "from_col": ca,
                             "to": tb, "to_col": cb,
-                            "kind": "overlap", "weight": weight,
+                            "kind": "overlap", "weight": round(len(inter) / max(1, min(len(sa), len(sb))), 3),
                             "shared": len(inter),
-                        })
+                        }
+                        if self._is_tombstoned(conn_id, edge):
+                            continue
+                        edges.append(edge)
         return {"edges": edges}
 
     # ---------- 构建 ----------
@@ -209,14 +232,25 @@ class KnowledgeBase:
 
         模型必须用户配置：用户配置了真语义嵌入后，旧 artifact 里哈希时代的向量必须作废重建，
         否则"配了模型却不生效"。只重嵌向量，不重建结构/图谱。
+        注意：必须先用当前配置重建嵌入器（self._emb 可能是旧模型实例）。
         """
         cur = self._emb_fingerprint()
         stored = self._artifact_fingerprint.get(conn_id, "")
-        if cur == stored:
+        # 维度自愈：活跃文档向量维度混杂（旧模型残留）也触发重嵌，避免检索 matmul 不匹配。
+        # 只统计活跃文档（archived 残留向量不参与检索，不触发重嵌循环）。
+        active_ids = {d.id for d in self._docs(conn_id)}
+        active_vecs = {k: v for k, v in self._vec.get(conn_id, {}).items() if k in active_ids}
+        active_vecs.update(self._table_vec.get(conn_id, {}))
+        dims = {len(v) for v in active_vecs.values() if v}
+        dim_mismatch = len(dims) > 1
+        if cur == stored and not dim_mismatch:
             return False
         schema = self._schema.get(conn_id)
         if schema is None:
             return False
+        self._emb = self._embedder()  # 用当前嵌入模型重嵌（修复旧嵌入器残留）
+        # 顺带清理归档文档的残留向量（不在活跃文档集合）
+        self._vec[conn_id] = {k: v for k, v in self._vec.get(conn_id, {}).items() if k in active_ids}
         await self._embed_docs(conn_id, self._docs(conn_id))
         await self._embed_table_docs(conn_id, schema)
         self._artifact_fingerprint[conn_id] = cur
@@ -235,6 +269,13 @@ class KnowledgeBase:
         # TODO: 测试后删除
         from app.debuglog import dbg
         dbg("[kb.build] conn=", conn_id, "tables=", len(schema.get("tables", [])))
+        # 全量重建也遵守历史墓碑（用户删过的 overlap 边不复活）
+        if conn_id not in self._edge_tombstones:
+            try:
+                snap = self._storage(conn_id).load()
+                self._edge_tombstones[conn_id] = snap.edge_tombstones or []
+            except Exception:
+                self._edge_tombstones[conn_id] = []
         if on_progress:
             on_progress("生成注释文档", 15)
         schema = dict(schema)
@@ -260,6 +301,8 @@ class KnowledgeBase:
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
         self._emb = self._embedder()
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
+        self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
+        self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
         if on_progress:
             on_progress("向量化", 40)
         await self._embed_docs(conn_id, self._auto[conn_id], on_progress=on_progress, p0=40, p1=75)
@@ -277,6 +320,243 @@ class KnowledgeBase:
                 len(cols) for cols in self._samples.get(conn_id, {}).values()
             ),
         }
+
+    # ---------- 增量同步（结构指纹 + diff + 局部重建） ----------
+    @staticmethod
+    def _schema_fingerprint(schema: dict[str, Any]) -> str:
+        """结构指纹：规范化（排序）的 表/列/FK 签名 → sha1。表顺序变化不影响指纹。"""
+        import hashlib
+        import json as _json
+
+        canon = {
+            "tables": sorted((t["name"], t.get("comment", "")) for t in schema.get("tables", [])),
+            "columns": sorted(
+                (c["table"], c["name"], c.get("type", ""),
+                 bool(c.get("pk")), bool(c.get("fk")), c.get("comment", ""))
+                for c in schema.get("columns", [])
+            ),
+            "foreign_keys": sorted(
+                (f["table"], f["column"], f["ref_table"], f["ref_column"])
+                for f in schema.get("foreign_keys", [])
+            ),
+        }
+        return hashlib.sha1(
+            _json.dumps(canon, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+
+    @staticmethod
+    def diff_schema(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+        """结构 diff：新增/删除表、列变化（签名含类型/PK/FK/注释）、FK 增删。"""
+        def _tables(s: dict) -> dict[str, dict]:
+            return {t["name"]: t for t in s.get("tables", [])}
+        def _cols(s: dict) -> dict[tuple, tuple]:
+            return {(c["table"], c["name"]): (c.get("type", ""), bool(c.get("pk")), bool(c.get("fk")), c.get("comment", ""))
+                    for c in s.get("columns", [])}
+        def _fks(s: dict) -> set[tuple]:
+            return {(f["table"], f["column"], f["ref_table"], f["ref_column"])
+                    for f in s.get("foreign_keys", [])}
+
+        ot, nt = _tables(old), _tables(new)
+        oc, nc = _cols(old), _cols(new)
+        of, nf = _fks(old), _fks(new)
+
+        added_tables = sorted(set(nt) - set(ot))
+        removed_tables = sorted(set(ot) - set(nt))
+        changed_tables = sorted(
+            t for t in set(ot) & set(nt)
+            if ot[t].get("comment", "") != nt[t].get("comment", "")
+        )
+        added_cols: dict[str, list[str]] = {}
+        removed_cols: dict[str, list[str]] = {}
+        changed_cols: dict[str, list[str]] = {}
+        for key in sorted(set(nc) - set(oc)):
+            added_cols.setdefault(key[0], []).append(key[1])
+        for key in sorted(set(oc) - set(nc)):
+            removed_cols.setdefault(key[0], []).append(key[1])
+        for key in sorted(set(oc) & set(nc)):
+            if oc[key] != nc[key]:
+                changed_cols.setdefault(key[0], []).append(key[1])
+        added_fks = sorted(nf - of)
+        removed_fks = sorted(of - nf)
+        return {
+            "added_tables": added_tables,
+            "removed_tables": removed_tables,
+            "changed_tables": changed_tables,
+            "added_columns": added_cols,
+            "removed_columns": removed_cols,
+            "changed_columns": changed_cols,
+            "added_fks": added_fks,
+            "removed_fks": removed_fks,
+        }
+
+    @staticmethod
+    def diff_is_empty(diff: dict[str, Any]) -> bool:
+        return not any(
+            diff[k] for k in ("added_tables", "removed_tables", "changed_tables",
+                              "added_columns", "removed_columns", "changed_columns",
+                              "added_fks", "removed_fks")
+        )
+
+    @staticmethod
+    def _from_schema_subset(schema: dict[str, Any], tables: set[str], conn_id: str = "") -> list[KnowledgeDoc]:
+        """按表名子集生成 auto 文档（增量新增/变化表用）。"""
+        subset = dict(schema)
+        subset["_conn_id"] = conn_id
+        subset["tables"] = [t for t in schema.get("tables", []) if t["name"] in tables]
+        subset["columns"] = [c for c in schema.get("columns", []) if c["table"] in tables]
+        subset["foreign_keys"] = [
+            f for f in schema.get("foreign_keys", [])
+            if f["table"] in tables or f["ref_table"] in tables
+        ]
+        return KnowledgeBase._from_schema(subset)  # 复用生成逻辑（_from_schema 为实例方法，用静态调用）
+
+    async def incremental_build(
+        self, conn_id: str, new_schema: dict[str, Any],
+        samples: dict[str, dict[str, list[Any]]] | None = None,
+    ) -> dict[str, Any]:
+        """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。
+
+        - 新增/变化表：重生成 auto 文档（draft/user 不动）+ 重嵌入 + 表级向量
+        - 删除表：auto 文档 archived（保留可回溯），移除表级向量与相关边
+        - 图：基于新 schema + 合并样本全量重构图（快；墓碑自动遵守）
+        - 返回 diff 摘要
+        """
+        old_schema = self._schema.get(conn_id, {})
+        diff = self.diff_schema(old_schema, new_schema)
+        if self.diff_is_empty(diff):
+            return {"changed": False, **diff}
+
+        # 1. 更新 schema 快照与样本（新表/变化表样本合并）
+        self._schema[conn_id] = {
+            "tables": [
+                {"name": t["name"], "kind": t.get("kind", "table"),
+                 "column_count": t.get("column_count", 0), "comment": t.get("comment", "")}
+                for t in new_schema.get("tables", [])
+            ],
+            "columns": [
+                {"table": c["table"], "name": c["name"], "type": c.get("type", ""),
+                 "pk": c.get("pk", False), "fk": c.get("fk", False), "comment": c.get("comment", "")}
+                for c in new_schema.get("columns", [])
+            ],
+            "foreign_keys": new_schema.get("foreign_keys", []),
+        }
+        if samples:
+            merged = {**self._samples.get(conn_id, {}), **samples}
+            # 删除的表样本一并移除（否则 overlap 边残留）
+            for t in diff["removed_tables"]:
+                merged.pop(t, None)
+            self._samples[conn_id] = merged
+            all_samples = merged
+        else:
+            all_samples = self._samples.get(conn_id, {})
+            for t in diff["removed_tables"]:
+                all_samples.pop(t, None)
+
+        touched = (set(diff["added_tables"]) | set(diff["changed_tables"])
+                   | set(diff["added_columns"]) | set(diff["removed_columns"])
+                   | set(diff["changed_columns"])
+                   | {f[0] for f in diff["added_fks"]} | {f[0] for f in diff["removed_fks"]})
+        touched |= {f[2] for f in diff["added_fks"]} | {f[2] for f in diff["removed_fks"]}
+
+        auto = self._auto.get(conn_id, [])
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        # 2. 删除的表：auto 文档归档 + 移除表级向量 + 移除文档向量
+        removed = set(diff["removed_tables"])
+        for d in auto:
+            if d.table in removed and not d.archived:
+                d.archived = True
+                d.updated_at = now
+        tv = self._table_vec.get(conn_id, {})
+        for t in removed:
+            tv.pop(t, None)
+        if removed:
+            vec = self._vec.get(conn_id, {})
+            for d in auto:
+                if d.table in removed:
+                    vec.pop(d.id, None)
+
+        # 3. 新增/变化表：移除旧 auto 文档（该表）→ 重新生成 → 重嵌入
+        rebuild_tables = touched - removed
+        docs_added = 0
+        if rebuild_tables:
+            auto = [d for d in auto if d.table not in rebuild_tables or d.archived]
+            new_docs = self._from_schema_subset(new_schema, rebuild_tables, conn_id)
+            for d in new_docs:
+                d.updated_at = now
+            auto.extend(new_docs)
+            docs_added = len(new_docs)
+            self._auto[conn_id] = auto
+            # 重嵌入：移除这些文档的旧向量，嵌入新文档
+            vec = self._vec.get(conn_id, {})
+            for d in new_docs:
+                vec.pop(d.id, None)
+            await self._embed_docs(conn_id, new_docs)
+            # 表级向量：变化表重算
+            await self._embed_table_docs_for(conn_id, new_schema, rebuild_tables)
+        else:
+            self._auto[conn_id] = auto
+
+        # 4. 图：新 schema + 合并样本全量重构图（FK 边同步 + overlap 边重算 + 墓碑遵守）
+        self._graph[conn_id] = self._build_graph(conn_id, new_schema, all_samples)
+
+        # 5. 指纹与同步时间
+        self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(new_schema)
+        self._synced_at[conn_id] = now
+        self._rebuild_vstore(conn_id)
+        self._save_conn(conn_id)
+        return {
+            "changed": True,
+            "docs_added": docs_added,
+            "tables_added": len(diff["added_tables"]),
+            "tables_removed": len(diff["removed_tables"]),
+            "tables_changed": len(rebuild_tables),
+            **diff,
+        }
+
+    async def _embed_table_docs_for(self, conn_id: str, schema: dict[str, Any], tables: set[str]) -> None:
+        """只重算指定表的表级向量（增量用）。"""
+        snap = self._schema.get(conn_id, {})
+        columns = snap.get("columns", [])
+        table_tags = self._table_tags.get(conn_id, {})
+        lib = self._tags.get(conn_id, {})
+        vecs = dict(self._table_vec.get(conn_id, {}))
+        for t in tables:
+            tinfo = next((x for x in snap.get("tables", []) if x.get("name") == t), {})
+            cols = [c for c in columns if c.get("table") == t]
+            col_txt = "，".join(
+                f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
+                for c in cols
+            )
+            confirmed = [n for n in table_tags.get(t, []) if lib.get(n, {}).get("status") == "confirmed"]
+            text = f"{t} 表：{col_txt}；注释：{tinfo.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
+            try:
+                vecs[t] = await self._emb.embed(text)
+            except Exception:
+                vecs[t] = [0.0]
+        self._table_vec[conn_id] = vecs
+
+    def needs_sync(self, conn_id: str, schema: dict[str, Any]) -> bool:
+        """指纹对比：schema 是否有变化（周期任务/手动检查的零开销预判）。"""
+        self.ensure_loaded(conn_id)
+        return self._schema_fingerprint(schema) != self._schema_fingerprint_map.get(conn_id, "")
+
+    async def sync(
+        self, conn_id: str, schema: dict[str, Any],
+        samples: dict[str, dict[str, list[Any]]] | None = None,
+    ) -> dict[str, Any]:
+        """增量同步入口：指纹对比 → 无变化零副作用；有变化跑 incremental_build。"""
+        self.ensure_loaded(conn_id)
+        new_fp = self._schema_fingerprint(schema)
+        old_fp = self._schema_fingerprint_map.get(conn_id, "")
+        if new_fp == old_fp:
+            return {"changed": False, "fingerprint": new_fp, "tables_added": 0, "tables_removed": 0, "tables_changed": 0}
+        if not self._auto.get(conn_id):
+            # 未构建过的连接不应走增量（调用方应保证 ready）；防御性直接全量
+            return await self.build(conn_id, schema, samples)
+        result = await self.incremental_build(conn_id, schema, samples)
+        result["fingerprint"] = new_fp
+        return result
 
     async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any],
                                 on_progress: Any | None = None, p0: int = 80, p1: int = 90) -> None:
@@ -341,10 +621,25 @@ class KnowledgeBase:
 
         doc chunk:  collection=doc, metadata={source, status, kind} → 可过滤已确认/来源
         table chunk: collection=table, metadata={table} → 问题→表路由
+        向量维度统一对齐主维度（旧 artifact 可能有嵌入失败残留的 [0.0] 短向量）。
         """
+        from collections import Counter
+
         chunks: list[VectorChunk] = []
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         fp = self._artifact_fingerprint.get(conn_id, "")
+        # 主维度：出现最多的向量长度（doubao=2048 / 哈希=256）
+        all_vecs = [
+            v for v in list(self._vec.get(conn_id, {}).values()) + list(self._table_vec.get(conn_id, {}).values())
+            if v
+        ]
+        main_dim = Counter(len(v) for v in all_vecs).most_common(1)[0][0] if all_vecs else 256
+
+        def _aligned(vec: list[float]) -> list[float]:
+            if len(vec) == main_dim:
+                return vec
+            return (vec[:main_dim] + [0.0] * main_dim)[:main_dim]
+
         for d in self._docs(conn_id):
             vec = self._vec.get(conn_id, {}).get(d.id)
             if not vec:
@@ -353,7 +648,7 @@ class KnowledgeBase:
                 id=d.id, collection="doc",
                 text=f"{d.title} {d.body}",
                 metadata={"source": d.source, "status": d.status, "kind": d.kind},
-                vector=vec, fingerprint=fp, updated_at=d.updated_at or now,
+                vector=_aligned(vec), fingerprint=fp, updated_at=d.updated_at or now,
             ))
         snap = self._schema.get(conn_id, {})
         for tname, vec in self._table_vec.get(conn_id, {}).items():
@@ -363,7 +658,7 @@ class KnowledgeBase:
                 id=tname, collection="table",
                 text=f"{tname} {col_txt}",
                 metadata={"table": tname},
-                vector=vec, fingerprint=fp, updated_at=now,
+                vector=_aligned(vec), fingerprint=fp, updated_at=now,
             ))
         self._vstore[conn_id] = NumpyVectorStore()
         self._vstore[conn_id].set_chunks(chunks)
@@ -382,11 +677,15 @@ class KnowledgeBase:
 
     # ---------- 检索 ----------
     def _docs(self, conn_id: str) -> list[KnowledgeDoc]:
-        return (
-            self._auto.get(conn_id, [])
-            + self._drafts.get(conn_id, [])
-            + self._user.get(conn_id, [])
-        )
+        """全部活跃文档（过滤 archived——已删除表的归档文档不参与检索/向量/列表）。"""
+        return [
+            d for d in (
+                self._auto.get(conn_id, [])
+                + self._drafts.get(conn_id, [])
+                + self._user.get(conn_id, [])
+            )
+            if not d.archived
+        ]
 
     def _neighbors(self, conn_id: str) -> dict[str, set[str]]:
         out: dict[str, set[str]] = {}
@@ -406,6 +705,7 @@ class KnowledgeBase:
     async def retrieve(self, conn_id: str, query: str = "", table: str | None = None, k: int = 10) -> list[KnowledgeDoc]:
         if conn_id not in self._auto:
             self._load_conn(conn_id)  # 重启后未重新构建也能用上次的知识
+        await self.reembed_if_needed(conn_id)  # 嵌入模型变化 → 向量重嵌（否则检索维度不匹配）
         docs = self._docs(conn_id)
         if not docs:
             return []
@@ -534,8 +834,12 @@ class KnowledgeBase:
         """取消构建/失败后清理半成品内存（不落盘）。"""
         for d in (self._auto, self._user, self._drafts, self._samples, self._graph,
                   self._vec, self._tags, self._table_tags, self._schema,
-                  self._table_vec, self._artifact_fingerprint, self._vstore):
+                  self._table_vec, self._artifact_fingerprint, self._vstore,
+                  self._schema_fingerprint_map, self._edge_tombstones, self._synced_at):
             d.pop(conn_id, None)
+
+    def synced_at(self, conn_id: str) -> str:
+        return self._synced_at.get(conn_id, "")
 
     def pending_counts(self, conn_id: str) -> dict[str, int]:
         """待确认数（确认闸 UI 用）：草案文档 + draft 标签。"""
@@ -654,6 +958,7 @@ class KnowledgeBase:
         离线 HashingEmbedder 只桥接表面重叠，因此叠加词面加权作为底线：
         表名/注释/列名与问题同词 → 加分（配 API 真语义 embedder 时语义分数自动更强）。
         """
+        await self.reembed_if_needed(conn_id)  # 嵌入模型变化 → 向量重嵌（维度一致）
         vecs = self._table_vec.get(conn_id, {})
         if not vecs or not (question or "").strip():
             return []

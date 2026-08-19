@@ -38,6 +38,7 @@ def _migrate_legacy_data_dir(data_dir: Path, legacy_dir: Path | None = None) -> 
         old_token = data_dir / "sidecar.token"
         if old_token.exists():
             old_token.rename(data_dir / "tabletalk.token")
+        _rewrite_connection_files(data_dir, legacy)
         logging.getLogger(__name__).info("数据目录迁移完成：%s → %s（旧目录保留）", legacy, data_dir)
     except Exception as e:  # noqa: BLE001 - 只读目录/沙箱：迁移失败不致命
         import logging
@@ -47,6 +48,34 @@ def _migrate_legacy_data_dir(data_dir: Path, legacy_dir: Path | None = None) -> 
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+
+
+def _rewrite_connection_files(data_dir: Path, legacy: Path) -> None:
+    """迁移后改写连接配置里的 SQLite 文件路径：旧数据目录 → 新数据目录。
+
+    连接配置存的是绝对路径（如 ~/.cleared/demo.db），迁移后应指向新目录。
+    """
+    conn_path = data_dir / "connections.json"
+    if not conn_path.exists():
+        return
+    try:
+        import json as _json
+
+        data = _json.loads(conn_path.read_text(encoding="utf-8"))
+        legacy_prefix = str(legacy).rstrip("/") + "/"
+        new_prefix = str(data_dir).rstrip("/") + "/"
+        changed = False
+        for c in data:
+            f = c.get("file", "")
+            if f.startswith(legacy_prefix):
+                c["file"] = new_prefix + f[len(legacy_prefix):]
+                changed = True
+        if changed:
+            conn_path.write_text(
+                _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+    except Exception:  # noqa: BLE001 - 改写失败不致命
+        pass
 
 
 @dataclass

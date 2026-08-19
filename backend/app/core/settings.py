@@ -65,6 +65,7 @@ class RuntimeSettings:
     # ---- 知识库 ----
     kb_sample_rows: int = 10
     kb_ai_annotation_samples: bool = False
+    kb_sync_minutes: int = 30   # 知识库增量同步周期（分钟；0=关闭）
     # ---- 查询 / 连接池（运行时可覆盖 env 默认值）----
     query_max_rows: int = 1000
     pool_size: int = 3
@@ -142,6 +143,7 @@ class RuntimeSettings:
             "gate_rules": self.gate_rules,
             "kb_sample_rows": self.kb_sample_rows,
             "kb_ai_annotation_samples": self.kb_ai_annotation_samples,
+            "kb_sync_minutes": self.kb_sync_minutes,
             "query_max_rows": self.query_max_rows,
             "pool_size": self.pool_size,
             "runtime": {

@@ -150,3 +150,44 @@ async def test_kb_status_persists_and_overview_not_built(client, app_state, demo
     assert ov["built"] is False
     assert ov["kb_status"] == "pending_review"
     assert ov["tables"] == []
+
+
+async def test_sync_endpoint_lifecycle(client, conn_id, demo_db):
+    """手动同步端点：构建+确认后 → 无变化 changed=False → 结构变化（建新表）→ 增量同步。"""
+    import sqlite3
+
+    from tests.api.test_api import _build_and_wait
+    await _build_and_wait(client, conn_id)
+    await client.post(f"/api/v1/knowledge/{conn_id}/confirm-all")
+
+    # 无变化
+    r = await client.post(f"/api/v1/knowledge/{conn_id}/sync")
+    body = r.json()
+    assert body["changed"] is False
+    assert body["message"] == "结构无变化"
+
+    # 结构变化：新建一张表
+    conn = sqlite3.connect(str(demo_db))
+    conn.execute("CREATE TABLE sync_test (id INTEGER PRIMARY KEY, note TEXT)")
+    conn.commit()
+    conn.close()
+    r = await client.post(f"/api/v1/knowledge/{conn_id}/sync")
+    body = r.json()
+    assert body["changed"] is True
+    assert body["tables_added"] == 1
+    # 知识库已含新表文档（确认闸不重置：仍 ready）
+    st = (await client.get(f"/api/v1/knowledge/{conn_id}/status")).json()
+    assert st["kb_status"] == "ready"
+    assert st["synced_at"]
+    docs = (await client.get(f"/api/v1/knowledge/{conn_id}/docs", params={"table": "sync_test"})).json()
+    assert len(docs["docs"]) >= 1
+    # 幂等：再同步无变化
+    r = await client.post(f"/api/v1/knowledge/{conn_id}/sync")
+    assert r.json()["changed"] is False
+
+
+async def test_sync_requires_ready(client, app_state, demo_db):
+    """未构建连接 sync → 409。"""
+    c = app_state.connections.create({"name": "nrs", "dialect": "sqlite", "file": str(demo_db)})
+    r = await client.post(f"/api/v1/knowledge/{c.id}/sync")
+    assert r.status_code == 409

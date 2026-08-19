@@ -816,3 +816,7 @@
 .kg2-insp-x:hover { color: var(--ink); }
 .kg2-insp-comment { font-size: 11px; color: var(--ink-dim); margin-top: 6px; line-height: 1.6; }
 .kg2-insp-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.kb-synced {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+}

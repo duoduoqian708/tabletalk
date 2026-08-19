@@ -9,7 +9,7 @@ from app.core.chat_store import ChatStore
 from app.core.connections import ConnectionRegistry
 from app.core.pool import PoolManager
 from app.core.settings import SettingsStore
-from app.knowledge.jobs import BuildJobManager
+from app.knowledge.jobs import BuildJobManager, SyncLoop
 from app.knowledge.store import KnowledgeBase
 
 
@@ -23,6 +23,7 @@ class AppState:
     knowledge: KnowledgeBase
     chats: ChatStore
     build_jobs: "BuildJobManager"
+    sync_loop: "SyncLoop"
 
 
 _state: AppState | None = None
@@ -45,6 +46,7 @@ def _build_state(data_dir=None) -> AppState:
         knowledge=knowledge,
         chats=ChatStore(env.data_dir),
         build_jobs=BuildJobManager(),
+        sync_loop=SyncLoop(),
     )
 
 

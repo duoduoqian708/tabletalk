@@ -38,11 +38,13 @@ def _ensure_demo_db() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_state()
+    state = get_state()
     get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/tabletalk.token，供 /bootstrap 读取
     _ensure_demo_db()
+    state.sync_loop.start()  # 知识库增量同步周期任务（kb_sync_minutes）
     yield
-    await get_state().pools.close_all()
+    state.sync_loop.stop()
+    await state.pools.close_all()
 
 
 def create_app() -> FastAPI:
