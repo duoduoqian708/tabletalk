@@ -39,6 +39,7 @@ class KnowledgeBase:
         self._tags: dict[str, dict[str, dict[str, Any]]] = {}             # conn -> tag名 -> {description,status}
         self._table_tags: dict[str, dict[str, list[str]]] = {}            # conn -> table -> [tag名]
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
+        self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._lock = threading.Lock()
         self._load()
 
@@ -183,6 +184,7 @@ class KnowledgeBase:
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
         self._emb = self._embedder()
         await self._embed_docs(conn_id, self._auto[conn_id])
+        await self._embed_table_docs(conn_id, schema)
         self._persist_artifact(conn_id)
         return {
             "docs": len(self._auto[conn_id]),
@@ -191,6 +193,37 @@ class KnowledgeBase:
                 len(cols) for cols in self._samples.get(conn_id, {}).values()
             ),
         }
+
+    async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any]) -> None:
+        """每张表一条"表级文档"向量（表名+列名+类型+注释+标签）——供向量路由语义召回。
+
+        与文档级向量互补：文档级管"注释/草案召回"，表级管"问题→表"定位，
+        标签覆盖率不足时由向量兜底。构建时算好，持久化进 artifact。
+        """
+        snap = self._schema.get(conn_id, {})
+        tables = snap.get("tables", [])
+        columns = snap.get("columns", [])
+        if not tables:
+            return
+        table_tags = self._table_tags.get(conn_id, {})
+        lib = self._tags.get(conn_id, {})
+        vecs: dict[str, list[float]] = {}
+        for t in tables:
+            name = t.get("name", "")
+            if not name:
+                continue
+            cols = [c for c in columns if c.get("table") == name]
+            col_txt = "，".join(
+                f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
+                for c in cols
+            )
+            confirmed = [n for n in table_tags.get(name, []) if lib.get(n, {}).get("status") == "confirmed"]
+            text = f"{name} 表：{col_txt}；注释：{t.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
+            try:
+                vecs[name] = await self._emb.embed(text)
+            except Exception:
+                vecs[name] = [0.0]
+        self._table_vec[conn_id] = vecs
 
     async def _embed_docs(self, conn_id: str, docs: list[KnowledgeDoc]) -> None:
         vecs: dict[str, list[float]] = {}
@@ -214,6 +247,7 @@ class KnowledgeBase:
                 "samples": self._samples.get(conn_id, {}),
                 "graph": self._graph.get(conn_id, {"edges": []}),
                 "vec": self._vec.get(conn_id, {}),
+                "table_vec": self._table_vec.get(conn_id, {}),
                 "tags": self._tags.get(conn_id, {}),
                 "table_tags": self._table_tags.get(conn_id, {}),
                 "schema": self._schema.get(conn_id, {}),
@@ -236,6 +270,7 @@ class KnowledgeBase:
             self._samples[conn_id] = data.get("samples", {})
             self._graph[conn_id] = data.get("graph", {"edges": []})
             self._vec[conn_id] = data.get("vec", {})
+            self._table_vec[conn_id] = data.get("table_vec", {})
             self._tags[conn_id] = data.get("tags", {})
             self._table_tags[conn_id] = data.get("table_tags", {})
             self._schema[conn_id] = data.get("schema", {})
@@ -469,6 +504,68 @@ class KnowledgeBase:
     def confirmed_tags(self, conn_id: str) -> list[str]:
         return [n for n, v in self._tags.get(conn_id, {}).items() if v.get("status") == "confirmed"]
 
+    def _fk_adj(self, conn_id: str) -> dict[str, set[str]]:
+        adj: dict[str, set[str]] = {}
+        for e in self._graph.get(conn_id, {}).get("edges", []):
+            if e["kind"] != "fk":
+                continue
+            adj.setdefault(e["from"], set()).add(e["to"])
+            adj.setdefault(e["to"], set()).add(e["from"])
+        return adj
+
+    def expand_tables(self, conn_id: str, seeds: set[str], hops: int = 2) -> set[str]:
+        """沿 FK 多跳扩展种子表 → 连通子图（供标签/向量融合路由共用）。"""
+        adj = self._fk_adj(conn_id)
+        picks = set(seeds)
+        frontier = set(seeds)
+        for _ in range(max(0, hops)):
+            nxt: set[str] = set()
+            for t in frontier:
+                nxt |= adj.get(t, set())
+            nxt -= picks
+            if not nxt:
+                break
+            picks |= nxt
+            frontier = nxt
+        return picks
+
+    async def vector_route_tables(self, conn_id: str, question: str, top_k: int = 6) -> list[tuple[str, float]]:
+        """向量通道：问题向量 × 表级文档向量 → top-K 表（语义召回，不依赖标签覆盖率）。
+
+        离线 HashingEmbedder 只桥接表面重叠，因此叠加词面加权作为底线：
+        表名/注释/列名与问题同词 → 加分（配 API 真语义 embedder 时语义分数自动更强）。
+        """
+        vecs = self._table_vec.get(conn_id, {})
+        if not vecs or not (question or "").strip():
+            return []
+        try:
+            qvec = await self._emb.embed(question)
+        except Exception:
+            qvec = None
+        ql = (question or "").lower()
+        snap = self._schema.get(conn_id, {})
+        col_blob = {t.get("name", ""): " ".join(
+            f"{c.get('name', '')} {c.get('comment', '')}"
+            for c in snap.get("columns", []) if c.get("table") == t.get("name")
+        ) for t in snap.get("tables", [])}
+        scored: list[tuple[str, float]] = []
+        for table, v in vecs.items():
+            score = cosine(qvec, v) if qvec is not None else 0.0
+            # 词面加权：表名 / 中文词 / 列名出现在问题或反之中
+            blob = f"{table} {col_blob.get(table, '')}".lower()
+            if table.lower() in ql:
+                score += 0.6
+            for tok in re.findall(r"[\u4e00-\u9fff]{2,}", ql):
+                if tok in blob:
+                    score += 0.35
+            for tok in re.findall(r"[a-z_]{3,}", ql):
+                if tok in blob:
+                    score += 0.2
+            if score > 0.1:
+                scored.append((table, round(score, 4)))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:top_k]
+
     def route_tables(self, conn_id: str, tag_names: list[str], hops: int = 2) -> dict[str, Any]:
         """意图→标签→候选表：打这些标签的表 + 沿 FK 多跳覆盖的表 → 候选子图。
 
@@ -486,25 +583,7 @@ class KnowledgeBase:
         for table, names in self._table_tags.get(conn_id, {}).items():
             if set(names) & tag_set:
                 picks.add(table)
-
-        # FK 邻接表
-        adj: dict[str, set[str]] = {}
-        for e in self._graph.get(conn_id, {}).get("edges", []):
-            if e["kind"] != "fk":
-                continue
-            adj.setdefault(e["from"], set()).add(e["to"])
-            adj.setdefault(e["to"], set()).add(e["from"])
-
-        frontier = set(picks)
-        for _ in range(max(0, hops)):
-            nxt: set[str] = set()
-            for t in frontier:
-                nxt |= adj.get(t, set())
-            nxt -= picks
-            if not nxt:
-                break
-            picks |= nxt
-            frontier = nxt
+        picks = self.expand_tables(conn_id, picks, hops)
 
         sub_edges = [
             e for e in self._graph.get(conn_id, {}).get("edges", [])

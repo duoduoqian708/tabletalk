@@ -71,20 +71,42 @@ async def assemble_context_full(
 ) -> tuple[str, dict]:
     """组装给模型的上下文文本 + 沿路产出的阶段元数据（意图/候选表），供前端四步展示。"""
     schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
+    # 知识库懒构建（每进程一次）：双通道路由依赖表级向量与图谱，未构建时先建
+    if not state.knowledge.is_built(conn_id):
+        from app.core.schema import sample_values
+        rt = state.runtime.get()
+        samples = {}
+        if rt.kb_sample_rows > 0:
+            for t in schema["tables"]:
+                try:
+                    samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
+                except Exception:
+                    samples[t["name"]] = {}
+        await state.knowledge.build(conn_id, schema, samples)
     parts: list[str] = [
         f"当前连接: {schema.get('connection', conn_id)}（{schema.get('dialect', '')}）"
     ]
     if table:
         parts.append(f"当前表: {table}")
     parts.append("【表结构】")
-    # 领域标签路由：意图→标签→候选表（+FK 2 步）→ 只喂相关子图，避免全表扫描
+    # 双通道融合路由：标签路由（精确）× 向量召回（语义泛化）→ FK 扩展保证连通
     from app.ai.intent import classify_tags
 
     routed: list[str] | None = None
     tags = await classify_tags(state, conn_id, query)
+    tag_tables: set[str] = set()
     if tags:
-        routed = state.knowledge.route_tables(conn_id, tags, hops=2).get("tables", [])
-        parts.append(f"（领域路由: {' / '.join(tags)} → 候选表 {len(routed)} 张）")
+        tag_tables = set(state.knowledge.route_tables(conn_id, tags, hops=2).get("tables", []))
+    # 向量通道：问题语义 → top-K 表（无标签/标签未命中也召回，补齐标签覆盖率短板）
+    vec_hits = await state.knowledge.vector_route_tables(conn_id, query, top_k=6)
+    vec_tables = [t for t, _ in vec_hits]
+    seeds = tag_tables | set(vec_tables)
+    if seeds:
+        # 融合种子 + FK 2 跳扩展 → 候选子图（结构连通，可 JOIN）
+        routed = sorted(state.knowledge.expand_tables(conn_id, seeds, hops=2))
+        parts.append(
+            f"（领域路由: {' / '.join(tags) if tags else '未命中'} · 向量召回 +{len(vec_tables)} · FK 扩展 → 候选表 {len(routed)} 张）"
+        )
     if routed:
         parts.append(summarize(schema, table, routed))
     else:
@@ -92,5 +114,5 @@ async def assemble_context_full(
     kb = await state.knowledge.to_context(conn_id, query, table)
     if kb:
         parts.append(kb)
-    meta = {"intent": tags or [], "candidate_tables": routed or []}
+    meta = {"intent": tags or [], "candidate_tables": routed or [], "vec_tables": vec_tables}
     return "\n".join(parts), meta

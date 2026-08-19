@@ -66,7 +66,7 @@ export type AiEvent =
   | { type: 'text'; content: string }
   | { type: 'think'; text: string }
   | { type: 'sql_card'; card: AiCard }
-  | { type: 'stage'; stage: string; value?: unknown; tables?: string[] }
+  | { type: 'stage'; stage: string; value?: unknown; tables?: string[]; vec_tables?: string[] }
   | { type: 'done' }
   | { type: 'error'; message: string }
   // 报告模式事件

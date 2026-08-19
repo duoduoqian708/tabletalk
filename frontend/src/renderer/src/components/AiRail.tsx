@@ -672,16 +672,20 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
               return n
             })
           } else if (ev.type === 'stage' && ev.stage === 'retrieval') {
-            // 四步展示：表检索定位（真实候选表清单）
+            // 四步展示：表检索定位（真实候选表清单：标签路由 × 向量召回 → FK 扩展）
             setTurns((t) => {
               const n = [...t]
               const last = n[n.length - 1]
               if (last.role === 'ai' && last.steps) {
                 const s = last.steps.find((x) => x.id === 'retrieval')
                 const tables = ev.tables ?? []
+                const vecN = Array.isArray(ev.vec_tables) ? (ev.vec_tables as string[]).length : 0
                 if (s) {
                   s.status = 'done'
-                  s.detail = [...s.detail, `候选表 ${tables.length} 张：${tables.join(', ') || '（路由未命中，走全量摘要）'}`]
+                  s.detail = [
+                    ...s.detail,
+                    `候选表 ${tables.length} 张：${tables.join(', ') || '（路由未命中，走全量摘要）'}${vecN > 0 ? ` · 向量召回 +${vecN}` : ''}`
+                  ]
                 }
               }
               return n
