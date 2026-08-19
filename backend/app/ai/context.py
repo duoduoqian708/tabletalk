@@ -83,6 +83,9 @@ async def assemble_context_full(
                 except Exception:
                     samples[t["name"]] = {}
         await state.knowledge.build(conn_id, schema, samples)
+    else:
+        state.knowledge.ensure_loaded(conn_id)
+    await state.knowledge.reembed_if_needed(conn_id)  # 嵌入模型配置变化 → 向量重嵌
     parts: list[str] = [
         f"当前连接: {schema.get('connection', conn_id)}（{schema.get('dialect', '')}）"
     ]

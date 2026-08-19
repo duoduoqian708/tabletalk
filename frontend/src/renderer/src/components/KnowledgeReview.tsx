@@ -89,6 +89,15 @@ export function KnowledgeReview(): React.JSX.Element {
               <span>注释草案 {overview.draft_count}</span>
               <span>标签草案 {overview.tag_draft_count}</span>
             </span>
+            {overview.embedding_provider === 'hash' ? (
+              <span className="emb-state off" title="在 系统设置 → 大模型接入 → 嵌入模型 配置后，语义检索自动启用">
+                嵌入模型未配置 · 仅词面+图谱检索
+              </span>
+            ) : (
+              <span className="emb-state on" title="用户配置的嵌入模型已生效">
+                语义嵌入已启用
+              </span>
+            )}
             <span className="spacer" />
             <button className="iconbtn" onClick={() => currentId && build(currentId)} disabled={busy}>
               {busy ? '构建中…' : '重新构建'}

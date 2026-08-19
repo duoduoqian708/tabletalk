@@ -56,3 +56,38 @@ async def test_assemble_context_fusion_uses_both_channels(app_state, conn_id):
     assert tables, "融合路由必须产生候选表（不再因标签未命中退化为全表）"
     assert "returns" in tables  # 词面加权命中（问题含表名 returns）
     assert "order_items" in tables or "orders" in tables  # 图谱 FK 扩展生效
+
+
+async def test_reembed_when_embedding_config_changes(tmp_path):
+    """用户配置/更换嵌入模型 → 旧向量必须重嵌（模型必须用户配置且配置后生效）。"""
+    from app.core.settings import SettingsStore
+    from app.knowledge.embedding import HashingEmbedder
+
+    runtime = SettingsStore(tmp_path)
+    kb = KnowledgeBase(tmp_path, runtime=runtime)
+    await kb.build("c1", _schema())
+    fp_before = kb._artifact_fingerprint.get("c1")
+    assert fp_before == "hash"  # 未配置嵌入模型 → 哈希指纹
+
+    # 未变化：不重嵌
+    assert await kb.reembed_if_needed("c1") is False
+
+    # 模拟用户配置 api 嵌入（无 key 时 make_embedder 仍走 api 分支？这里直接替换 embedder 并改指纹来源）
+    class FakeRuntime:
+        def get(self):
+            class S:
+                embedding_provider = "api"
+                embedding_base_url = "https://example.com/v1"
+                embedding_model = "bge-m3"
+                embedding_api_key = ""
+            return S()
+    kb._runtime = FakeRuntime()  # type: ignore[assignment]
+    # 换成可注入的假嵌入器（避免真实网络调用）：直接打桩
+    class FakeEmb:
+        async def embed(self, text: str) -> list[float]:
+            return [0.5] * 8
+    kb._emb = FakeEmb()
+    assert await kb.reembed_if_needed("c1") is True
+    assert kb._artifact_fingerprint.get("c1").startswith("api:")
+    # 再次调用：指纹一致 → 不重嵌
+    assert await kb.reembed_if_needed("c1") is False

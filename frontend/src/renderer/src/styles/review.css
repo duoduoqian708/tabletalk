@@ -458,3 +458,21 @@
 .ld.path {
   background: repeating-linear-gradient(90deg, var(--teal) 0 4px, transparent 4px 8px);
 }
+
+/* 嵌入模型状态（模型必须用户配置——未配置时明确标注） */
+.emb-state {
+  font-size: 8.5px;
+  border-radius: 99px;
+  padding: 2px 9px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.emb-state.off {
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid rgba(246, 173, 85, 0.3);
+}
+.emb-state.on {
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid rgba(110, 231, 183, 0.3);
+}

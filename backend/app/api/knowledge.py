@@ -89,6 +89,7 @@ async def overview(conn_id: str) -> dict:
     else:
         # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
         state.knowledge.ensure_loaded(conn_id)
+    await state.knowledge.reembed_if_needed(conn_id)  # 用户更换嵌入模型 → 向量重嵌
     return state.knowledge.overview(conn_id)
 
 

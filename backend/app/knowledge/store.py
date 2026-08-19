@@ -40,6 +40,7 @@ class KnowledgeBase:
         self._table_tags: dict[str, dict[str, list[str]]] = {}            # conn -> table -> [tag名]
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
+        self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
         self._lock = threading.Lock()
         self._load()
 
@@ -154,6 +155,33 @@ class KnowledgeBase:
             return make_embedder(s.embedding_provider, s.embedding_base_url, s.embedding_model, s.embedding_api_key)
         return HashingEmbedder()
 
+    def _emb_fingerprint(self) -> str:
+        """当前嵌入配置指纹：hash | api:model@base_url。用户更换嵌入模型后指纹变化 → 触发向量重嵌。"""
+        if self._runtime is not None:
+            s = self._runtime.get()
+            if s.embedding_provider == "api" and s.embedding_base_url:
+                return f"api:{s.embedding_model}@{s.embedding_base_url}"
+        return "hash"
+
+    async def reembed_if_needed(self, conn_id: str) -> bool:
+        """嵌入配置变化（用户新配/更换嵌入模型）→ 重嵌文档级与表级向量，返回是否重嵌。
+
+        模型必须用户配置：用户配置了真语义嵌入后，旧 artifact 里哈希时代的向量必须作废重建，
+        否则"配了模型却不生效"。只重嵌向量，不重建结构/图谱。
+        """
+        cur = self._emb_fingerprint()
+        stored = self._artifact_fingerprint.get(conn_id, "")
+        if cur == stored:
+            return False
+        schema = self._schema.get(conn_id)
+        if schema is None:
+            return False
+        await self._embed_docs(conn_id, self._docs(conn_id))
+        await self._embed_table_docs(conn_id, schema)
+        self._artifact_fingerprint[conn_id] = cur
+        self._persist_artifact(conn_id)
+        return True
+
     async def build(
         self,
         conn_id: str,
@@ -183,6 +211,7 @@ class KnowledgeBase:
             self._samples[conn_id] = samples
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
         self._emb = self._embedder()
+        self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         await self._embed_docs(conn_id, self._auto[conn_id])
         await self._embed_table_docs(conn_id, schema)
         self._persist_artifact(conn_id)
@@ -248,6 +277,7 @@ class KnowledgeBase:
                 "graph": self._graph.get(conn_id, {"edges": []}),
                 "vec": self._vec.get(conn_id, {}),
                 "table_vec": self._table_vec.get(conn_id, {}),
+                "emb_fingerprint": self._artifact_fingerprint.get(conn_id, ""),
                 "tags": self._tags.get(conn_id, {}),
                 "table_tags": self._table_tags.get(conn_id, {}),
                 "schema": self._schema.get(conn_id, {}),
@@ -271,6 +301,7 @@ class KnowledgeBase:
             self._graph[conn_id] = data.get("graph", {"edges": []})
             self._vec[conn_id] = data.get("vec", {})
             self._table_vec[conn_id] = data.get("table_vec", {})
+            self._artifact_fingerprint[conn_id] = data.get("emb_fingerprint", "")
             self._tags[conn_id] = data.get("tags", {})
             self._table_tags[conn_id] = data.get("table_tags", {})
             self._schema[conn_id] = data.get("schema", {})
