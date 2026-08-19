@@ -745,12 +745,12 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
     setClarifyPending(null)
     setClarifyInput('')
     const q = curQuestionRef.current
-    // 重传历史：原始问题 → 澄清问 → 本次回答（后端 _extract_clarify_answers 凭此 replay）
-    const msgs = [
+    // 重传历史：原始问题 → 澄清问 → 本次回答（后端 _extract_clarify_answers 凭 system+name 识别并 replay）
+    const msgs: { role: string; content: string; name?: string }[] = [
       { role: 'user', content: q },
       { role: 'system', content: pending.q, name: 'clarify' },
       { role: 'user', content: ans }
-    ] as const
+    ]
     // 合并进 histRef
     histRef.current.push({ role: 'user', content: pending.q })
     histRef.current.push({ role: 'user', content: ans })
@@ -762,7 +762,8 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
       await chatStream(
         {
           connection_id: currentId,
-          messages: msgs.map((m) => ({ role: m.role, content: m.content })),
+          // 保留 name:'clarify'——后端 _extract_clarify_answers 凭 system+name 识别澄清问答并 replay
+          messages: msgs.map((m) => ({ role: m.role, content: m.content, name: m.name })),
           table: selectedTable,
           session_id: activeId,
           title: activeConv?.title ?? null,
