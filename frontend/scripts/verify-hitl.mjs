@@ -9,14 +9,14 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-p4'
+const dataDir = '/tmp/tabletalk-p4'
 const port = 8772
 const baseUrl = `http://127.0.0.1:${port}`
 
 fs.rmSync(dataDir, { recursive: true, force: true })
 fs.mkdirSync(dataDir, { recursive: true })
 const sidecar = spawn(path.join(backendDir, '.venv/bin/python'), ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
-  cwd: backendDir, env: { ...process.env, CLEARED_DATA_DIR: dataDir }, stdio: 'ignore'
+  cwd: backendDir, env: { ...process.env, TABLETALK_DATA_DIR: dataDir }, stdio: 'ignore'
 })
 async function waitHealth(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
@@ -38,7 +38,7 @@ try {
   const token = boot.token
   const connRes = await fetch(`${baseUrl}/api/v1/connections`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Cleared-Token': token },
+    headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': token },
     body: JSON.stringify({ name: '可写演示库', dialect: 'sqlite', file: `${dataDir}/demo.db`, read_only: false })
   })
   check('创建可写连接', connRes.ok, String(connRes.status))

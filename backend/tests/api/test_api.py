@@ -32,7 +32,7 @@ async def test_sidecar_token_guard():
     async with AsyncClient(
         transport=transport,
         base_url="http://test",
-        headers={"X-Cleared-Token": "wrong-token"},
+        headers={"X-TableTalk-Token": "wrong-token"},
     ) as c:
         r = await c.get("/api/v1/connections")
         assert r.status_code == 401

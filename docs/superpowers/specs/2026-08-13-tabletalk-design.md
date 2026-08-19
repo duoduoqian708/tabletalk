@@ -1,4 +1,4 @@
-# CLEARED — AI 数据库客户端设计文档
+# TABLETALK — AI 数据库客户端设计文档
 
 日期：2026-08-13 · 状态：后端已实现并全测通过（116 个 pytest），前端已 Web 化——纯 Vite React SPA，由后端 FastAPI 同源托管（2026-08-15 起产品形态为浏览器访问的自托管服务，非桌面 APP）
 
@@ -11,7 +11,7 @@ AI 优先的桌面数据库客户端，面向**开发者**（第一优先级人�
 - "AI 能写，但永远写不危险" —— 安全闸门是产品属性，不是 AI 功能
 - "数据默认不出内网" —— 隐私红线 + AI 网关可配置（云端/本地/私有）
 
-用户场景特征：**查多写少**。读是白名单直通（体验优先），写才过闸门（安全优先）。产品口号："ask your database — nothing runs until it's cleared."
+用户场景特征：**查多写少**。读是白名单直通（体验优先），写才过闸门（安全优先）。产品口号："ask your database — nothing runs until it's tabletalk."
 
 ## 2. 总体架构
 
@@ -125,7 +125,7 @@ backend/app/
 
 | 级别 | 事项 | 状态 |
 |------|------|------|
-| P0 | sidecar 无鉴权（本机任意进程可调 /query、/settings） | ✅ 已完成（`X-Cleared-Token` 中间件 + token 文件，87 测试 + 真实 HTTP 冒烟验证） |
+| P0 | sidecar 无鉴权（本机任意进程可调 /query、/settings） | ✅ 已完成（`X-TableTalk-Token` 中间件 + token 文件，87 测试 + 真实 HTTP 冒烟验证） |
 | P0 | 行数上限只截断传输不限制 DB 工作（亿行表全量拉回） | ✅ 已完成（`_auto_cap` SQL 层注入 LIMIT cap+1，5 个新测试） |
 | P0 | PG/MySQL 适配器零集成测试（"Docker 门控"仅为意图） | ✅ 已完成（tests/integration 8 个测试 + docker-compose.integration.yml，无 docker 自动跳过） |
 | P1 | 凭据明文存 JSON（credential_ref 已预留钥匙串） | P2（Web 浏览器场景无原生钥匙串，改 WebCrypto 客户端加密） |

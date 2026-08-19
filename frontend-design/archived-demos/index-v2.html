@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLEARED · 工作台设计（专业版）</title>
+<title>TABLETALK · 工作台设计（专业版）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -341,7 +341,7 @@ table.audit{width:100%;border-collapse:collapse;font-family:var(--mono);font-siz
 
   <!-- ================= appbar ================= -->
   <header class="appbar">
-    <div class="wordmark"><span class="dot"></span>CLEARED<span class="ver">v0.1 · workbench</span></div>
+    <div class="wordmark"><span class="dot"></span>TABLETALK<span class="ver">v0.1 · workbench</span></div>
     <nav class="tabs">
       <button class="tab on" data-v="workbench">工作台<span class="kbd">⌘1</span></button>
       <button class="tab" data-v="gate">安全闸门<span class="kbd">⌘2</span></button>
@@ -593,7 +593,7 @@ table.audit{width:100%;border-collapse:collapse;font-family:var(--mono);font-siz
             <div class="form-grid">
               <div class="fg"><label class="fl">名称<em>*</em></label><input value="demo.db"></div>
               <div class="fg"><label class="fl">类型</label><div class="type-row"><span class="type-pill on">SQLite</span><span class="type-pill">MySQL</span><span class="type-pill">PostgreSQL</span></div></div>
-              <div class="fg" style="grid-column:1/-1"><label class="fl">数据库文件</label><input value="~/.cleared/demo.db"><div class="fh">方言走插件注册表，新增数据库 = 写一个 adapter + 注册，其余零改动。</div></div>
+              <div class="fg" style="grid-column:1/-1"><label class="fl">数据库文件</label><input value="~/.tabletalk/demo.db"><div class="fh">方言走插件注册表，新增数据库 = 写一个 adapter + 注册，其余零改动。</div></div>
               <div class="fg"><label class="fl">只读会话</label><div class="switch-line"><span class="sw"></span>开 · 会话级只读</div></div>
               <div class="fg"><label class="fl">行数上限</label><input value="500"></div>
             </div>
@@ -645,7 +645,7 @@ function applyTheme(k){
   const t=THEMES.find(x=>x.k===k)||THEMES[0]
   document.documentElement.dataset.theme=k
   themeLabel.textContent = k === 'light' ? '深色' : '浅色'
-  try{localStorage.setItem('cleared-v2-theme',k)}catch{}
+  try{localStorage.setItem('tabletalk-v2-theme',k)}catch{}
   renderThemeGrid()
 }
 themeBtn.addEventListener('click',()=>{const cur=document.documentElement.dataset.theme;applyTheme(cur==='dark'?'light':'dark')})
@@ -670,7 +670,7 @@ function renderThemeGrid(){
     </div>`).join('')
   document.querySelectorAll('[data-pick]').forEach(el=>el.addEventListener('click',()=>{applyTheme(el.dataset.pick)}))
 }
-;(()=>{let k='light';try{k=localStorage.getItem('cleared-v2-theme')||'light'}catch{};applyTheme(k)})()
+;(()=>{let k='light';try{k=localStorage.getItem('tabletalk-v2-theme')||'light'}catch{};applyTheme(k)})()
 
 // ===== 提示：确认按钮演示 =====
 document.querySelectorAll('.btn.warn').forEach(b=>b.addEventListener('click',()=>{b.textContent='已确认执行';b.style.color='var(--teal)';b.style.borderColor='var(--teal)';b.style.background='var(--teal-dim)'}))

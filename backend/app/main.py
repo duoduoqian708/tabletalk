@@ -1,4 +1,4 @@
-"""DATUM sidecar — FastAPI 应用入口。
+"""tabletalk sidecar — FastAPI 应用入口。
 
 运行：uvicorn app.main:app --reload --port 8765
 """
@@ -39,7 +39,7 @@ def _ensure_demo_db() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_state()
-    get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/sidecar.token，供 /bootstrap 读取
+    get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/tabletalk.token，供 /bootstrap 读取
     _ensure_demo_db()
     yield
     await get_state().pools.close_all()
@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     env = get_env()
-    app = FastAPI(title="DATUM sidecar", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="tabletalk sidecar", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=env.cors_origins,
@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
             resp = await call_next(request)
             dbg("[http] OUT", request.method, path, resp.status_code)
             return resp
-        supplied = request.headers.get("X-Cleared-Token", "")
+        supplied = request.headers.get("X-TableTalk-Token", "")
         if not hmac.compare_digest(supplied, get_token()):
             dbg("[http] 401", path)
             return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
@@ -95,7 +95,7 @@ def create_app() -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def web_unbuilt() -> HTMLResponse:
             return HTMLResponse(
-                "<h1>DATUM</h1><p>前端未构建：在 frontend/ 下执行 <code>npm run build</code> 后刷新。</p>"
+                "<h1>tabletalk</h1><p>前端未构建：在 frontend/ 下执行 <code>npm run build</code> 后刷新。</p>"
             )
 
     return app

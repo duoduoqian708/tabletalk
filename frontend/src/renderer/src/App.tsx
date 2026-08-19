@@ -29,7 +29,7 @@ function Boot({ title, hint }: { title: string; hint: string }): React.JSX.Eleme
       <header className="boot-bar">
         <span className="wordmark">
           <span className="dot" />
-          DATUM <small>AI DATABASE TERMINAL</small>
+          tabletalk <small>AI DATABASE TERMINAL</small>
         </span>
       </header>
       <main className="boot-body">
@@ -65,7 +65,7 @@ export default function App(): React.JSX.Element {
     if (currentId) void loadSchema(currentId)
   }, [currentId, loadSchema])
 
-  if (!rt) return <Boot title="connecting to DATUM" hint="正在连接本地 DATUM 服务…" />
+  if (!rt) return <Boot title="connecting to tabletalk" hint="正在连接本地 tabletalk 服务…" />
   if (!health) return <Boot title="waiting for service" hint="等待本地服务就绪…" />
   return <AppLayout health={health} />
 }

@@ -9,7 +9,7 @@
 ### 做（In scope）
 1. **查询行数上限** → 真设置 `query_max_rows`（默认 1000）。
 2. **连接池大小** → 真设置 `pool_size`（默认 3，仅 PG/MySQL 生效；SQLite 恒 1）。
-3. **通用区三项只读值** → 改为后端返回的**动态真值**（数据目录 / 监听端口 / 鉴权方式），不再硬编码 `8765` / `~/.cleared`。
+3. **通用区三项只读值** → 改为后端返回的**动态真值**（数据目录 / 监听端口 / 鉴权方式），不再硬编码 `8765` / `~/.tabletalk`。
 
 ### 不做（Out of scope）
 - **DML 确认** 下拉项 → 收敛移除（闸门是模型无关纯规则、且不读任何阈值；本次不碰 `app/safety` 判定逻辑）。
@@ -22,7 +22,7 @@
 ### `app/core/settings.py` — `RuntimeSettings`
 - 新增字段 `query_max_rows: int = 1000`、`pool_size: int = 3`。
 - 加入 `_PERSISTED_KEYS`，使其可经 `PUT /settings` 持久化（`settings.json`）。
-- 默认值来源保持 `app/config.py` 的 `CLEARED_QUERY_MAX_ROWS` / `CLEARED_POOL_SIZE` 作初始值（首次启动从 env 读入）。
+- 默认值来源保持 `app/config.py` 的 `TABLETALK_QUERY_MAX_ROWS` / `TABLETALK_POOL_SIZE` 作初始值（首次启动从 env 读入）。
 
 ### `app/core/query.py`
 - 读行数上限处由 `get_env().query_max_rows` 改为 `state.runtime.get().query_max_rows`（保留 LIMIT 注入逻辑不变）。
@@ -34,8 +34,8 @@
 
 ### 运行时真值端点
 - 复用 `GET /api/v1/settings`：在 `SettingsPublic` 增加 `runtime` 段，返回 `{ data_dir, port, auth }`。
-  - `data_dir` / `port` 来自 `app/config.py` 的 `CLEARED_DATA_DIR` / `CLEARED_PORT`。
-  - `auth` 固定为 `"X-Cleared-Token · 本机"`。
+  - `data_dir` / `port` 来自 `app/config.py` 的 `TABLETALK_DATA_DIR` / `TABLETALK_PORT`。
+  - `auth` 固定为 `"X-TableTalk-Token · 本机"`。
 - 不新增端点，避免分散真值来源。
 
 ## 前端改动

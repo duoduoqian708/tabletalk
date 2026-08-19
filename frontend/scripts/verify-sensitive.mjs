@@ -8,14 +8,14 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-sens'
+const dataDir = '/tmp/tabletalk-sens'
 const port = 8798 + Math.floor(Math.random() * 30)
 const baseUrl = `http://127.0.0.1:${port}`
 
 fs.rmSync(dataDir, { recursive: true, force: true })
 fs.mkdirSync(dataDir, { recursive: true })
 const sidecar = spawn(path.join(backendDir, '.venv/bin/python'), ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
-  cwd: backendDir, env: { ...process.env, CLEARED_DATA_DIR: dataDir }, stdio: 'ignore'
+  cwd: backendDir, env: { ...process.env, TABLETALK_DATA_DIR: dataDir }, stdio: 'ignore'
 })
 async function waitHealth(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
@@ -38,7 +38,7 @@ try {
   const token = boot.token
   const created = await (await fetch(`${baseUrl}/api/v1/connections`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Cleared-Token': token },
+    headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': token },
     body: JSON.stringify({ name: '敏感库', dialect: 'sqlite', file: `${dataDir}/demo.db`, read_only: true, sensitive: ['orders'] })
   })).json()
   check('API 创建带敏感名单', (created.sensitive ?? []).includes('orders'), JSON.stringify(created.sensitive))
@@ -68,7 +68,7 @@ try {
   check('保存后屏蔽标记更新', (tagTxt || '').includes('2'), tagTxt || '—')
 
   // API 层确认持久化
-  const lst = await (await fetch(`${baseUrl}/api/v1/connections`, { headers: { 'X-Cleared-Token': token } })).json()
+  const lst = await (await fetch(`${baseUrl}/api/v1/connections`, { headers: { 'X-TableTalk-Token': token } })).json()
   const sens = lst.find((c) => c.name === '敏感库')?.sensitive ?? []
   check('API 确认敏感名单已更新', sens.length === 2 && sens.includes('payments.*'), JSON.stringify(sens))
 

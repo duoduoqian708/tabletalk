@@ -1,4 +1,4 @@
-# 实施计划：数据源接入流程 + 知识库重构（DATUM V2 阶段二）
+# 实施计划：数据源接入流程 + 知识库重构（tabletalk V2 阶段二）
 
 > 依据：《2026-08-19-onboarding-kb-page-design.md》（设计定稿）。本计划只列改动点与顺序。
 
@@ -29,7 +29,7 @@
 
 | 文件 | 改动 |
 |---|---|
-| `components/ConnectionModal.tsx` | 保存闸门（测试通过且未改动才可点）；草稿 localStorage（cleared-conn-drafts-v1）；test-draft 流程 |
+| `components/ConnectionModal.tsx` | 保存闸门（测试通过且未改动才可点）；草稿 localStorage（tabletalk-conn-drafts-v1）；test-draft 流程 |
 | `store/connections.ts` | kb_status 透传；草稿读回 |
 | `api/knowledge.ts` | 新增 buildJob/progress/cancel/confirmAll/status 调用 |
 | `components/KnowledgeReview.tsx` | 大改：左内容区（文档/标签子页+搜索）+ 右图区（GraphCanvas 复用 + FK/overlap 过滤 + 节点浮层编辑） |

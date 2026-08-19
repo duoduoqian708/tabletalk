@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-models-e2e'
+const dataDir = '/tmp/tabletalk-models-e2e'
 const port = 8768
 const baseUrl = `http://127.0.0.1:${port}`
 
@@ -22,7 +22,7 @@ const python = fs.existsSync(path.join(backendDir, '.venv/bin/python'))
   : 'python3'
 const sidecar = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
   cwd: backendDir,
-  env: { ...process.env, CLEARED_DATA_DIR: dataDir },
+  env: { ...process.env, TABLETALK_DATA_DIR: dataDir },
   stdio: 'ignore'
 })
 
@@ -154,7 +154,7 @@ try {
   check('保存设置', saveResult.startsWith('✓'), saveResult)
 
   // 验证后端确实保存了
-  const r = await fetch(`${baseUrl}/api/v1/settings`, { headers: { 'X-Cleared-Token': 'test-token' } })
+  const r = await fetch(`${baseUrl}/api/v1/settings`, { headers: { 'X-TableTalk-Token': 'test-token' } })
   const settings = await r.json()
   const hasTestModel = settings.ai_models.some((m) => m.name === '测试模型')
   check('后端持久化新模型', hasTestModel, `${settings.ai_models.length} 个模型`)

@@ -18,7 +18,7 @@ Verdicts: `ALLOW` | `REVIEW` | `BLOCK`. One gate for AI + manual SQL.
 - `rules.py`: parse-failure/unknown → REVIEW; DDL+AI → BLOCK, DDL+manual → REVIEW;
   UPDATE/DELETE w/o WHERE → BLOCK; other DML → REVIEW; multi-statement w/ any write → BLOCK.
 - `REVIEW` returns `preview_rows` (COUNT, 3s timeout) and needs `confirm:true` to run.
-- **INERT:** `CLEARED_GATE_REVIEW_THRESHOLD` and `gate_rules` are persisted & returned by
+- **INERT:** `TABLETALK_GATE_REVIEW_THRESHOLD` and `gate_rules` are persisted & returned by
   `GET /settings` but never read by the gate. Writes are always REVIEW.
 - Read-only connection (`read_only=True`) hard-BLOCKS any non-ALLOW verdict in `api/query.py`.
 
@@ -36,10 +36,10 @@ Verdicts: `ALLOW` | `REVIEW` | `BLOCK`. One gate for AI + manual SQL.
 
 - `connections.py`: creds stored **plaintext** in `data_dir/connections.json`
   (`credential_ref` reserved for future keychain). `public()` masks password.
-- `pool.py`: SQLite pool size 1 (serialized); PG/MySQL = `CLEARED_POOL_SIZE` (default 3);
+- `pool.py`: SQLite pool size 1 (serialized); PG/MySQL = `TABLETALK_POOL_SIZE` (default 3);
   auto-reconnect once on error.
 - `query.py`: `SELECT` w/o LIMIT gets `LIMIT (max_rows+1)` injected at SQL layer
-  (`CLEARED_QUERY_MAX_ROWS` default 1000); big ints stringified for JSON (JS precision).
+  (`TABLETALK_QUERY_MAX_ROWS` default 1000); big ints stringified for JSON (JS precision).
 - `schema.py`: 30s cache; pass `?refresh=true` after structural changes.
 - Dialects: `sqlite`/`postgres`/`mysql` via `DialectAdapter` registry; add by
   implementing adapter + importing it in `app/core/dialects/__init__.py`.
@@ -50,13 +50,13 @@ Verdicts: `ALLOW` | `REVIEW` | `BLOCK`. One gate for AI + manual SQL.
 - `route_tables` uses **confirmed tags only** — draft tags don't affect routing until confirmed.
 - Default embedder = `HashingEmbedder` (offline, DIM 256); `api` provider → OpenAI-compatible `/embeddings`.
 
-## Data dir (`CLEARED_DATA_DIR`, default `~/.cleared`)
+## Data dir (`TABLETALK_DATA_DIR`, default `~/.tabletalk`)
 
-`connections.json` · `settings.json` · `sidecar.token` (chmod 600) · `audit.log` (JSONL) ·
+`connections.json` · `settings.json` · `tabletalk.token` (chmod 600) · `audit.log` (JSONL) ·
 `chat.db` (SQLite sessions) · `knowledge.json` + `knowledge-{conn_id}.json` · `demo.db`.
 
 ## Tests
 
 `pytest.ini` sets `asyncio_mode=auto` (no decorator on `async def` tests).
 Full suite SQLite-only: `cd backend && .venv/bin/python -m pytest -q`.
-Integration (`tests/integration`, PG/MySQL) Docker-gated: `CLEARED_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v`.
+Integration (`tests/integration`, PG/MySQL) Docker-gated: `TABLETALK_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v`.

@@ -18,13 +18,44 @@ def _expand(path: str) -> Path:
     return Path(os.path.expanduser(path))
 
 
+def _migrate_legacy_data_dir(data_dir: Path, legacy_dir: Path | None = None) -> None:
+    """旧版数据目录（~/.cleared）→ 新版（~/.tabletalk）一次性迁移。
+
+    - 仅在目标目录不存在且旧目录存在时触发（复制保留旧目录作备份，不删除）
+    - sidecar.token 文件名同步为 tabletalk.token
+    - "仅默认数据目录生效"由调用方（__post_init__）判断
+    """
+    if data_dir.exists():
+        return
+    legacy = legacy_dir or _expand(os.environ.get("CLEARED_DATA_DIR", "~/.cleared"))  # noqa: S105 - 旧 env 兼容
+    if not legacy.exists():
+        return
+    try:
+        import shutil
+        import logging
+
+        shutil.copytree(legacy, data_dir)
+        old_token = data_dir / "sidecar.token"
+        if old_token.exists():
+            old_token.rename(data_dir / "tabletalk.token")
+        logging.getLogger(__name__).info("数据目录迁移完成：%s → %s（旧目录保留）", legacy, data_dir)
+    except Exception as e:  # noqa: BLE001 - 只读目录/沙箱：迁移失败不致命
+        import logging
+
+        logging.getLogger(__name__).warning("数据目录迁移失败：%s（%s）", legacy, e)
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+
 @dataclass
 class Settings:
     host: str = "127.0.0.1"
     port: int = 8765
-    data_dir: Path = field(default_factory=lambda: _expand(os.environ.get("CLEARED_DATA_DIR", "~/.cleared")))
+    data_dir: Path = field(default_factory=lambda: _expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk")))
     # 前端 SPA 构建产物目录（相对 backend cwd）；后端同源托管
-    web_dist: Path = field(default_factory=lambda: Path(os.environ.get("CLEARED_WEB_DIST", "../frontend/dist")))
+    web_dist: Path = field(default_factory=lambda: Path(os.environ.get("TABLETALK_WEB_DIST", "../frontend/dist")))
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
     # AI 网关默认值（可被 runtime settings 覆盖）
@@ -49,7 +80,7 @@ class Settings:
     # 影响行数预览（COUNT 同 WHERE）超时秒数；超时返回 None（"无法预估"）
     gate_preview_timeout: float = 3.0
 
-    # sidecar 鉴权 token（CLEARED_SIDECAR_TOKEN）；为空则启动时生成并写入 data_dir/sidecar.token
+    # sidecar 鉴权 token（TABLETALK_SIDECAR_TOKEN）；为空则启动时生成并写入 data_dir/tabletalk.token
     sidecar_token: str = ""
 
     # 知识库（可被 runtime settings 覆盖）
@@ -61,33 +92,37 @@ class Settings:
     kb_ai_annotation_samples: bool = False
 
     def __post_init__(self) -> None:
+        # 仅默认数据目录做旧版迁移（用户显式指定 TABLETALK_DATA_DIR 时不迁移）
+        default_new = _expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk"))
+        if str(self.data_dir) == str(default_new):
+            _migrate_legacy_data_dir(self.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
-            host=os.environ.get("CLEARED_HOST", "127.0.0.1"),
-            port=int(os.environ.get("CLEARED_PORT", "8765")),
-            data_dir=_expand(os.environ.get("CLEARED_DATA_DIR", "~/.cleared")),
-            web_dist=Path(os.environ.get("CLEARED_WEB_DIST", "../frontend/dist")),
-            ai_provider=os.environ.get("CLEARED_AI_PROVIDER", "mock"),
-            ai_base_url=os.environ.get("CLEARED_AI_BASE_URL", ""),
-            ai_api_key=os.environ.get("CLEARED_AI_API_KEY", ""),
-            ai_model=os.environ.get("CLEARED_AI_MODEL", "deepseek-v4-flash"),
-            ai_reasoning=os.environ.get("CLEARED_AI_REASONING", "1") == "1",
-            ai_temperature=float(os.environ.get("CLEARED_AI_TEMPERATURE", "0.2")),
-            ai_timeout=float(os.environ.get("CLEARED_AI_TIMEOUT", "120")),
-            query_max_rows=int(os.environ.get("CLEARED_QUERY_MAX_ROWS", "1000")),
-            pool_size=int(os.environ.get("CLEARED_POOL_SIZE", "3")),
-            gate_review_threshold=int(os.environ.get("CLEARED_GATE_REVIEW_THRESHOLD", "1000")),
-            gate_preview_timeout=float(os.environ.get("CLEARED_GATE_PREVIEW_TIMEOUT", "3.0")),
-            sidecar_token=os.environ.get("CLEARED_SIDECAR_TOKEN", ""),
-            embedding_provider=os.environ.get("CLEARED_EMBEDDING_PROVIDER", "hash"),
-            embedding_base_url=os.environ.get("CLEARED_EMBEDDING_BASE_URL", ""),
-            embedding_model=os.environ.get("CLEARED_EMBEDDING_MODEL", "bge-m3"),
-            embedding_api_key=os.environ.get("CLEARED_EMBEDDING_API_KEY", ""),
-            kb_sample_rows=int(os.environ.get("CLEARED_KB_SAMPLE_ROWS", "10")),
-            kb_ai_annotation_samples=os.environ.get("CLEARED_KB_AI_ANNOTATION_SAMPLES", "") == "1",
+            host=os.environ.get("TABLETALK_HOST", "127.0.0.1"),
+            port=int(os.environ.get("TABLETALK_PORT", "8765")),
+            data_dir=_expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk")),
+            web_dist=Path(os.environ.get("TABLETALK_WEB_DIST", "../frontend/dist")),
+            ai_provider=os.environ.get("TABLETALK_AI_PROVIDER", "mock"),
+            ai_base_url=os.environ.get("TABLETALK_AI_BASE_URL", ""),
+            ai_api_key=os.environ.get("TABLETALK_AI_API_KEY", ""),
+            ai_model=os.environ.get("TABLETALK_AI_MODEL", "deepseek-v4-flash"),
+            ai_reasoning=os.environ.get("TABLETALK_AI_REASONING", "1") == "1",
+            ai_temperature=float(os.environ.get("TABLETALK_AI_TEMPERATURE", "0.2")),
+            ai_timeout=float(os.environ.get("TABLETALK_AI_TIMEOUT", "120")),
+            query_max_rows=int(os.environ.get("TABLETALK_QUERY_MAX_ROWS", "1000")),
+            pool_size=int(os.environ.get("TABLETALK_POOL_SIZE", "3")),
+            gate_review_threshold=int(os.environ.get("TABLETALK_GATE_REVIEW_THRESHOLD", "1000")),
+            gate_preview_timeout=float(os.environ.get("TABLETALK_GATE_PREVIEW_TIMEOUT", "3.0")),
+            sidecar_token=os.environ.get("TABLETALK_SIDECAR_TOKEN", ""),
+            embedding_provider=os.environ.get("TABLETALK_EMBEDDING_PROVIDER", "hash"),
+            embedding_base_url=os.environ.get("TABLETALK_EMBEDDING_BASE_URL", ""),
+            embedding_model=os.environ.get("TABLETALK_EMBEDDING_MODEL", "bge-m3"),
+            embedding_api_key=os.environ.get("TABLETALK_EMBEDDING_API_KEY", ""),
+            kb_sample_rows=int(os.environ.get("TABLETALK_KB_SAMPLE_ROWS", "10")),
+            kb_ai_annotation_samples=os.environ.get("TABLETALK_KB_AI_ANNOTATION_SAMPLES", "") == "1",
         )
 
 
@@ -116,9 +151,9 @@ _token: str | None = None
 
 
 def get_token() -> str:
-    """sidecar 鉴权 token：env 提供则用之；否则生成一次并持久化到 data_dir/sidecar.token。
+    """sidecar 鉴权 token：env 提供则用之；否则生成一次并持久化到 data_dir/tabletalk.token。
 
-    Electron 拉起 sidecar 时读取该文件（或直接通过 CLEARED_SIDECAR_TOKEN 传入）。
+    Electron 拉起 sidecar 时读取该文件（或直接通过 TABLETALK_SIDECAR_TOKEN 传入）。
     """
     global _token
     if _token is None:
@@ -126,7 +161,7 @@ def get_token() -> str:
         if env.sidecar_token:
             _token = env.sidecar_token
         else:
-            path = env.data_dir / "sidecar.token"
+            path = env.data_dir / "tabletalk.token"
             _token = path.read_text(encoding="utf-8").strip() if path.exists() else ""
             if not _token:
                 _token = secrets.token_urlsafe(32)

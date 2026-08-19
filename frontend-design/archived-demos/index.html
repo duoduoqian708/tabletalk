@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLEARED · 前端 UI 设计稿</title>
+<title>TABLETALK · 前端 UI 设计稿</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -354,7 +354,7 @@ button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit
 <div class="studio">
   <!-- ================= bar ================= -->
   <header class="studio-bar">
-    <span class="wordmark"><span class="dot"></span>CLEARED <small>UI DESIGN STUDIO</small></span>
+    <span class="wordmark"><span class="dot"></span>TABLETALK <small>UI DESIGN STUDIO</small></span>
     <span class="bar-note">静态设计稿 · 非运行产品 · <b>前端当前有点击 bug，暂以此稿作为目标设计</b></span>
     <span class="spacer"></span>
     <span class="badge done">已实现 M2</span>
@@ -397,7 +397,7 @@ button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit
     <!-- ========== 00 总览 ========== -->
     <section class="mod on" data-mod="0">
       <div class="mod-head">
-        <div class="crumb">CLEARED · AI DATABASE TERMINAL</div>
+        <div class="crumb">TABLETALK · AI DATABASE TERMINAL</div>
         <h1>前端功能模块地图</h1>
         <p class="one-liner">一句话：<b style="color:var(--ink)">数据主场 + AI 副驾</b>。左侧是浏览/查询/结果（数据主场，面积大），右侧是对话面板（AI 副驾，窄栏）。安全三色（绿=读 / 黄=写 / 红=DDL）是全局唯一的彩色语言。点击下方卡片进入对应模块设计。</p>
         <div class="chips">
@@ -418,12 +418,12 @@ button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit
         <div>
           <div class="grp-label">状态 A · 连接中（Boot）</div>
           <div class="boot">
-            <div class="boot-bar"><span class="wordmark"><span class="dot"></span>CLEARED</span></div>
+            <div class="boot-bar"><span class="wordmark"><span class="dot"></span>TABLETALK</span></div>
             <div class="boot-body">
               <div class="boot-card">
-                <div class="kicker">connecting to CLEARED</div>
+                <div class="kicker">connecting to TABLETALK</div>
                 <div class="spinner"><i></i><i></i><i></i></div>
-                <p class="hint">正在连接本地 CLEARED 服务…</p>
+                <p class="hint">正在连接本地 TABLETALK 服务…</p>
                 <div class="boot-err">× 无法连接 127.0.0.1:8765，请确认服务已启动</div>
               </div>
             </div>
@@ -496,7 +496,7 @@ button{font-family:inherit;cursor:pointer;border:0;background:none;color:inherit
                         </div>
                       </div>
                     </div>
-                    <div class="frow"><label class="fl">数据库文件</label><input class="input" value="~/.cleared/demo.db"></div>
+                    <div class="frow"><label class="fl">数据库文件</label><input class="input" value="~/.tabletalk/demo.db"></div>
                     <div class="frow2">
                       <div class="frow" style="margin:0"><label class="fl">只读会话</label>
                         <div class="switch"><span class="knob"></span>开</div>
@@ -966,12 +966,12 @@ function setTheme(t){
   else document.documentElement.dataset.theme=t
   themeDot.style.background=THEME_META[t].dot
   themeLabel.textContent=THEME_META[t].name
-  try{localStorage.setItem('cleared-theme',t)}catch{}
+  try{localStorage.setItem('tabletalk-theme',t)}catch{}
 }
 document.querySelectorAll('[data-theme-pick]').forEach(b=>b.addEventListener('click',()=>{
   setTheme(b.dataset.themePick); document.getElementById('themeDD').classList.remove('open')
 }))
-;(()=>{let t='dark';try{t=localStorage.getItem('cleared-theme')||'dark'}catch{};if(!THEME_META[t])t='dark';setTheme(t)})()
+;(()=>{let t='dark';try{t=localStorage.getItem('tabletalk-theme')||'dark'}catch{};if(!THEME_META[t])t='dark';setTheme(t)})()
 </script>
 </body>
 </html>

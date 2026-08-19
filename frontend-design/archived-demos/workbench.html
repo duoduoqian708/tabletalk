@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLEARED · 三栏工作台 × 7 风格</title>
+<title>TABLETALK · 三栏工作台 × 7 风格</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=VT323&family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Sora:wght@400;600&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -331,7 +331,7 @@ html[data-skin="xp"] .thk::before{content:"◆ "}
 <body>
 <div class="app">
   <header class="appbar">
-    <span class="logo"><span class="dot"></span>CLEARED <span class="dim" id="skinDim">NEON</span></span>
+    <span class="logo"><span class="dot"></span>TABLETALK <span class="dim" id="skinDim">NEON</span></span>
     <div class="ds" id="ds">
       <button class="ds-btn" id="dsBtn"><span class="d" id="dsDot"></span><span id="dsName">demo.db</span><span class="chev">▼</span></button>
       <div class="ds-menu">
@@ -481,7 +481,7 @@ function setSkin(k){
   document.getElementById('skinName').textContent=SKINS[k][0]
   document.getElementById('skinDim').textContent=SKINS[k][1]
   document.querySelectorAll('.sk-mi').forEach(m=>m.querySelector('.ck').textContent=m.dataset.skin===k?'✓':'')
-  try{localStorage.setItem('cleared-skin',k)}catch{}
+  try{localStorage.setItem('tabletalk-skin',k)}catch{}
 }
 document.getElementById('dsBtn').addEventListener('click',()=>document.getElementById('ds').classList.toggle('open'))
 document.addEventListener('click',e=>{if(!e.target.closest('#ds'))document.getElementById('ds').classList.remove('open')})
@@ -493,9 +493,9 @@ document.getElementById('aSend').addEventListener('click',()=>{const f=document.
 document.getElementById('aField').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById('aSend').click()}})
 document.getElementById('aField').addEventListener('focus',()=>{if(document.getElementById('aField').textContent.startsWith('ask your'))document.getElementById('aField').textContent=''})
 document.getElementById('aField').addEventListener('blur',()=>{if(!document.getElementById('aField').textContent.trim())document.getElementById('aField').textContent='ask your database…'})
-;(()=>{let k='neon';try{k=localStorage.getItem('cleared-skin')||'neon'}catch{};setSkin(k)})()
+;(()=>{let k='neon';try{k=localStorage.getItem('tabletalk-skin')||'neon'}catch{};setSkin(k)})()
 renderSchema()
-addMsg('a','我是 CLEARED 的 AI 副驾。试试问 <b>退货率最高的 10 个商品</b>，或输入 <span style="color:var(--red)">delete from orders</span> 看安全闸门拦截。','txt')
+addMsg('a','我是 TABLETALK 的 AI 副驾。试试问 <b>退货率最高的 10 个商品</b>，或输入 <span style="color:var(--red)">delete from orders</span> 看安全闸门拦截。','txt')
 </script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>B · 命令流对话台 · CLEARED</title>
+<title>B · 命令流对话台 · TABLETALK</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -109,7 +109,7 @@ table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10
 <body>
 <div class="app">
   <header class="appbar">
-    <span class="logo"><span class="prompt">~/cleared</span><span class="path"> » <span id="dbNameB">demo.db</span></span><span class="cursor"></span></span>
+    <span class="logo"><span class="prompt">~/tabletalk</span><span class="path"> » <span id="dbNameB">demo.db</span></span><span class="cursor"></span></span>
     <span class="spacer"></span>
     <span class="ds-use"><span class="kw">use</span></span>
     <div class="ds" id="ds">
@@ -219,7 +219,7 @@ document.getElementById('pField').addEventListener('keydown',e=>{if(e.key==='Ent
 document.getElementById('pField').addEventListener('focus',()=>{if(document.getElementById('pField').textContent.startsWith('ask your'))document.getElementById('pField').textContent=''})
 document.getElementById('pField').addEventListener('blur',()=>{if(!document.getElementById('pField').textContent.trim())document.getElementById('pField').textContent='ask your database…'})
 renderSchema()
-addEl(`<div class="msg-ai"><div class="think"><span class="tn">BOOT</span><span class="tl">CLEARED 已就绪 · 安全闸门 armed · 数据源 ${CUR}（sqlite）</span></div><div class="ai-txt">这是一个<b style="color:var(--ink)">命令流对话台</b>：结果直接嵌进对话流。试试：<b style="color:var(--ink)">退货率最高的 10 个商品</b>、<span style="color:var(--red)">delete from orders</span>（看拦截）、<span style="color:var(--amber)">更新商品价格</span>（看确认）。左上角 ≡ 可展开 schema。</div></div>`)
+addEl(`<div class="msg-ai"><div class="think"><span class="tn">BOOT</span><span class="tl">TABLETALK 已就绪 · 安全闸门 armed · 数据源 ${CUR}（sqlite）</span></div><div class="ai-txt">这是一个<b style="color:var(--ink)">命令流对话台</b>：结果直接嵌进对话流。试试：<b style="color:var(--ink)">退货率最高的 10 个商品</b>、<span style="color:var(--red)">delete from orders</span>（看拦截）、<span style="color:var(--amber)">更新商品价格</span>（看确认）。左上角 ≡ 可展开 schema。</div></div>`)
 </script>
 </body>
 </html>

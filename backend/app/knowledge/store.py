@@ -31,7 +31,7 @@ class KnowledgeBase:
     def __init__(self, data_dir: Path, runtime: "SettingsStore | None" = None) -> None:
         self._data_dir = data_dir
         self._runtime = runtime
-        self._storage_backend = os.environ.get("CLEARED_KB_STORAGE", "")  # sqlite(默认) | json
+        self._storage_backend = os.environ.get("TABLETALK_KB_STORAGE", "")  # sqlite(默认) | json
         self._storages: dict[str, Any] = {}
         self._emb: Embedder = HashingEmbedder()
         self._auto: dict[str, list[KnowledgeDoc]] = {}

@@ -2,7 +2,7 @@
 
 AI-first 数据库客户端（自托管 Web）。用自然语言对话查询你的数据库，背后是一套**模型无关的本地安全闸门**：AI 可以写，但永远不能危险地写。
 
-> 曾用名：CLEARED → DATUM。现正式命名为 **tabletalk**。
+> 曾用名：TABLETALK → tabletalk。现正式命名为 **tabletalk**。
 
 ## 核心能力
 
@@ -15,12 +15,12 @@ AI-first 数据库客户端（自托管 Web）。用自然语言对话查询你�
 ## 快速开始
 
 ```bash
-python3 backend/cleared.py        # 一键：建 venv → 装依赖 → 构建前端 → 起服务 → 开浏览器
+python3 backend/tabletalk.py        # 一键：建 venv → 装依赖 → 构建前端 → 起服务 → 开浏览器
 ```
 
-- 首次启动自动播种演示库（`~/.cleared/demo.db`），连接页「使用演示库」即可体验
+- 首次启动自动播种演示库（`~/.tabletalk/demo.db`），连接页「使用演示库」即可体验
 - 大模型与嵌入模型**必须用户自配**（系统设置里配置任意 OpenAI 兼容端点）；未配置嵌入模型时降级为词面+图谱检索
-- 数据目录默认 `~/.cleared`（连接配置 / 审计 / 会话 / 知识库），可用 `CLEARED_DATA_DIR` 覆盖
+- 数据目录默认 `~/.tabletalk`（连接配置 / 审计 / 会话 / 知识库），可用 `TABLETALK_DATA_DIR` 覆盖
 
 ## 技术栈
 

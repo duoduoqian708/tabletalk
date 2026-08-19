@@ -147,7 +147,7 @@ class RuntimeSettings:
             "runtime": {
                 "data_dir": str(get_env().data_dir),
                 "port": get_env().port,
-                "auth": "X-Cleared-Token · 本机",
+                "auth": "X-TableTalk-Token · 本机",
             },
             # 兼容字段（旧前端 / 旧脚本仍能读）
             "ai_provider": self.ai_provider,

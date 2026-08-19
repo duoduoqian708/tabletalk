@@ -1,8 +1,8 @@
-# DATUM V2 Implementation Plan（总计划 P1–P6）
+# tabletalk V2 Implementation Plan（总计划 P1–P6）
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 按 `docs/superpowers/specs/2026-08-19-datum-v2-vision-design.md` 落地 V2：图谱画布工作区 + Void 视觉 + 三模式图库 + 表格视图 + AI 交互重做 + 技能可编排，V1 功能零删除。
+**Goal:** 按 `docs/superpowers/specs/2026-08-19-tabletalk-v2-vision-design.md` 落地 V2：图谱画布工作区 + Void 视觉 + 三模式图库 + 表格视图 + AI 交互重做 + 技能可编排，V1 功能零删除。
 
 **Architecture:** 前端 React SPA（zustand，自研轻量 SVG 画布引擎），后端 FastAPI sidecar（tools/skills 注册表演进为剧本执行器 + 技能广场 API）。每个子项目独立提交、独立验证（typecheck + build + pytest + 重启 sidecar + 手测）。
 
@@ -112,7 +112,7 @@ button, input, textarea { font-family: inherit; }
 ```tsx
 // 顶栏结构（功能不变：tab 切换、连接菜单、设置、审计入口保留）
 <header className="appbar">
-  <span className="wordmark"><span className="dot" />DATUM <small>DB</small></span>
+  <span className="wordmark"><span className="dot" />tabletalk <small>DB</small></span>
   <ConnectionMenu onNew={() => setModalOpen(true)} />
   <nav className="nav">{TABS.map(...)}</nav>
   <span className="cur-table mono" title="当前展示">{subject}</span>

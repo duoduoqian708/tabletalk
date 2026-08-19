@@ -25,10 +25,10 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     'Content-Type': 'application/json',
     ...((init.headers as Record<string, string>) ?? {})
   }
-  if (r.token) headers['X-Cleared-Token'] = r.token
+  if (r.token) headers['X-TableTalk-Token'] = r.token
   // TODO: 测试后删除——所有 API 请求收发日志
   const dbgStart = performance.now()
-  console.log(`[DATUM][api] ${init.method ?? 'GET'} ${path}`)
+  console.log(`[tabletalk][api] ${init.method ?? 'GET'} ${path}`)
   const res = await fetch(`${r.baseUrl}${path}`, { ...init, headers })
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
@@ -38,10 +38,10 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     } catch {
       /* 非 JSON 错误体 */
     }
-    console.log(`[DATUM][api] ${init.method ?? 'GET'} ${path} -> ${res.status} (${msg}) ${Math.round(performance.now() - dbgStart)}ms`)
+    console.log(`[tabletalk][api] ${init.method ?? 'GET'} ${path} -> ${res.status} (${msg}) ${Math.round(performance.now() - dbgStart)}ms`)
     throw new ApiError(res.status, msg)
   }
   const data = (await res.json()) as T
-  console.log(`[DATUM][api] ${init.method ?? 'GET'} ${path} -> 200 ok ${Math.round(performance.now() - dbgStart)}ms`)
+  console.log(`[tabletalk][api] ${init.method ?? 'GET'} ${path} -> 200 ok ${Math.round(performance.now() - dbgStart)}ms`)
   return data
 }

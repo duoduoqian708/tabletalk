@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLEARED · 北欧极简 · 全产品设计</title>
+<title>TABLETALK · 北欧极简 · 全产品设计</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -422,7 +422,7 @@ table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11
 
   <!-- ============ topbar ============ -->
   <header class="appbar">
-    <span class="logo"><span class="dot"></span><span class="lg">CLEARED<sub>DB</sub></span></span>
+    <span class="logo"><span class="dot"></span><span class="lg">TABLETALK<sub>DB</sub></span></span>
     <span class="sep"></span>
     <div class="ds" id="ds">
       <button class="ds-btn" id="dsBtn"><span class="d" id="dsDot"></span><span id="dsName">demo.db</span><span class="chev">▼</span></button>
@@ -453,7 +453,7 @@ table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11
         <button class="sys-mi" data-sec="theme"><span class="ic">◐</span>主题风格<span class="sg">北欧极简</span></button>
         <button class="sys-mi" data-sec="llm"><span class="ic">◎</span>大模型接入<span class="sg">mock</span></button>
         <button class="sys-mi" data-sec="safety"><span class="ic">▣</span>安全参数<span class="sg">row cap 1000</span></button>
-        <button class="sys-mi" data-sec="general"><span class="ic">⚙</span>通用<span class="sg">~/.cleared</span></button>
+        <button class="sys-mi" data-sec="general"><span class="ic">⚙</span>通用<span class="sg">~/.tabletalk</span></button>
         <div class="ds-mn">数据源切换之后的模块（工作台 / 安全闸门 / 知识库 / 图谱 / 审计）均跟随当前数据源；这里管平台整体。</div>
       </div>
     </div>
@@ -689,9 +689,9 @@ table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11
             <div class="panel">
               <div class="p-h">服务<span class="p-s">本机 · 127.0.0.1</span></div>
               <div class="p-b">
-                <div class="set-row readonly inline"><span class="sr-l">数据目录</span><input value="~/.cleared" readonly></div>
+                <div class="set-row readonly inline"><span class="sr-l">数据目录</span><input value="~/.tabletalk" readonly></div>
                 <div class="set-row readonly inline"><span class="sr-l">监听端口</span><input value="8765" readonly></div>
-                <div class="set-row readonly inline"><span class="sr-l">鉴权</span><input value="X-Cleared-Token · 本机" readonly></div>
+                <div class="set-row readonly inline"><span class="sr-l">鉴权</span><input value="X-TableTalk-Token · 本机" readonly></div>
               </div>
             </div>
           </section>
@@ -1133,7 +1133,7 @@ $('proxyOn').addEventListener('change',()=>{
 $('saveBtn').addEventListener('click',()=>{toast('设置已保存 · 运行时生效')})
 
 /* ==================== init ==================== */
-$('aScroll').insertAdjacentHTML('beforeend',`<div class="m-a"><div class="think"><span class="tn">BOOT</span><span class="tl">CLEARED 已就绪 · 安全闸门 armed · ${CUR}（sqlite）</span></div><div class="ai-txt">这是<b style="color:var(--ink)">北欧极简</b>三栏工作台。试试：<b style="color:var(--ink)">退货率最高的 10 个商品</b>、<span style="color:var(--red)">delete from orders</span>（拦截）、<span style="color:var(--amber)">更新商品价格</span>（确认）。右上角可切到连接 / 安全闸门 / 知识库 / 图谱 / 审计 / 设置。</div></div>`)
+$('aScroll').insertAdjacentHTML('beforeend',`<div class="m-a"><div class="think"><span class="tn">BOOT</span><span class="tl">TABLETALK 已就绪 · 安全闸门 armed · ${CUR}（sqlite）</span></div><div class="ai-txt">这是<b style="color:var(--ink)">北欧极简</b>三栏工作台。试试：<b style="color:var(--ink)">退货率最高的 10 个商品</b>、<span style="color:var(--red)">delete from orders</span>（拦截）、<span style="color:var(--amber)">更新商品价格</span>（确认）。右上角可切到连接 / 安全闸门 / 知识库 / 图谱 / 审计 / 设置。</div></div>`)
 setDS('demo.db')
 loadTable('orders')
 </script>

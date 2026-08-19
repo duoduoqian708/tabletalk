@@ -19,7 +19,7 @@ async def test_bootstrap_issues_token_without_auth():
         r = await c.get("/api/v1/bootstrap")
         assert r.status_code == 200
         body = r.json()
-        assert body["token"] == os.environ["CLEARED_SIDECAR_TOKEN"]
+        assert body["token"] == os.environ["TABLETALK_SIDECAR_TOKEN"]
         assert body["dataDir"]
 
 

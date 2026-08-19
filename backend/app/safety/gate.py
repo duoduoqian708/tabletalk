@@ -91,7 +91,7 @@ def suggest_safe(sql: str, sqlglot_dialect: str, origin: Origin) -> list[str]:
 
 
 def sqlglot_dialect_for(dialect: str) -> str:
-    """把 CLEARED 方言名映射为 sqlglot 方言名。从方言注册表取，无需硬编码白名单——
+    """把 TABLETALK 方言名映射为 sqlglot 方言名。从方言注册表取，无需硬编码白名单——
     新增数据库只需在其 DialectAdapter 上声明 sqlglot_name，此处自动生效。"""
     from app.core.dialects.registry import registry
 

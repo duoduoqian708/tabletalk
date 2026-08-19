@@ -27,11 +27,20 @@ export interface Conversation {
 
 export type TrustLevel = 'all_confirm' | 'read_auto' | 'max_trust'
 
-const LS_KEY = 'cleared-chats-v1'
+const LS_KEY = 'tabletalk-chats-v1'
+const LS_KEY_LEGACY = 'cleared-chats-v1'
 
 function load(): Conversation[] {
   try {
-    const raw = localStorage.getItem(LS_KEY)
+    let raw = localStorage.getItem(LS_KEY)
+    if (!raw) {
+      // 旧键兼容：读入旧会话并迁移到新键（一次性）
+      raw = localStorage.getItem(LS_KEY_LEGACY)
+      if (raw) {
+        localStorage.setItem(LS_KEY, raw)
+        localStorage.removeItem(LS_KEY_LEGACY)
+      }
+    }
     return raw ? (JSON.parse(raw) as Conversation[]) : []
   } catch {
     return []
@@ -53,7 +62,7 @@ interface ChatState {
   select: (id: string) => void
 }
 
-const TRUST_KEY = 'cleared-trust-level'
+const TRUST_KEY = 'tabletalk-trust-level'
 
 export const useChat = create<ChatState>((set) => ({
   conversations: load(),

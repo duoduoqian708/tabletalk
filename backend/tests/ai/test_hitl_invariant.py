@@ -35,7 +35,7 @@ async def test_post_query_write_requires_confirm(app_state, conn_id):
     from app.config import get_token
 
     transport = ASGITransport(app=app)
-    headers = {"X-Cleared-Token": get_token()}
+    headers = {"X-TableTalk-Token": get_token()}
     async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as c:
         payload = {
             "connection_id": conn_id,

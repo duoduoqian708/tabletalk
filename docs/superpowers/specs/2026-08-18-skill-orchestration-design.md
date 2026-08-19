@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-把 CLEARED 从"一个数据库客户端"升级为**可扩展的 agent 平台**：能力以"技能（skill）"为单元可配置、可插拔、可增删，Agent 通过意图识别调度不同技能完成不同任务（查数据 / 报表 / 查变更历史 / 知识库问答 / SQL 诊断……），查询数据库仍是主场景但不被它锁死。
+把 TABLETALK 从"一个数据库客户端"升级为**可扩展的 agent 平台**：能力以"技能（skill）"为单元可配置、可插拔、可增删，Agent 通过意图识别调度不同技能完成不同任务（查数据 / 报表 / 查变更历史 / 知识库问答 / SQL 诊断……），查询数据库仍是主场景但不被它锁死。
 
 ## 2. 核心概念：两层模型（Tool 原子层 × Skill 剧本层）
 
@@ -159,7 +159,7 @@ class Skill:
 
 - **V1 只用 function-call**：技能的工具描述为结构化 JSON Schema，`execute_tool` 按名分发。自研循环直接调 Python，不经外部协议。
 - **统一工具层 = 未来 MCP 出口**：工具 schema 用标准 JSON Schema 组织，将来要 MCP 时在工具层外加"**MCP 适配器**"（把 schema 翻译成 MCP 工具、执行转发给 execute_tool）即可，逻辑不变。
-- **为什么现在不做 MCP**：MCP 是"让外部 agent（Claude/Cursor）调 CLEARED"用的，不是给我们自己用；团队网关/开放平台（V1.5+）才触发。设计预留、当下零负担。
+- **为什么现在不做 MCP**：MCP 是"让外部 agent（Claude/Cursor）调 TABLETALK"用的，不是给我们自己用；团队网关/开放平台（V1.5+）才触发。设计预留、当下零负担。
 
 ## 8. Agent 调度流程（query 技能 = 四步剧本串 Tool）
 

@@ -8,14 +8,14 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-p6'
+const dataDir = '/tmp/tabletalk-p6'
 const port = 8780 + Math.floor(Math.random() * 100)
 const baseUrl = `http://127.0.0.1:${port}`
 
 fs.rmSync(dataDir, { recursive: true, force: true })
 fs.mkdirSync(dataDir, { recursive: true })
 const sidecar = spawn(path.join(backendDir, '.venv/bin/python'), ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
-  cwd: backendDir, env: { ...process.env, CLEARED_DATA_DIR: dataDir }, stdio: 'ignore'
+  cwd: backendDir, env: { ...process.env, TABLETALK_DATA_DIR: dataDir }, stdio: 'ignore'
 })
 async function waitHealth(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs
@@ -70,7 +70,7 @@ try {
     await page.waitForTimeout(1200)
     const after = await page.evaluate(async () => {
       const b = await (await fetch('/api/v1/bootstrap')).json()
-      const r = await fetch('/api/v1/skills', { headers: { 'X-Cleared-Token': b.token } })
+      const r = await fetch('/api/v1/skills', { headers: { 'X-TableTalk-Token': b.token } })
       const d = await r.json()
       const q = d.skills.find((s) => s.id === 'query')
       return q.tools.includes('run_dml')
@@ -119,7 +119,7 @@ try {
 
   // 内置不可删（API 层验证）
   const delRes = await page.evaluate(async () => {
-    const b = await (await fetch('/api/v1/bootstrap')).json(); const r = await fetch('/api/v1/skills/query', { method: 'DELETE', headers: { 'X-Cleared-Token': b.token } })
+    const b = await (await fetch('/api/v1/bootstrap')).json(); const r = await fetch('/api/v1/skills/query', { method: 'DELETE', headers: { 'X-TableTalk-Token': b.token } })
     return r.status
   })
   check('内置技能删除被拒', delRes === 403, `HTTP ${delRes}`)
@@ -140,7 +140,7 @@ try {
   sidecar.kill('SIGKILL')
   await new Promise((r) => setTimeout(r, 2000))
   const sidecar2 = spawn(path.join(backendDir, '.venv/bin/python'), ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
-    cwd: backendDir, env: { ...process.env, CLEARED_DATA_DIR: dataDir }, stdio: 'ignore'
+    cwd: backendDir, env: { ...process.env, TABLETALK_DATA_DIR: dataDir }, stdio: 'ignore'
   })
   await waitHealth(45000)
   const page2 = await browser.newPage({ viewport: { width: 1480, height: 940 } })

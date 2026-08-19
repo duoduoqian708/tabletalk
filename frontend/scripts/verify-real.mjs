@@ -11,17 +11,17 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-real'
+const dataDir = '/tmp/tabletalk-real'
 const port = 8773
 const baseUrl = `http://127.0.0.1:${port}`
 
 fs.rmSync(dataDir, { recursive: true, force: true })
 fs.mkdirSync(dataDir, { recursive: true })
-const userSettings = path.join(os.homedir(), '.cleared', 'settings.json')
+const userSettings = path.join(os.homedir(), '.tabletalk', 'settings.json')
 if (fs.existsSync(userSettings)) fs.copyFileSync(userSettings, path.join(dataDir, 'settings.json'))
 
 const sidecar = spawn(path.join(backendDir, '.venv/bin/python'), ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
-  cwd: backendDir, env: { ...process.env, CLEARED_DATA_DIR: dataDir }, stdio: 'ignore'
+  cwd: backendDir, env: { ...process.env, TABLETALK_DATA_DIR: dataDir }, stdio: 'ignore'
 })
 async function waitHealth(timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs

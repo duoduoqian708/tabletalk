@@ -8,7 +8,7 @@ interface Props {
 }
 
 const DIALECTS = ['sqlite', 'postgres', 'mysql']
-const DRAFT_KEY = 'cleared-conn-drafts-v1'
+const DRAFT_KEY = 'tabletalk-conn-drafts-v1'
 
 interface Draft {
   name: string
@@ -144,7 +144,7 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
           {isSqlite ? (
             <div className="fld">
               <label>SQLite 文件路径</label>
-              <input value={form.file} onChange={(e) => set('file', e.target.value)} placeholder="~/.cleared/demo.db" />
+              <input value={form.file} onChange={(e) => set('file', e.target.value)} placeholder="~/.tabletalk/demo.db" />
               <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 10.5, color: 'var(--ink-dim)' }}>
                 SQLite 无“库”概念：测试 = 文件可读且能列出表
               </div>

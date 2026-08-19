@@ -183,7 +183,7 @@ export function DataTable(): React.JSX.Element {
         <div className="empty">
           <div>
             <div style={{ fontSize: 13, color: 'var(--ink-dim)', marginBottom: 6 }}>还没有结果</div>
-            在右侧问 DATUM，或在 schema 树点一张表预览，<br />
+            在右侧问 tabletalk，或在 schema 树点一张表预览，<br />
             结果会出现在这里。
           </div>
         </div>

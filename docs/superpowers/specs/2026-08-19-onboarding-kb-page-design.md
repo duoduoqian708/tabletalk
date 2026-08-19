@@ -1,7 +1,7 @@
-# 数据源接入流程 + 知识库页设计（DATUM V2 补充）
+# 数据源接入流程 + 知识库页设计（tabletalk V2 补充）
 
 > 状态：设计定稿（2026-08-19）。只写设计，未动代码。
-> 关联：`2026-08-19-datum-v2-vision-design.md`（V2 总愿景）、`2026-08-19-datum-v2.md`（P1–P6 实施）。
+> 关联：`2026-08-19-tabletalk-v2-vision-design.md`（V2 总愿景）、`2026-08-19-tabletalk-v2.md`（P1–P6 实施）。
 
 ## 1. 背景与目标
 
@@ -29,7 +29,7 @@
 
 ### 2.1 草稿态（浏览器缓存，不进后端）
 
-- 表单内容存 `localStorage`（键 `cleared-conn-drafts-v1`，按数据源特征分组）。
+- 表单内容存 `localStorage`（键 `tabletalk-conn-drafts-v1`，按数据源特征分组）。
 - 用户填一半切走（比如去找正确密码）、表单刷新回来自动回填。
 - **测试通过才从缓存删除并 POST 到后端**——后端配置文件只收"验证过的连接"。
 - 后端 `connections.json` 增加非敏感元数据字段：`kb_status`、`kb_updated_at`（操作状态，不是凭据）。

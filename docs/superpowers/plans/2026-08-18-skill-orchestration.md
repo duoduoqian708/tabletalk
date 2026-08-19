@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 CLEARED 的 AI 层重构成"Tool 原子层 × Skill 剧本层 × 意图调度"的可插拔技能平台，同时完成 `app/ai/` 目录整顿（合并碎片、消除镜像、统一命名）。
+**Goal:** 把 TABLETALK 的 AI 层重构成"Tool 原子层 × Skill 剧本层 × 意图调度"的可插拔技能平台，同时完成 `app/ai/` 目录整顿（合并碎片、消除镜像、统一命名）。
 
 **Architecture:** 现有自研 ReAct 循环（`loop.py`）升级为 Agent；新建 `skills/`（注册表+剧本）与 `tools/`（原子工具）两目录；`loop.py`/`report.py` 抽共享基座为统一 Agent 循环；`provider_cfg.py` 并入 gateway、`schemas.py` 更名 `dto.py` 消三义。安全闸门是所有技能统一底座，任何 SQL 执行仍过同一闸门（铁律，HITL 测试 `test_hitl_invariant.py` 必须持续通过）。
 

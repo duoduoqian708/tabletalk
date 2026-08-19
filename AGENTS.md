@@ -18,11 +18,11 @@ easy-to-miss, verified facts.
 
 ```bash
 # 一键启动（从零到可用：自动建 venv → 装依赖 → 构建前端 → 起 sidecar → 开浏览器）
-python3 backend/cleared.py        # 重复运行幂等秒起；--check 只检查环境
+python3 backend/tabletalk.py        # 重复运行幂等秒起；--check 只检查环境
 
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python scripts/seed_demo_db.py     # creates ~/.cleared/demo.db demo DB
+.venv/bin/python scripts/seed_demo_db.py     # creates ~/.tabletalk/demo.db demo DB
 .venv/bin/python -m uvicorn app.main:app --reload --port 8765
 .venv/bin/python -m pytest -q                # full suite (~116, SQLite only)
 ```
@@ -30,7 +30,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - `pytest.ini` sets `asyncio_mode = auto` → `async def` tests need no decorator.
 - Single test: `.venv/bin/python -m pytest tests/safety/test_gate.py::<name> -q`
 - Integration tests (`tests/integration/`, Postgres/MySQL) are **Docker-gated**:
-  `docker compose -f docker-compose.integration.yml up -d && CLEARED_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v`. They are skipped without the env var.
+  `docker compose -f docker-compose.integration.yml up -d && TABLETALK_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v`. They are skipped without the env var.
 
 ## Frontend commands
 
@@ -48,8 +48,8 @@ Aliases: `@renderer` → `src/renderer/src`, `@shared` → `src/shared`.
 ## Auth gotcha (easy to waste time on)
 
 All `/api/*` routes (except `GET /health`, `GET /bootstrap`, and OPTIONS) require
-header `X-Cleared-Token`. The token is set by `CLEARED_SIDECAR_TOKEN`, or
-auto-generated into `<data_dir>/sidecar.token`. When calling the API from scripts
+header `X-TableTalk-Token`. The token is set by `TABLETALK_SIDECAR_TOKEN`, or
+auto-generated into `<data_dir>/tabletalk.token`. When calling the API from scripts
 or tests, first `GET /api/v1/bootstrap` (unauthenticated) to obtain the token.
 Browser does this via `src/renderer/src/hooks/useBootstrap.ts`.
 
@@ -63,31 +63,31 @@ Browser does this via `src/renderer/src/hooks/useBootstrap.ts`.
 
 ## AI gateway
 
-Default `CLEARED_AI_PROVIDER=mock` needs no API key and runs the full flow.
-`cloud`/`local` use any OpenAI-compatible endpoint (`CLEARED_AI_BASE_URL/API_KEY/MODEL`).
+Default `TABLETALK_AI_PROVIDER=mock` needs no API key and runs the full flow.
+`cloud`/`local` use any OpenAI-compatible endpoint (`TABLETALK_AI_BASE_URL/API_KEY/MODEL`).
 
 ## First-run behavior
 
 Backend lifespan seeds `data_dir/demo.db` on first start; the connection page
-"使用演示库" points at it. `CLEARED_DATA_DIR` (default `~/.cleared`) holds
+"使用演示库" points at it. `TABLETALK_DATA_DIR` (default `~/.tabletalk`) holds
 connections, audit JSONL, and the token.
 
 ## Config
 
-Backend env via `backend/.env` (see `.env.example`): `CLEARED_PORT`,
-`CLEARED_DATA_DIR`, `CLEARED_SIDECAR_TOKEN`, `CLEARED_AI_*`,
-`CLEARED_WEB_DIST` (SPA dir, default `../frontend/dist`),
-`CLEARED_POOL_SIZE`, `CLEARED_QUERY_MAX_ROWS`. Runtime AI/gate settings are
+Backend env via `backend/.env` (see `.env.example`): `TABLETALK_PORT`,
+`TABLETALK_DATA_DIR`, `TABLETALK_SIDECAR_TOKEN`, `TABLETALK_AI_*`,
+`TABLETALK_WEB_DIST` (SPA dir, default `../frontend/dist`),
+`TABLETALK_POOL_SIZE`, `TABLETALK_QUERY_MAX_ROWS`. Runtime AI/gate settings are
 overridable via `PUT /api/v1/settings`.
 
-> **Gotcha:** `CLEARED_GATE_REVIEW_THRESHOLD` and `gate_rules` are configurable
+> **Gotcha:** `TABLETALK_GATE_REVIEW_THRESHOLD` and `gate_rules` are configurable
 > and persisted, but **no gate code reads them** — writes are always `REVIEW`
 > regardless of row count. Don't assume a threshold auto-allows writes.
 
 ## 会话死规矩（用户强制要求，务必自动执行，不等提醒）
 
 - **改完后端（Python）代码后，必须主动重启后端 sidecar，不要等用户喊：**
-  1. 找到占用端口的进程（默认 `CLEARED_PORT=8765`）：`lsof -ti tcp:8765`；
+  1. 找到占用端口的进程（默认 `TABLETALK_PORT=8765`）：`lsof -ti tcp:8765`；
   2. `kill -9 <pid>` 杀掉旧进程，确认端口空闲（`lsof -ti tcp:8765` 无输出）；
   3. 重新拉起：`cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8765`；
   4. 验证：`curl -s http://127.0.0.1:8765/api/v1/health` 返回预期字段（尤其改了 health/settings 后要确认新字段出现，旧进程会返回旧结构导致前端显示 `—`）。

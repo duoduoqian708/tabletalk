@@ -6,12 +6,12 @@ import os
 import pytest
 
 # 必须在任何 app.* 导入之前设置：sidecar token 鉴权中间件需要它
-os.environ.setdefault("CLEARED_SIDECAR_TOKEN", "test-token")
+os.environ.setdefault("TABLETALK_SIDECAR_TOKEN", "test-token")
 
 
 def pytest_configure(config):
     config.addinivalue_line(
-        "markers", "integration: Docker 门控集成测试（需 CLEARED_INTEGRATION=1）"
+        "markers", "integration: Docker 门控集成测试（需 TABLETALK_INTEGRATION=1）"
     )
 
 
@@ -19,7 +19,7 @@ def pytest_configure(config):
 async def _isolate(tmp_path):
     """每个测试前重建应用状态（独立数据目录）；测试后关闭连接池，避免 aiosqlite 线程挂起进程退出。
 
-    注意：不调用 get_state()（它会初始化默认 ~/.cleared 并触发 kb_status 迁移写盘）。
+    注意：不调用 get_state()（它会初始化默认 ~/.tabletalk 并触发 kb_status 迁移写盘）。
     """
     from app.state import _state, reset_state
 
@@ -64,6 +64,6 @@ async def client(app_state, conn_id):
     from app.main import app
 
     transport = ASGITransport(app=app)
-    headers = {"X-Cleared-Token": os.environ["CLEARED_SIDECAR_TOKEN"]}
+    headers = {"X-TableTalk-Token": os.environ["TABLETALK_SIDECAR_TOKEN"]}
     async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as c:
         yield c

@@ -1,8 +1,8 @@
-"""DATUM 一键启动器：从零到可用一条命令。
+"""tabletalk 一键启动器：从零到可用一条命令。
 
 用法：
-    python cleared.py            # 自动完成：venv → 依赖 → 前端构建 → 起 sidecar → 开浏览器
-    python cleared.py --check    # 只检查环境（venv/依赖/前端），不起服务
+    python tabletalk.py            # 自动完成：venv → 依赖 → 前端构建 → 起 sidecar → 开浏览器
+    python tabletalk.py --check    # 只检查环境（venv/依赖/前端），不起服务
 
 流程（全部幂等，重复运行秒起）：
   1. 确保 backend/.venv 存在（无则 python3 -m venv 创建）
@@ -11,7 +11,7 @@
   3. 确保前端已构建（dist 缺失或源码更新则 npm install + npm run build）
   4. 自动选空闲端口 → 启动 sidecar → 打开浏览器
 
-读取 backend/app.config 的环境变量（CLEARED_PORT / CLEARED_DATA_DIR / CLEARED_HOST），
+读取 backend/app.config 的环境变量（TABLETALK_PORT / TABLETALK_DATA_DIR / TABLETALK_HOST），
 默认 127.0.0.1:8765；端口被占用时自动向后探测空闲端口。
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _ensure_venv() -> Path:
         print(_g("✓ venv 已就绪 ") + str(VENV_PY))
         return VENV_PY
     print(_y("· 创建虚拟环境 backend/.venv …"))
-    py = os.environ.get("CLEARED_PYTHON", "python3")
+    py = os.environ.get("TABLETALK_PYTHON", "python3")
     if _run([py, "-m", "venv", str(VENV_DIR)], BACKEND_DIR) != 0:
         raise SystemExit("创建 venv 失败：请确认已安装 Python 3.11+")
     print(_g("✓ venv 创建完成"))
@@ -147,7 +147,7 @@ def main() -> int:
     args = sys.argv[1:]
     check_only = "--check" in args
 
-    print("DATUM · 本地 AI 优先数据库查询工具（一键启动）")
+    print("tabletalk · 本地 AI 优先数据库查询工具（一键启动）")
     venv_py = _ensure_venv()
     _ensure_deps(venv_py)
     _ensure_frontend()
@@ -169,7 +169,7 @@ def main() -> int:
     host, port = env.host, env.port
     port = _find_free_port(port)
     print(f"· 服务地址：http://{host}:{port}")
-    open_ok = os.environ.get("CLEARED_NO_OPEN", "") != "1"
+    open_ok = os.environ.get("TABLETALK_NO_OPEN", "") != "1"
     if open_ok:
         _open_browser(f"http://{host}:{port}")
         print("· 已尝试打开浏览器（停止用 Ctrl+C）。")

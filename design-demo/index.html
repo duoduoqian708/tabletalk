@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CLEARED — AI 数据库客户端（整体交互演示）</title>
+<title>TABLETALK — AI 数据库客户端（整体交互演示）</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap" rel="stylesheet">
@@ -392,7 +392,7 @@ input,textarea{font-family:inherit}
 <div class="grain"></div>
 
 <header class="appbar">
-  <div class="wordmark" onclick="toast('CLEARED · AI 数据库客户端 · 交互演示')"><span class="dot"></span>CLEARED <small>AI DATABASE TERMINAL</small></div>
+  <div class="wordmark" onclick="toast('TABLETALK · AI 数据库客户端 · 交互演示')"><span class="dot"></span>TABLETALK <small>AI DATABASE TERMINAL</small></div>
   <div class="spacer"></div>
 
   <div class="dd" id="conn-dd">
@@ -445,7 +445,7 @@ input,textarea{font-family:inherit}
         <div class="empty" id="tv-empty">
           <div>
             <div class="big">还没有结果</div>
-            在右侧让 CLEARED 跑一条查询，<br>结果会推送到这里 —— <b>这块区域是你的主场</b>。
+            在右侧让 TABLETALK 跑一条查询，<br>结果会推送到这里 —— <b>这块区域是你的主场</b>。
           </div>
         </div>
         <table id="tv-table" style="display:none"></table>
@@ -519,7 +519,7 @@ input,textarea{font-family:inherit}
   <!-- AI rail -->
   <aside class="rail">
     <div class="rail-head">
-      <span class="t"><span class="pulse">◆</span>CLEARED</span>
+      <span class="t"><span class="pulse">◆</span>TABLETALK</span>
       <span class="sub">safety : read / dml / ddl</span>
     </div>
     <div class="offlinebanner" id="offlinebanner"><b>模型离线</b>· 无法生成 SQL —— 但安全闸门仍在线，手动 SQL 照常拦截/放行。</div>
@@ -527,7 +527,7 @@ input,textarea{font-family:inherit}
       <div class="turn ai">
         <div class="t-meta"><span class="badge">ai</span>· 已连接 · 已读取上下文</div>
         <div class="ai-body">
-          <span class="welcome">我是 <b>CLEARED</b>——你的数据库副驾。我<b>只读结构</b>，明细数据默认不出内网；写操作会先过我，DDL 我没有工具。<br>问一句，结果推送到左边；点下面的示例，或自由输入。<span class="hl">⌘K</span> 聚焦。</span>
+          <span class="welcome">我是 <b>TABLETALK</b>——你的数据库副驾。我<b>只读结构</b>，明细数据默认不出内网；写操作会先过我，DDL 我没有工具。<br>问一句，结果推送到左边；点下面的示例，或自由输入。<span class="hl">⌘K</span> 聚焦。</span>
         </div>
       </div>
     </div>
@@ -626,7 +626,7 @@ input,textarea{font-family:inherit}
 
 <script>
 /* ================================================================
-   CLEARED — overall interaction demo (data-first)
+   TABLETALK — overall interaction demo (data-first)
    ================================================================ */
 const $=s=>document.querySelector(s);
 const thread=$('#thread'), cmd=$('#cmd');
@@ -738,7 +738,7 @@ function userTurn(q){
 }
 function aiTurn(){
   const d=document.createElement('div'); d.className='turn ai';
-  d.innerHTML='<div class="t-meta"><span class="badge">ai</span>· CLEARED · 0.84s</div><div class="ai-body"></div>';
+  d.innerHTML='<div class="t-meta"><span class="badge">ai</span>· TABLETALK · 0.84s</div><div class="ai-body"></div>';
   thread.appendChild(d); scrollThread(); return d;
 }
 function addThink(host,label){

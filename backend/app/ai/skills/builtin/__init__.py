@@ -1,6 +1,6 @@
 """内置技能注册：query（主场景，读写合并）与 report（数据分析报告，物理只读）。
 
-这些是 CLEARED 的"出厂技能"。query 的剧本即四步（意图→检索→SQL→评估），
+这些是 TABLETALK 的"出厂技能"。query 的剧本即四步（意图→检索→SQL→评估），
 report 的剧本是章节化分析。新增内置技能在此追加即可。
 """
 from __future__ import annotations

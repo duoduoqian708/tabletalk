@@ -13,13 +13,13 @@ State = **zustand 4.5 only**. No router library, no chart/graph lib (all hand-ro
 - **Token lives in a module singleton** `rt` in `src/renderer/src/api/client.ts`
   (NOT a store). `useBootstrap` polls `GET /api/v1/bootstrap` **untokened** every
   700ms until the sidecar answers, then `setRuntime({baseUrl:'', token, dataDir})`.
-  `request()` attaches `X-Cleared-Token`; `baseUrl` is `''` (same-origin).
+  `request()` attaches `X-TableTalk-Token`; `baseUrl` is `''` (same-origin).
 - **`chatStream` bypasses `request()`** — it reads `getRuntime()` directly and
   duplicates the token-attach logic. Keep both in sync if auth changes.
 - **AI "reasoning steps" panel is a scripted simulation**, not server-driven
   (`THINK_LINES` + `setTimeout` in `AiRail.tsx`). Real backend `think` events are
   merged in, but structure/timing is fake. Changing backend won't change the animation.
-- **Chat history is in `localStorage`** (`cleared-chats-v1`, capped 30), NOT the backend.
+- **Chat history is in `localStorage`** (`tabletalk-chats-v1`, capped 30), NOT the backend.
   Backend keeps only audit JSONL + a session title. Switching connections restores the
   last conversation for that connection.
 - **Read-tier AI SQL auto-executes with no click** (`maybeAutoRun` in `AiRail`).
@@ -35,7 +35,7 @@ State = **zustand 4.5 only**. No router library, no chart/graph lib (all hand-ro
 `npm run dev` (Vite :5173, proxies `/api`→`127.0.0.1:8765`; backend must be running) ·
 `npm run typecheck` (tsc --noEmit) · `npm run build` (→ `frontend/dist`) ·
 `npm run screenshot` (Playwright: spawns backend on isolated
-`CLEARED_DATA_DIR=/tmp/cleared-shot` + port **8766**, connects demo DB, runs
+`TABLETALK_DATA_DIR=/tmp/tabletalk-shot` + port **8766**, connects demo DB, runs
 "AI 生成标签", screenshots `docs/screenshots/knowledge-review.png`).
 
 ## Verdict surfacing

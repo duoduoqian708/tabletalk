@@ -38,7 +38,7 @@ async def health() -> dict:
 async def bootstrap() -> dict:
     """引导端点（免鉴权）：向浏览器发放 sidecar token 与数据目录。
 
-    仅本机可访问（默认绑 127.0.0.1），等价于本机读 data_dir/sidecar.token。
+    仅本机可访问（默认绑 127.0.0.1），等价于本机读 data_dir/tabletalk.token。
     未来网络化部署需在此加门禁。
     """
     return {"token": get_token(), "dataDir": str(Path(get_env().data_dir))}

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A · 精密三栏工作台 · CLEARED</title>
+<title>A · 精密三栏工作台 · TABLETALK</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -148,7 +148,7 @@ table.t{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10
 <body>
 <div class="app">
   <header class="appbar">
-    <span class="logo"><span class="dot"></span>CLEARED</span>
+    <span class="logo"><span class="dot"></span>TABLETALK</span>
     <!-- 数据源切换（全局锚） -->
     <div class="ds" id="ds">
       <button class="ds-btn" id="dsBtn"><span class="ds-dot" id="dsDot" style="background:var(--teal)"></span><span id="dsName">demo.db</span><span class="ds-chev">▼</span></button>
@@ -310,7 +310,7 @@ document.getElementById('aField').addEventListener('blur',()=>{if(!document.getE
 document.getElementById('themeToggle').addEventListener('click',()=>{const d=document.documentElement.dataset.theme;document.documentElement.dataset.theme=d==='dark'?'light':'dark';document.getElementById('themeToggle').textContent=d==='dark'?'🌓 深色':'☀ 浅色'})
 // init
 renderSchema()
-addMsg('a','我是 CLEARED 的 AI 副驾。试试问 <b style="color:var(--ink)">退货率最高的 10 个商品</b>，或输入 <span class="mono" style="color:var(--red)">delete from orders</span> 看安全闸门拦截。','txt')
+addMsg('a','我是 TABLETALK 的 AI 副驾。试试问 <b style="color:var(--ink)">退货率最高的 10 个商品</b>，或输入 <span class="mono" style="color:var(--red)">delete from orders</span> 看安全闸门拦截。','txt')
 </script>
 </body>
 </html>

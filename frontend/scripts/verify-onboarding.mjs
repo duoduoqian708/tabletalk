@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const backendDir = path.resolve(root, '../backend')
-const dataDir = '/tmp/cleared-onboard'
+const dataDir = '/tmp/tabletalk-onboard'
 const port = 8768
 const baseUrl = `http://127.0.0.1:${port}`
 
@@ -20,7 +20,7 @@ const python = fs.existsSync(path.join(backendDir, '.venv/bin/python'))
   : 'python3'
 const sidecar = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--port', String(port)], {
   cwd: backendDir,
-  env: { ...process.env, CLEARED_DATA_DIR: dataDir },
+  env: { ...process.env, TABLETALK_DATA_DIR: dataDir },
   stdio: 'ignore'
 })
 

@@ -179,7 +179,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       <header className="appbar">
         <span className="wordmark">
           <span className="dot" />
-          DATUM <small>DB</small>
+          tabletalk <small>DB</small>
         </span>
         <ConnectionMenu onNew={() => setModalOpen(true)} />
         <nav className="nav">

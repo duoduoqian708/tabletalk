@@ -47,7 +47,7 @@ async def test_settings_runtime_section_present(client):
     body = r.json()
     assert "runtime" in body
     assert body["runtime"]["port"] == 8765
-    assert body["runtime"]["auth"] == "X-Cleared-Token · 本机"
+    assert body["runtime"]["auth"] == "X-TableTalk-Token · 本机"
     assert isinstance(body["runtime"]["data_dir"], str) and body["runtime"]["data_dir"]
 ```
 
@@ -88,7 +88,7 @@ cd backend && .venv/bin/python -m pytest tests/api/test_settings_safety.py -q
             "runtime": {
                 "data_dir": str(get_env().data_dir),
                 "port": get_env().port,
-                "auth": "X-Cleared-Token · 本机",
+                "auth": "X-TableTalk-Token · 本机",
             },
 ```
 
@@ -487,9 +487,9 @@ cd frontend && git add src/renderer/src/api/settings.ts && git commit -m "feat(s
 把「通用」面板的三个只读 `input`（约 line 546-548）替换为：
 
 ```tsx
-                    <div className="set-row readonly inline"><span className="sr-l">数据目录</span><input value={runtime?.data_dir ?? '~/.cleared'} readOnly /></div>
+                    <div className="set-row readonly inline"><span className="sr-l">数据目录</span><input value={runtime?.data_dir ?? '~/.tabletalk'} readOnly /></div>
                     <div className="set-row readonly inline"><span className="sr-l">监听端口</span><input value={runtime?.port ?? 8765} readOnly /></div>
-                    <div className="set-row readonly inline"><span className="sr-l">鉴权</span><input value={runtime?.auth ?? 'X-Cleared-Token · 本机'} readOnly /></div>
+                    <div className="set-row readonly inline"><span className="sr-l">鉴权</span><input value={runtime?.auth ?? 'X-TableTalk-Token · 本机'} readOnly /></div>
 ```
 
 - [ ] **Step 6: typecheck + build**

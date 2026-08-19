@@ -31,7 +31,7 @@ async def test_settings_runtime_section_present(client):
     body = r.json()
     assert "runtime" in body
     assert body["runtime"]["port"] == 8765
-    assert body["runtime"]["auth"] == "X-Cleared-Token · 本机"
+    assert body["runtime"]["auth"] == "X-TableTalk-Token · 本机"
     assert isinstance(body["runtime"]["data_dir"], str) and body["runtime"]["data_dir"]
 
 

@@ -76,7 +76,7 @@ Expected: PASS（含 `test_settings_put_ai_models_full_replace`，其手动传�
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /Users/mac/demo-project/ai-dbclient && git add backend/app/core/settings.py backend/tests/api/test_models.py
+cd /Users/mac/demo-project/tabletalk && git add backend/app/core/settings.py backend/tests/api/test_models.py
 git commit -m "feat: 模型列表不再默认塞入内置 Mock 模型（保留 mock provider 静默降级）"
 ```
 
@@ -130,7 +130,7 @@ Expected: PASS（`cfg["reasoning"] is True` 来自 `ModelConfig.reasoning` 能�
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /Users/mac/demo-project/ai-dbclient && git add backend/app/ai/schemas.py backend/tests/ai/test_loop.py
+cd /Users/mac/demo-project/tabletalk && git add backend/app/ai/schemas.py backend/tests/ai/test_loop.py
 git commit -m "feat: ChatRequest.reasoning 改为思考强度枚举(off/low/medium/high)"
 ```
 
@@ -238,7 +238,7 @@ Expected: PASS。
 - [ ] **Step 6: 提交**
 
 ```bash
-cd /Users/mac/demo-project/ai-dbclient && git add backend/app/ai/gateway.py backend/tests/ai/test_gateway_reasoning.py
+cd /Users/mac/demo-project/tabletalk && git add backend/app/ai/gateway.py backend/tests/ai/test_gateway_reasoning.py
 git commit -m "feat: gateway 思考强度按 OpenAI reasoning_effort 映射并简化 supports_param"
 ```
 
@@ -331,7 +331,7 @@ Expected: 均无错误，`vite build` 成功。
 - [ ] **Step 5: 提交**
 
 ```bash
-cd /Users/mac/demo-project/ai-dbclient && git add frontend/src/renderer/src/api/ai.ts frontend/src/renderer/src/components/AiRail.tsx
+cd /Users/mac/demo-project/tabletalk && git add frontend/src/renderer/src/api/ai.ts frontend/src/renderer/src/components/AiRail.tsx
 git commit -m "feat: 前端对话级思考强度四态控件(off/low/medium/high)"
 ```
 
@@ -354,7 +354,7 @@ Expected: 均无错误。
 - [ ] **Step 3: 提交回归确认（可选，若前面已逐任务提交则跳过）**
 
 ```bash
-cd /Users/mac/demo-project/ai-dbclient && git status --short
+cd /Users/mac/demo-project/tabletalk && git status --short
 ```
 Expected: 工作区干净（所有改动已在各任务提交）。
 

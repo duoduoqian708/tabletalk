@@ -356,7 +356,7 @@ SELECT DISTINCT name FROM reach ORDER BY name;"""
 
 def make_storage(data_dir: Path, conn_id: str, backend: str = "") -> KbStorage:
     """按配置选后端：sqlite（默认，sqlite-vec 探测失败自动回退 json）| json。"""
-    choice = (backend or os.environ.get("CLEARED_KB_STORAGE", "") or "sqlite").lower()
+    choice = (backend or os.environ.get("TABLETALK_KB_STORAGE", "") or "sqlite").lower()
     if choice == "json":
         return JsonStorage(data_dir, conn_id)
     store = SqliteStorage(data_dir, conn_id)
