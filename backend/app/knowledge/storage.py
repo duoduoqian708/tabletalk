@@ -1,0 +1,363 @@
+"""知识库存储后端：JsonStorage（回退）/ SqliteStorage（默认，标准格式）。
+
+数据格式标准化：SQLite 文件（knowledge-{conn}.db）含 docs / edges / tags / table_tags /
+embeddings / table_embeddings / meta 表——任何 SQLite 工具可读、可审计、可导出；
+k-hop 提供标准递归 CTE 查询，向量提供 vec0 虚拟表查询（sqlite-vec 可用时）。
+
+企业版升级路径（pgvector / Qdrant / Neo4j）：实现同一 KbStorage 协议即可，上层零改动。
+运行时检索仍走内存（毫秒级），SQLite 是标准持久化格式 + 标准查询接口。
+"""
+from __future__ import annotations
+
+import json
+import os
+import struct
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+try:
+    import sqlite_vec  # type: ignore
+
+    _VEC_AVAILABLE = True
+except Exception:  # pragma: no cover - 依赖缺失回退 JSON
+    _VEC_AVAILABLE = False
+
+
+def _f32_blob(vec: list[float]) -> bytes:
+    return struct.pack(f"<{len(vec)}f", *[float(v) for v in vec])
+
+
+def _f32_list(blob: bytes) -> list[float]:
+    n = len(blob) // 4
+    return list(struct.unpack(f"<{n}f", blob))
+
+
+@dataclass
+class KbSnapshot:
+    """一个连接的知识库全量快照（与存储格式无关的中间表示）。"""
+    auto: list[dict] = field(default_factory=list)
+    drafts: list[dict] = field(default_factory=list)
+    user: list[dict] = field(default_factory=list)
+    samples: dict[str, Any] = field(default_factory=dict)
+    edges: list[dict] = field(default_factory=list)
+    vec: dict[str, list[float]] = field(default_factory=dict)
+    table_vec: dict[str, list[float]] = field(default_factory=dict)
+    tags: dict[str, Any] = field(default_factory=dict)
+    table_tags: dict[str, list[str]] = field(default_factory=dict)
+    schema: dict[str, Any] = field(default_factory=dict)
+    emb_fingerprint: str = ""
+
+
+class KbStorage(Protocol):
+    """存储协议：换实现（JSON/SQLite/pgvector/Neo4j）不影响上层。"""
+    kind: str
+
+    def exists(self) -> bool: ...
+
+    def load(self) -> KbSnapshot: ...
+
+    def save(self, snap: KbSnapshot) -> None: ...
+
+    # 查询表达力：标准查询接口（企业版/审计/服务化直接复用）
+    def hop_sql(self, table: str, hops: int) -> str: ...
+
+    def vec_topn_sql(self, k: int) -> str: ...
+
+
+# ---------------------------------------------------------------- JSON 回退
+
+class JsonStorage:
+    """现有 JSON 格式（knowledge.json + knowledge-{conn}.json），作为回退实现。"""
+
+    kind = "json"
+
+    def __init__(self, data_dir: Path, conn_id: str) -> None:
+        self._user_path = data_dir / "knowledge.json"
+        self._artifact_path = data_dir / f"knowledge-{conn_id}.json"
+        self._conn_id = conn_id
+
+    def exists(self) -> bool:
+        return self._artifact_path.exists() or self._user_path.exists()
+
+    def load(self) -> KbSnapshot:
+        snap = KbSnapshot()
+        # 用户手写标注（跨连接共享文件）
+        if self._user_path.exists():
+            try:
+                data = json.loads(self._user_path.read_text(encoding="utf-8"))
+                snap.user = data.get(self._conn_id, [])
+            except Exception:
+                pass
+        # 连接 artifact
+        if self._artifact_path.exists():
+            try:
+                data = json.loads(self._artifact_path.read_text(encoding="utf-8"))
+                snap.auto = data.get("auto", [])
+                snap.drafts = data.get("drafts", [])
+                snap.samples = data.get("samples", {})
+                snap.edges = data.get("graph", {}).get("edges", [])
+                snap.vec = data.get("vec", {})
+                snap.table_vec = data.get("table_vec", {})
+                snap.tags = data.get("tags", {})
+                snap.table_tags = data.get("table_tags", {})
+                snap.schema = data.get("schema", {})
+                snap.emb_fingerprint = data.get("emb_fingerprint", "")
+            except Exception:
+                pass
+        return snap
+
+    def save(self, snap: KbSnapshot) -> None:
+        # 用户标注写共享文件（保持旧格式兼容）
+        if snap.user:
+            try:
+                data = {}
+                if self._user_path.exists():
+                    data = json.loads(self._user_path.read_text(encoding="utf-8"))
+                data[self._conn_id] = snap.user
+                self._user_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+        self._artifact_path.write_text(
+            json.dumps({
+                "auto": snap.auto,
+                "drafts": snap.drafts,
+                "samples": snap.samples,
+                "graph": {"edges": snap.edges},
+                "vec": snap.vec,
+                "table_vec": snap.table_vec,
+                "tags": snap.tags,
+                "table_tags": snap.table_tags,
+                "schema": snap.schema,
+                "emb_fingerprint": snap.emb_fingerprint,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def hop_sql(self, table: str, hops: int) -> str:
+        """JSON 后端没有 SQL——返回等价说明（内存 BFS 由上层提供）。"""
+        raise NotImplementedError("JSON 存储不提供 SQL 查询接口，请切换 SqliteStorage")
+
+    def vec_topn_sql(self, k: int) -> str:
+        raise NotImplementedError("JSON 存储不提供 SQL 查询接口，请切换 SqliteStorage")
+
+
+# ---------------------------------------------------------------- SQLite 标准格式
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS docs (
+  id TEXT PRIMARY KEY, kind TEXT, title TEXT, body TEXT,
+  table_name TEXT, column_name TEXT, status TEXT, source TEXT, tags TEXT,
+  conn_id TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS edges (
+  from_table TEXT, from_col TEXT, to_table TEXT, to_col TEXT,
+  kind TEXT, weight REAL, shared INTEGER
+);
+CREATE TABLE IF NOT EXISTS tags (name TEXT PRIMARY KEY, description TEXT, status TEXT);
+CREATE TABLE IF NOT EXISTS table_tags (table_name TEXT PRIMARY KEY, tags TEXT);
+CREATE TABLE IF NOT EXISTS embeddings (doc_id TEXT PRIMARY KEY, vec BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS table_embeddings (table_name TEXT PRIMARY KEY, vec BLOB NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_table);
+CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_table);
+"""
+
+
+class SqliteStorage:
+    """标准 SQLite 格式：一个连接一个 .db 文件。首次使用时自动从旧 JSON artifact 迁移。"""
+
+    kind = "sqlite"
+
+    def __init__(self, data_dir: Path, conn_id: str) -> None:
+        self._path = data_dir / f"knowledge-{conn_id}.db"
+        self._legacy_json = data_dir / f"knowledge-{conn_id}.json"
+        self._user_json = data_dir / "knowledge.json"
+        self._conn_id = conn_id
+        self._lock = threading.Lock()
+        self._vec_ok = self._probe_vec()
+
+    @staticmethod
+    def _probe_vec() -> bool:
+        if not _VEC_AVAILABLE:
+            return False
+        try:
+            import sqlite3
+            conn = sqlite3.connect(":memory:")
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.execute("select vec_version()").fetchone()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
+    def vec_available(self) -> bool:
+        return self._vec_ok
+
+    def exists(self) -> bool:
+        return self._path.exists()
+
+    # ---- 连接管理 ----
+    def _conn(self) -> Any:
+        import sqlite3
+        conn = sqlite3.connect(str(self._path))
+        conn.enable_load_extension(True)
+        if self._vec_ok:
+            sqlite_vec.load(conn)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init(self, conn: Any) -> None:
+        conn.executescript(_SCHEMA)
+        if self._vec_ok:
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
+
+    # ---- 迁移：旧 JSON artifact → SQLite ----
+    def load(self) -> KbSnapshot:
+        if not self._path.exists() and self._legacy_json.exists():
+            self._migrate_from_json()
+        return self._read()
+
+    def _migrate_from_json(self) -> None:
+        legacy = JsonStorage(self._path.parent, self._conn_id)
+        snap = legacy.load()
+        if not snap.auto and not snap.edges and not snap.user:
+            return  # 空 artifact 不迁移
+        self.save(snap)
+
+    def _read(self) -> KbSnapshot:
+        snap = KbSnapshot()
+        if not self._path.exists():
+            return snap
+        try:
+            conn = self._conn()
+            try:
+                snap.emb_fingerprint = self._meta(conn, "emb_fingerprint")
+                for row in conn.execute("SELECT * FROM docs"):
+                    d = dict(row)
+                    d["table"] = d.pop("table_name")
+                    d["column"] = d.pop("column_name")
+                    d["tags"] = json.loads(d.get("tags") or "[]")
+                    d.setdefault("conn_id", self._conn_id)
+                    d.setdefault("updated_at", "")
+                    (snap.drafts if d["source"] == "ai_draft" else snap.auto if d["source"] != "user" else snap.user).append(d)
+                for row in conn.execute("SELECT * FROM edges"):
+                    e = dict(row)
+                    e["from"] = e.pop("from_table")
+                    e["to"] = e.pop("to_table")
+                    snap.edges.append(e)
+                for row in conn.execute("SELECT name, description, status FROM tags"):
+                    snap.tags[row["name"]] = {"description": row["description"] or "", "status": row["status"]}
+                for row in conn.execute("SELECT table_name, tags FROM table_tags"):
+                    snap.table_tags[row["table_name"]] = json.loads(row["tags"] or "[]")
+                for row in conn.execute("SELECT doc_id, vec FROM embeddings"):
+                    snap.vec[row["doc_id"]] = _f32_list(row["vec"])
+                for row in conn.execute("SELECT table_name, vec FROM table_embeddings"):
+                    snap.table_vec[row["table_name"]] = _f32_list(row["vec"])
+                schema_json = self._meta(conn, "schema")
+                if schema_json:
+                    snap.schema = json.loads(schema_json)
+                samples_json = self._meta(conn, "samples")
+                if samples_json:
+                    snap.samples = json.loads(samples_json)
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        return snap
+
+    @staticmethod
+    def _meta(conn: Any, key: str) -> str:
+        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else ""
+
+    # ---- 保存 ----
+    def save(self, snap: KbSnapshot) -> None:
+        with self._lock:
+            conn = self._conn()
+            try:
+                self._init(conn)
+                conn.execute("DELETE FROM docs")
+                conn.execute("DELETE FROM edges")
+                conn.execute("DELETE FROM tags")
+                conn.execute("DELETE FROM table_tags")
+                conn.execute("DELETE FROM embeddings")
+                conn.execute("DELETE FROM table_embeddings")
+                conn.execute("DELETE FROM meta")
+                for src, docs in (("auto", snap.auto), ("drafts", snap.drafts), ("user", snap.user)):
+                    for d in docs:
+                        conn.execute(
+                            "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            (d.get("id"), d.get("kind"), d.get("title"), d.get("body"),
+                             d.get("table"), d.get("column"), d.get("status"), d.get("source", src),
+                             json.dumps(d.get("tags") or [], ensure_ascii=False),
+                             d.get("conn_id"), d.get("updated_at", "")),
+                        )
+                for e in snap.edges:
+                    conn.execute(
+                        "INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, shared) VALUES (?,?,?,?,?,?,?)",
+                        (e.get("from"), e.get("from_col"), e.get("to"), e.get("to_col"),
+                         e.get("kind"), e.get("weight"), e.get("shared")),
+                    )
+                for name, v in snap.tags.items():
+                    conn.execute("INSERT INTO tags (name, description, status) VALUES (?,?,?)",
+                                 (name, v.get("description", ""), v.get("status", "draft")))
+                for table, names in snap.table_tags.items():
+                    conn.execute("INSERT INTO table_tags (table_name, tags) VALUES (?,?)",
+                                 (table, json.dumps(names, ensure_ascii=False)))
+                for doc_id, vec in snap.vec.items():
+                    conn.execute("INSERT INTO embeddings (doc_id, vec) VALUES (?,?)", (doc_id, _f32_blob(vec)))
+                for table, vec in snap.table_vec.items():
+                    conn.execute("INSERT INTO table_embeddings (table_name, vec) VALUES (?,?)", (table, _f32_blob(vec)))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('emb_fingerprint', ?)", (snap.emb_fingerprint,))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
+                # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）
+                if self._vec_ok:
+                    conn.execute("DELETE FROM doc_vec")
+                    conn.execute("DELETE FROM table_vec")
+                    def _pad256(vec: list[float]) -> bytes:
+                        v = (vec[:256] + [0.0] * 256)[:256]  # 截断超长 / 补齐不足
+                        return _f32_blob(v)
+                    for doc_id, vec in snap.vec.items():
+                        conn.execute("INSERT INTO doc_vec (doc_id, vec) VALUES (?,?)", (doc_id, _pad256(vec)))
+                    for table, vec in snap.table_vec.items():
+                        conn.execute("INSERT INTO table_vec (table_name, vec) VALUES (?,?)", (table, _pad256(vec)))
+                conn.commit()
+            finally:
+                conn.close()
+
+    # ---- 查询表达力：标准 SQL ----
+    def hop_sql(self, table: str, hops: int) -> str:
+        """k-hop 邻居的标准递归 CTE（与上层 expand_tables 等价，供审计/服务化/企业版复用）。"""
+        depth = max(1, int(hops))
+        return f"""WITH RECURSIVE reach(name, depth) AS (
+  SELECT '{table}', 0
+  UNION
+  SELECT e.to_table, r.depth + 1 FROM edges e JOIN reach r ON e.from_table = r.name
+    WHERE e.kind = 'fk' AND r.depth < {depth}
+  UNION
+  SELECT e.from_table, r.depth + 1 FROM edges e JOIN reach r ON e.to_table = r.name
+    WHERE e.kind = 'fk' AND r.depth < {depth}
+)
+SELECT DISTINCT name FROM reach ORDER BY name;"""
+
+    def vec_topn_sql(self, k: int) -> str:
+        """向量 top-N 标准查询（vec0 虚拟表，sqlite-vec 可用时）。返回 SQL 模板，参数 q = float32 BLOB。"""
+        if not self._vec_ok:
+            raise NotImplementedError("sqlite-vec 不可用，无法提供 vec0 SQL 查询")
+        return f"SELECT doc_id, distance FROM doc_vec WHERE vec MATCH ? ORDER BY distance LIMIT {max(1, int(k))};"
+
+
+def make_storage(data_dir: Path, conn_id: str, backend: str = "") -> KbStorage:
+    """按配置选后端：sqlite（默认，sqlite-vec 探测失败自动回退 json）| json。"""
+    choice = (backend or os.environ.get("CLEARED_KB_STORAGE", "") or "sqlite").lower()
+    if choice == "json":
+        return JsonStorage(data_dir, conn_id)
+    store = SqliteStorage(data_dir, conn_id)
+    return store

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -28,8 +29,10 @@ if TYPE_CHECKING:
 
 class KnowledgeBase:
     def __init__(self, data_dir: Path, runtime: "SettingsStore | None" = None) -> None:
-        self._user_path = data_dir / "knowledge.json"
+        self._data_dir = data_dir
         self._runtime = runtime
+        self._storage_backend = os.environ.get("CLEARED_KB_STORAGE", "")  # sqlite(默认) | json
+        self._storages: dict[str, Any] = {}
         self._emb: Embedder = HashingEmbedder()
         self._auto: dict[str, list[KnowledgeDoc]] = {}
         self._user: dict[str, list[KnowledgeDoc]] = {}
@@ -45,29 +48,66 @@ class KnowledgeBase:
         self._batch: dict[str, BatchIndex] = {}                          # conn -> 文档向量批量索引（惰性）
         self._batch_table: dict[str, BatchIndex] = {}                    # conn -> 表级向量批量索引
         self._lock = threading.Lock()
-        self._load()
 
-    # ---------- 持久化（用户标注） ----------
-    def _load(self) -> None:
-        if not self._user_path.exists():
+    # ---------- 持久化：存储后端（JsonStorage 回退 / SqliteStorage 标准格式） ----------
+    def _storage(self, conn_id: str) -> Any:
+        st = self._storages.get(conn_id)
+        if st is None:
+            from app.knowledge.storage import make_storage
+            st = make_storage(self._data_dir, conn_id, self._storage_backend)
+            self._storages[conn_id] = st
+        return st
+
+    def _load_conn(self, conn_id: str) -> None:
+        """从存储后端恢复一个连接的知识库（含旧 JSON artifact 自动迁移）。"""
+        if conn_id in self._auto:
             return
+        snap = self._storage(conn_id).load()
+        if not snap.auto and not snap.drafts and not snap.user and not snap.edges:
+            return
+        def _docs_(items: list[dict]) -> list[KnowledgeDoc]:
+            out = []
+            for d in items:
+                dd = dict(d)
+                dd.setdefault("conn_id", conn_id)
+                dd.setdefault("updated_at", "")
+                out.append(KnowledgeDoc(**dd))
+            return out
+
+        self._auto[conn_id] = _docs_(snap.auto)
+        self._drafts[conn_id] = _docs_(snap.drafts)
+        self._user[conn_id] = _docs_(snap.user)
+        self._samples[conn_id] = snap.samples
+        self._graph[conn_id] = {"edges": snap.edges}
+        self._vec[conn_id] = snap.vec
+        self._table_vec[conn_id] = snap.table_vec
+        self._tags[conn_id] = snap.tags
+        self._table_tags[conn_id] = snap.table_tags
+        self._schema[conn_id] = snap.schema
+        self._artifact_fingerprint[conn_id] = snap.emb_fingerprint
+        self._batch.pop(conn_id, None)
+        self._batch_table.pop(conn_id, None)
+
+    def _save_conn(self, conn_id: str) -> None:
+        """全量快照写回存储后端（标准格式/JSON 均在此落盘）。"""
         try:
-            data = json.loads(self._user_path.read_text(encoding="utf-8"))
-            for conn_id, docs in data.items():
-                self._user[conn_id] = [KnowledgeDoc(**d) for d in docs]
+            from app.knowledge.storage import KbSnapshot
+            snap = KbSnapshot(
+                auto=[d.to_dict() for d in self._auto.get(conn_id, [])],
+                drafts=[d.to_dict() for d in self._drafts.get(conn_id, [])],
+                user=[d.to_dict() for d in self._user.get(conn_id, [])],
+                samples=self._samples.get(conn_id, {}),
+                edges=self._graph.get(conn_id, {"edges": []}).get("edges", []),
+                vec=self._vec.get(conn_id, {}),
+                table_vec=self._table_vec.get(conn_id, {}),
+                tags=self._tags.get(conn_id, {}),
+                table_tags=self._table_tags.get(conn_id, {}),
+                schema=self._schema.get(conn_id, {}),
+                emb_fingerprint=self._artifact_fingerprint.get(conn_id, ""),
+            )
+            self._storage(conn_id).save(snap)
         except Exception:
             pass
-
-    def _save(self) -> None:
-        with self._lock:
-            self._user_path.write_text(
-                json.dumps(
-                    {k: [d.to_dict() for d in v] for k, v in self._user.items()},
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
 
     # ---------- 自动抽取 ----------
     def _from_schema(self, schema: dict[str, Any]) -> list[KnowledgeDoc]:
@@ -184,7 +224,7 @@ class KnowledgeBase:
         self._artifact_fingerprint[conn_id] = cur
         self._batch.pop(conn_id, None)
         self._batch_table.pop(conn_id, None)
-        self._persist_artifact(conn_id)
+        self._save_conn(conn_id)
         return True
 
     async def build(
@@ -221,7 +261,7 @@ class KnowledgeBase:
         await self._embed_table_docs(conn_id, schema)
         self._batch.pop(conn_id, None)
         self._batch_table.pop(conn_id, None)
-        self._persist_artifact(conn_id)
+        self._save_conn(conn_id)
         return {
             "docs": len(self._auto[conn_id]),
             "graph_edges": len(self._graph.get(conn_id, {}).get("edges", [])),
@@ -285,50 +325,6 @@ class KnowledgeBase:
             self._batch_table[conn_id] = idx
         return idx
 
-    # ---------- 持久化 artifact ----------
-    def _artifact_path(self, conn_id: str) -> Path:
-        return self._user_path.parent / f"knowledge-{conn_id}.json"
-
-    def _persist_artifact(self, conn_id: str) -> None:
-        try:
-            data = {
-                "auto": [d.to_dict() for d in self._auto.get(conn_id, [])],
-                "drafts": [d.to_dict() for d in self._drafts.get(conn_id, [])],
-                "samples": self._samples.get(conn_id, {}),
-                "graph": self._graph.get(conn_id, {"edges": []}),
-                "vec": self._vec.get(conn_id, {}),
-                "table_vec": self._table_vec.get(conn_id, {}),
-                "emb_fingerprint": self._artifact_fingerprint.get(conn_id, ""),
-                "tags": self._tags.get(conn_id, {}),
-                "table_tags": self._table_tags.get(conn_id, {}),
-                "schema": self._schema.get(conn_id, {}),
-            }
-            self._artifact_path(conn_id).write_text(
-                json.dumps(data, ensure_ascii=False), encoding="utf-8"
-            )
-        except Exception:
-            pass
-
-    def load_artifact(self, conn_id: str) -> None:
-        """启动时恢复构建过的知识（向量/图谱/草案），无需重新采样。"""
-        p = self._artifact_path(conn_id)
-        if not p.exists():
-            return
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            self._auto[conn_id] = [KnowledgeDoc(**d) for d in data.get("auto", [])]
-            self._drafts[conn_id] = [KnowledgeDoc(**d) for d in data.get("drafts", [])]
-            self._samples[conn_id] = data.get("samples", {})
-            self._graph[conn_id] = data.get("graph", {"edges": []})
-            self._vec[conn_id] = data.get("vec", {})
-            self._table_vec[conn_id] = data.get("table_vec", {})
-            self._artifact_fingerprint[conn_id] = data.get("emb_fingerprint", "")
-            self._tags[conn_id] = data.get("tags", {})
-            self._table_tags[conn_id] = data.get("table_tags", {})
-            self._schema[conn_id] = data.get("schema", {})
-        except Exception:
-            pass
-
     # ---------- 向量 ----------
     @staticmethod
     def _doc_text(d: KnowledgeDoc) -> str:
@@ -357,16 +353,16 @@ class KnowledgeBase:
         return out
 
     def is_built(self, conn_id: str) -> bool:
-        return conn_id in self._auto or self._artifact_path(conn_id).exists()
+        return conn_id in self._auto or self._storage(conn_id).exists()
 
     def ensure_loaded(self, conn_id: str) -> None:
         """重启后如有工件但未加载进内存，先恢复（overview/graph 等只读入口调用）。"""
-        if conn_id not in self._auto and self._artifact_path(conn_id).exists():
-            self.load_artifact(conn_id)
+        if conn_id not in self._auto:
+            self._load_conn(conn_id)
 
     async def retrieve(self, conn_id: str, query: str = "", table: str | None = None, k: int = 10) -> list[KnowledgeDoc]:
-        if conn_id not in self._auto and self._artifact_path(conn_id).exists():
-            self.load_artifact(conn_id)  # 重启后未重新构建也能用上次的知识
+        if conn_id not in self._auto:
+            self._load_conn(conn_id)  # 重启后未重新构建也能用上次的知识
         docs = self._docs(conn_id)
         if not docs:
             return []
@@ -461,7 +457,7 @@ class KnowledgeBase:
             existing.add(did)
             added += 1
         if added:
-            self._persist_artifact(conn_id)
+            self._save_conn(conn_id)
         return added
 
     def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
@@ -475,7 +471,7 @@ class KnowledgeBase:
             d.status = "confirmed"
             d.source = "user"
         if targets:
-            self._persist_artifact(conn_id)
+            self._save_conn(conn_id)
         return len(targets)
 
     def reject(self, conn_id: str, doc_id: str) -> bool:
@@ -483,7 +479,7 @@ class KnowledgeBase:
         before = len(drafts)
         self._drafts[conn_id] = [d for d in drafts if d.id != doc_id]
         if len(self._drafts[conn_id]) != before:
-            self._persist_artifact(conn_id)
+            self._save_conn(conn_id)
             return True
         return False
 
@@ -494,7 +490,7 @@ class KnowledgeBase:
         kept = [d for d in drafts if d not in targets]
         if len(kept) != len(drafts):
             self._drafts[conn_id] = kept
-            self._persist_artifact(conn_id)
+            self._save_conn(conn_id)
         return len(targets)
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
@@ -509,7 +505,7 @@ class KnowledgeBase:
             lib[name] = {"description": (t.get("description") or "").strip(), "status": "draft"}
             added += 1
         if added:
-            self._persist_artifact(conn_id)
+            self._save_conn(conn_id)
         return added
 
     def assign_table_tags(self, conn_id: str, table: str, names: list[str]) -> int:
@@ -520,7 +516,7 @@ class KnowledgeBase:
             if n not in lib:
                 lib[n] = {"description": "", "status": "draft"}
         self._table_tags.setdefault(conn_id, {})[table] = keep
-        self._persist_artifact(conn_id)
+        self._save_conn(conn_id)
         return len(keep)
 
     def confirm_tag(self, conn_id: str, name: str) -> bool:
@@ -529,7 +525,7 @@ class KnowledgeBase:
         if name not in lib:
             return False
         lib[name]["status"] = "confirmed"
-        self._persist_artifact(conn_id)
+        self._save_conn(conn_id)
         return True
 
     def reject_tag(self, conn_id: str, name: str) -> bool:
@@ -541,7 +537,7 @@ class KnowledgeBase:
         for t, names in self._table_tags.get(conn_id, {}).items():
             if name in names:
                 self._table_tags[conn_id][t] = [n for n in names if n != name]
-        self._persist_artifact(conn_id)
+        self._save_conn(conn_id)
         return True
 
     def tags(self, conn_id: str) -> dict[str, Any]:
@@ -671,7 +667,7 @@ class KnowledgeBase:
             updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
         )
         self._user.setdefault(conn_id, []).append(doc)
-        self._save()
+        self._save_conn(conn_id)
         return doc
 
     def list_docs(self, conn_id: str, table: str | None = None) -> list[KnowledgeDoc]:
@@ -738,6 +734,14 @@ class KnowledgeBase:
                 self._runtime.get().embedding_provider if self._runtime else "hash"
             ),
         }
+
+    def hop_sql(self, conn_id: str, table: str, hops: int = 2) -> str:
+        """k-hop 标准递归 CTE 查询（SqliteStorage 提供；审计/服务化/企业版复用）。"""
+        return self._storage(conn_id).hop_sql(table, hops)
+
+    def vec_topn_sql(self, conn_id: str, k: int = 10) -> str:
+        """向量 top-N 标准 SQL 查询（vec0 虚拟表，sqlite-vec 可用时）。"""
+        return self._storage(conn_id).vec_topn_sql(k)
 
     def graph(self, conn_id: str) -> dict[str, Any]:
         return self._graph.get(conn_id, {"edges": []})
