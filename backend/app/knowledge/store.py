@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.knowledge.docs import KnowledgeDoc
 from app.knowledge.embedding import Embedder, HashingEmbedder, cosine, make_embedder
+from app.knowledge.vectors import BatchIndex
 
 if TYPE_CHECKING:
     from app.core.settings import SettingsStore
@@ -41,6 +42,8 @@ class KnowledgeBase:
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
+        self._batch: dict[str, BatchIndex] = {}                          # conn -> 文档向量批量索引（惰性）
+        self._batch_table: dict[str, BatchIndex] = {}                    # conn -> 表级向量批量索引
         self._lock = threading.Lock()
         self._load()
 
@@ -179,6 +182,8 @@ class KnowledgeBase:
         await self._embed_docs(conn_id, self._docs(conn_id))
         await self._embed_table_docs(conn_id, schema)
         self._artifact_fingerprint[conn_id] = cur
+        self._batch.pop(conn_id, None)
+        self._batch_table.pop(conn_id, None)
         self._persist_artifact(conn_id)
         return True
 
@@ -214,6 +219,8 @@ class KnowledgeBase:
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         await self._embed_docs(conn_id, self._auto[conn_id])
         await self._embed_table_docs(conn_id, schema)
+        self._batch.pop(conn_id, None)
+        self._batch_table.pop(conn_id, None)
         self._persist_artifact(conn_id)
         return {
             "docs": len(self._auto[conn_id]),
@@ -263,6 +270,20 @@ class KnowledgeBase:
             except Exception:
                 vecs[did] = [0.0]
         self._vec[conn_id] = {**self._vec.get(conn_id, {}), **vecs}
+
+    def _docs_index(self, conn_id: str) -> BatchIndex:
+        idx = self._batch.get(conn_id)
+        if idx is None or len(idx) != len(self._vec.get(conn_id, {})):
+            idx = BatchIndex(self._vec.get(conn_id, {}))
+            self._batch[conn_id] = idx
+        return idx
+
+    def _table_index(self, conn_id: str) -> BatchIndex:
+        idx = self._batch_table.get(conn_id)
+        if idx is None or len(idx) != len(self._table_vec.get(conn_id, {})):
+            idx = BatchIndex(self._table_vec.get(conn_id, {}))
+            self._batch_table[conn_id] = idx
+        return idx
 
     # ---------- 持久化 artifact ----------
     def _artifact_path(self, conn_id: str) -> Path:
@@ -367,11 +388,12 @@ class KnowledgeBase:
                     s += 2.0
             return s
 
+        vec_scores = self._docs_index(conn_id).scores_all(qvec) if qvec is not None else {}
         base: dict[str, float] = {}
         for d in docs:
             s = kw_score(d)
             if qvec is not None:
-                s += 2.0 * cosine(qvec, vecs.get(d.id, qvec))
+                s += 2.0 * vec_scores.get(d.id, 0.0)
             # 已确认（auto/user）优先于 AI 草案
             if d.status == "confirmed":
                 s += 1.5
@@ -579,9 +601,10 @@ class KnowledgeBase:
             f"{c.get('name', '')} {c.get('comment', '')}"
             for c in snap.get("columns", []) if c.get("table") == t.get("name")
         ) for t in snap.get("tables", [])}
+        base_vec = self._table_index(conn_id).scores_all(qvec) if qvec is not None else {}
         scored: list[tuple[str, float]] = []
-        for table, v in vecs.items():
-            score = cosine(qvec, v) if qvec is not None else 0.0
+        for table in vecs.keys():
+            score = base_vec.get(table, 0.0)
             # 词面加权：表名 / 中文词 / 列名出现在问题或反之中
             blob = f"{table} {col_blob.get(table, '')}".lower()
             if table.lower() in ql:
