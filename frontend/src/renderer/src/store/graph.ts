@@ -21,6 +21,15 @@ export interface GraphEdgeDef {
   label: string
 }
 
+/** 搭查模式沉淀的查询节点（可重跑、可复制） */
+export interface QueryNode {
+  id: string
+  title: string
+  sql: string
+  tables: string[]
+  ts: string
+}
+
 export interface Viewport {
   scale: number
   tx: number
@@ -41,6 +50,14 @@ interface GraphState {
   setMode: (m: GraphMode) => void
   select: (id: string | null) => void
   setViewport: (v: Viewport) => void
+  /** 搭查（积木台）：多选表集合 */
+  buildSel: string[]
+  toggleBuild: (t: string) => void
+  clearBuild: () => void
+  /** 沉淀的查询节点 */
+  queryNodes: QueryNode[]
+  addQueryNode: (qn: Omit<QueryNode, 'id' | 'ts'>) => void
+  removeQueryNode: (id: string) => void
 }
 
 const DOMAIN_PALETTE = ['#7c8cff', '#6ee7b7', '#f6ad55', '#f472b6', '#38bdf8', '#a78bfa']
@@ -123,6 +140,8 @@ export const useGraph = create<GraphState>((set, get) => ({
   mode: 'browse',
   selected: null,
   seq: 0,
+  buildSel: [],
+  queryNodes: [],
 
   build(schema, overview) {
     const tagOf = new Map<string, string>()
@@ -185,7 +204,92 @@ export const useGraph = create<GraphState>((set, get) => ({
 
   setViewport(v) {
     set({ viewport: v })
+  },
+
+  toggleBuild(t) {
+    set((s) => ({
+      buildSel: s.buildSel.includes(t)
+        ? s.buildSel.filter((x) => x !== t)
+        : [...s.buildSel, t]
+    }))
+  },
+
+  clearBuild() {
+    set({ buildSel: [] })
+  },
+
+  addQueryNode(qn) {
+    set((s) => ({
+      queryNodes: [...s.queryNodes, { ...qn, id: `q_${Date.now().toString(36)}`, ts: new Date().toISOString() }]
+    }))
+  },
+
+  removeQueryNode(id) {
+    set((s) => ({ queryNodes: s.queryNodes.filter((q) => q.id !== id) }))
   }
 }))
 
 export { NODE_W, NODE_H }
+
+
+/* ---------- 搭查：FK 路径 → JOIN 骨架 ---------- */
+
+export interface JoinStep {
+  from: string
+  to: string
+  from_col: string
+  to_col: string
+  clause: string
+}
+
+/**
+ * 基于 FK 关系为选中表集合生成最小连接树（贪心 BFS）。
+ * 返回 { steps, missing }：steps 为 JOIN 子句序列；missing 为无法连通的表。
+ */
+export function buildJoinSkeleton(
+  tables: string[],
+  fks: { table: string; column: string; ref_table: string; ref_column: string }[]
+): { steps: JoinStep[]; missing: string[] } {
+  const want = new Set(tables)
+  if (tables.length === 0) return { steps: [], missing: [] }
+  // 无向邻接：每边记两个方向（保留原 FK 方向）
+  const adj = new Map<string, { to: string; from_col: string; to_col: string }[]>()
+  const push = (a: string, b: string, from_col: string, to_col: string): void => {
+    const arr = adj.get(a) ?? []
+    arr.push({ to: b, from_col, to_col })
+    adj.set(a, arr)
+  }
+  for (const fk of fks) {
+    if (!want.has(fk.table) || !want.has(fk.ref_table)) continue
+    push(fk.table, fk.ref_table, fk.column, fk.ref_column)
+    push(fk.ref_table, fk.table, fk.ref_column, fk.column)
+  }
+  const visited = new Set<string>([tables[0]])
+  const steps: JoinStep[] = []
+  const edgesUsed = new Set<string>()
+  while (visited.size < tables.length) {
+    let best: { a: string; b: string; from_col: string; to_col: string } | null = null
+    for (const a of visited) {
+      for (const e of adj.get(a) ?? []) {
+        if (visited.has(e.to)) continue
+        const key = [a, e.to].sort().join('::')
+        if (edgesUsed.has(key)) continue
+        best = { a, b: e.to, from_col: e.from_col, to_col: e.to_col }
+        edgesUsed.add(key)
+        break
+      }
+      if (best) break
+    }
+    if (!best) break // 图不连通
+    visited.add(best.b)
+    steps.push({
+      from: best.a,
+      to: best.b,
+      from_col: best.from_col,
+      to_col: best.to_col,
+      clause: `JOIN ${best.b} ON ${best.a}.${best.from_col} = ${best.b}.${best.to_col}`
+    })
+  }
+  const missing = tables.filter((t) => !visited.has(t))
+  return { steps, missing }
+}
