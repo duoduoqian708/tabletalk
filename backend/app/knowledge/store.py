@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.knowledge.docs import KnowledgeDoc
 from app.knowledge.embedding import Embedder, HashingEmbedder, cosine, make_embedder
-from app.knowledge.vectors import BatchIndex
+from app.knowledge.vectorstore import NumpyVectorStore, VectorChunk, VectorStore
 
 if TYPE_CHECKING:
     from app.core.settings import SettingsStore
@@ -45,8 +45,7 @@ class KnowledgeBase:
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
-        self._batch: dict[str, BatchIndex] = {}                          # conn -> 文档向量批量索引（惰性）
-        self._batch_table: dict[str, BatchIndex] = {}                    # conn -> 表级向量批量索引
+        self._vstore: dict[str, VectorStore] = {}                        # conn -> 统一向量索引（doc+table 归一，collection 区分）
         self._lock = threading.Lock()
 
     # ---------- 持久化：存储后端（JsonStorage 回退 / SqliteStorage 标准格式） ----------
@@ -85,8 +84,7 @@ class KnowledgeBase:
         self._table_tags[conn_id] = snap.table_tags
         self._schema[conn_id] = snap.schema
         self._artifact_fingerprint[conn_id] = snap.emb_fingerprint
-        self._batch.pop(conn_id, None)
-        self._batch_table.pop(conn_id, None)
+        self._rebuild_vstore(conn_id)
 
     def _save_conn(self, conn_id: str) -> None:
         """全量快照写回存储后端（标准格式/JSON 均在此落盘）。"""
@@ -222,8 +220,7 @@ class KnowledgeBase:
         await self._embed_docs(conn_id, self._docs(conn_id))
         await self._embed_table_docs(conn_id, schema)
         self._artifact_fingerprint[conn_id] = cur
-        self._batch.pop(conn_id, None)
-        self._batch_table.pop(conn_id, None)
+        self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
         return True
 
@@ -232,10 +229,14 @@ class KnowledgeBase:
         conn_id: str,
         schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
+        on_progress: Any | None = None,
     ) -> dict[str, Any]:
+        """构建知识库。on_progress(stage, percent) 可选进度回调（任务化构建用）。"""
         # TODO: 测试后删除
         from app.debuglog import dbg
         dbg("[kb.build] conn=", conn_id, "tables=", len(schema.get("tables", [])))
+        if on_progress:
+            on_progress("生成注释文档", 15)
         schema = dict(schema)
         schema["_conn_id"] = conn_id
         self._auto[conn_id] = self._from_schema(schema)
@@ -254,13 +255,20 @@ class KnowledgeBase:
         }
         if samples is not None:
             self._samples[conn_id] = samples
+        if on_progress:
+            on_progress("构图", 25)
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
         self._emb = self._embedder()
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
-        await self._embed_docs(conn_id, self._auto[conn_id])
-        await self._embed_table_docs(conn_id, schema)
-        self._batch.pop(conn_id, None)
-        self._batch_table.pop(conn_id, None)
+        if on_progress:
+            on_progress("向量化", 40)
+        await self._embed_docs(conn_id, self._auto[conn_id], on_progress=on_progress, p0=40, p1=75)
+        if on_progress:
+            on_progress("向量化", 80)
+        await self._embed_table_docs(conn_id, schema, on_progress=on_progress, p0=80, p1=90)
+        if on_progress:
+            on_progress("落盘", 95)
+        self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
         return {
             "docs": len(self._auto[conn_id]),
@@ -270,7 +278,8 @@ class KnowledgeBase:
             ),
         }
 
-    async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any]) -> None:
+    async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any],
+                                on_progress: Any | None = None, p0: int = 80, p1: int = 90) -> None:
         """每张表一条"表级文档"向量（表名+列名+类型+注释+标签）——供向量路由语义召回。
 
         与文档级向量互补：文档级管"注释/草案召回"，表级管"问题→表"定位，
@@ -284,7 +293,10 @@ class KnowledgeBase:
         table_tags = self._table_tags.get(conn_id, {})
         lib = self._tags.get(conn_id, {})
         vecs: dict[str, list[float]] = {}
-        for t in tables:
+        n = len(tables)
+        for i, t in enumerate(tables):
+            if on_progress and i % max(1, n // 4) == 0:
+                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n))
             name = t.get("name", "")
             if not name:
                 continue
@@ -301,29 +313,60 @@ class KnowledgeBase:
                 vecs[name] = [0.0]
         self._table_vec[conn_id] = vecs
 
-    async def _embed_docs(self, conn_id: str, docs: list[KnowledgeDoc]) -> None:
+    async def _embed_docs(self, conn_id: str, docs: list[KnowledgeDoc],
+                          on_progress: Any | None = None, p0: int = 40, p1: int = 75) -> None:
         vecs: dict[str, list[float]] = {}
         text_by_id = {d.id: self._doc_text(d) for d in docs}
-        for did, text in text_by_id.items():
+        n = len(text_by_id)
+        for i, (did, text) in enumerate(text_by_id.items()):
+            if on_progress and i % max(1, n // 5) == 0:
+                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n))
             try:
                 vecs[did] = await self._emb.embed(text)
             except Exception:
                 vecs[did] = [0.0]
         self._vec[conn_id] = {**self._vec.get(conn_id, {}), **vecs}
 
-    def _docs_index(self, conn_id: str) -> BatchIndex:
-        idx = self._batch.get(conn_id)
-        if idx is None or len(idx) != len(self._vec.get(conn_id, {})):
-            idx = BatchIndex(self._vec.get(conn_id, {}))
-            self._batch[conn_id] = idx
-        return idx
+    # ---------- 统一向量索引（VectorStore，doc+table 归一） ----------
+    def _vector_store(self, conn_id: str) -> VectorStore:
+        vs = self._vstore.get(conn_id)
+        if vs is None:
+            vs = NumpyVectorStore()
+            self._vstore[conn_id] = vs
+            self._rebuild_vstore(conn_id)
+        return vs
 
-    def _table_index(self, conn_id: str) -> BatchIndex:
-        idx = self._batch_table.get(conn_id)
-        if idx is None or len(idx) != len(self._table_vec.get(conn_id, {})):
-            idx = BatchIndex(self._table_vec.get(conn_id, {}))
-            self._batch_table[conn_id] = idx
-        return idx
+    def _rebuild_vstore(self, conn_id: str) -> None:
+        """把 _vec（文档级）+ _table_vec（表级）归一为带 collection/metadata 的 chunk 索引。
+
+        doc chunk:  collection=doc, metadata={source, status, kind} → 可过滤已确认/来源
+        table chunk: collection=table, metadata={table} → 问题→表路由
+        """
+        chunks: list[VectorChunk] = []
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        fp = self._artifact_fingerprint.get(conn_id, "")
+        for d in self._docs(conn_id):
+            vec = self._vec.get(conn_id, {}).get(d.id)
+            if not vec:
+                continue
+            chunks.append(VectorChunk(
+                id=d.id, collection="doc",
+                text=f"{d.title} {d.body}",
+                metadata={"source": d.source, "status": d.status, "kind": d.kind},
+                vector=vec, fingerprint=fp, updated_at=d.updated_at or now,
+            ))
+        snap = self._schema.get(conn_id, {})
+        for tname, vec in self._table_vec.get(conn_id, {}).items():
+            cols = [c for c in snap.get("columns", []) if c.get("table") == tname]
+            col_txt = " ".join(f"{c.get('name', '')} {c.get('comment', '')}" for c in cols)
+            chunks.append(VectorChunk(
+                id=tname, collection="table",
+                text=f"{tname} {col_txt}",
+                metadata={"table": tname},
+                vector=vec, fingerprint=fp, updated_at=now,
+            ))
+        self._vstore[conn_id] = NumpyVectorStore()
+        self._vstore[conn_id].set_chunks(chunks)
 
     # ---------- 向量 ----------
     @staticmethod
@@ -384,7 +427,7 @@ class KnowledgeBase:
                     s += 2.0
             return s
 
-        vec_scores = self._docs_index(conn_id).scores_all(qvec) if qvec is not None else {}
+        vec_scores = self._vector_store(conn_id).scores_all(qvec) if qvec is not None else {}
         base: dict[str, float] = {}
         for d in docs:
             s = kw_score(d)
@@ -473,6 +516,33 @@ class KnowledgeBase:
         if targets:
             self._save_conn(conn_id)
         return len(targets)
+
+    def confirm_all(self, conn_id: str) -> dict[str, int]:
+        """确认闸（构建后一键启用）：批量确认全部草案文档 + 全部 draft 标签。
+
+        标签确认后才参与"问题→选表"路由；文档确认后检索优先。
+        kb_status → ready 由调用方（api 层）负责。
+        """
+        n_docs = self.confirm(conn_id)
+        n_tags = 0
+        for name in list(self._tags.get(conn_id, {}).keys()):
+            if self.confirm_tag(conn_id, name):
+                n_tags += 1
+        return {"docs": n_docs, "tags": n_tags}
+
+    def clear(self, conn_id: str) -> None:
+        """取消构建/失败后清理半成品内存（不落盘）。"""
+        for d in (self._auto, self._user, self._drafts, self._samples, self._graph,
+                  self._vec, self._tags, self._table_tags, self._schema,
+                  self._table_vec, self._artifact_fingerprint, self._vstore):
+            d.pop(conn_id, None)
+
+    def pending_counts(self, conn_id: str) -> dict[str, int]:
+        """待确认数（确认闸 UI 用）：草案文档 + draft 标签。"""
+        return {
+            "draft_docs": len(self._drafts.get(conn_id, [])),
+            "draft_tags": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
+        }
 
     def reject(self, conn_id: str, doc_id: str) -> bool:
         drafts = self._drafts.get(conn_id, [])
@@ -597,7 +667,7 @@ class KnowledgeBase:
             f"{c.get('name', '')} {c.get('comment', '')}"
             for c in snap.get("columns", []) if c.get("table") == t.get("name")
         ) for t in snap.get("tables", [])}
-        base_vec = self._table_index(conn_id).scores_all(qvec) if qvec is not None else {}
+        base_vec = self._vector_store(conn_id).scores_all(qvec, collection="table") if qvec is not None else {}
         scored: list[tuple[str, float]] = []
         for table in vecs.keys():
             score = base_vec.get(table, 0.0)

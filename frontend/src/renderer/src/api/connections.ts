@@ -41,3 +41,8 @@ export function deleteConnection(id: string): Promise<{ deleted: string }> {
 export function testConnection(id: string): Promise<TestResult> {
   return request(`/api/v1/connections/${id}/test`, { method: 'POST' })
 }
+
+/** 接入流程前置：用待保存的配置测试连接（不落盘）。通过后保存按钮才可点。 */
+export function testDraftConnection(input: ConnectionInput): Promise<TestResult> {
+  return request('/api/v1/connections/test-draft', { method: 'POST', body: JSON.stringify(input) })
+}

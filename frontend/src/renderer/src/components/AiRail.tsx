@@ -16,6 +16,7 @@ import {
 } from '@renderer/api/ai'
 import { toastMsg } from '@renderer/utils/toast'
 import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
+import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
 
 /* ---------- 推理步骤状态机 ---------- */
@@ -701,6 +702,10 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
               if (last.role === 'ai') last.text = `⚠ ${ev.message}`
               return n
             })
+            // 知识库未构建 → 强制弹出构建门禁
+            if (ev.code === 'kb_not_built' && currentId) {
+              useKbGate.getState().forceOpen(currentId)
+            }
           } else if (ev.type === 'done') {
             streamDoneRef.current = true
             setTurns((t) => {

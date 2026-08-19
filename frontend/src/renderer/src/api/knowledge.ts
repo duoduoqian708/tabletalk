@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { KnowledgeOverview, RouteResult, TagInfo } from './types'
+import type { BuildProgress, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
 
 export interface TagLibrary {
   library: TagInfo[]
@@ -10,8 +10,26 @@ export function overview(connId: string): Promise<KnowledgeOverview> {
   return request(`/api/v1/knowledge/${connId}/overview`)
 }
 
-export function build(connId: string): Promise<{ tables: number; columns: number; edges: number }> {
+/** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。 */
+export function build(connId: string): Promise<{ job_id: string; kb_status: string; stage: string }> {
   return request(`/api/v1/knowledge/${connId}/build`, { method: 'POST' })
+}
+
+export function buildProgress(connId: string): Promise<BuildProgress> {
+  return request(`/api/v1/knowledge/${connId}/build/progress`)
+}
+
+export function buildCancel(connId: string): Promise<{ cancelled: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/build/cancel`, { method: 'POST' })
+}
+
+export function kbStatus(connId: string): Promise<KbStatus> {
+  return request(`/api/v1/knowledge/${connId}/status`)
+}
+
+/** 确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。 */
+export function confirmAllEnabled(connId: string): Promise<{ docs: number; tags: number; kb_status: string }> {
+  return request(`/api/v1/knowledge/${connId}/confirm-all`, { method: 'POST' })
 }
 
 export function tags(connId: string): Promise<TagLibrary> {

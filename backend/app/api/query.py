@@ -52,6 +52,12 @@ def _ctx(state, conn_id: str):
 async def run_query(req: QueryRequest) -> dict:
     state = get_state()
     cfg, dialect = _ctx(state, req.connection_id)
+    # 卡死边界：知识库未构建（或未确认启用）的数据源不可用（接入流程强制）
+    if cfg.kb_status != "ready":
+        raise HTTPException(status_code=409, detail={
+            "code": "kb_not_built",
+            "message": "该数据源知识库未构建，请先构建并确认启用",
+        })
     origin = Origin.AI if req.origin == "ai" else Origin.MANUAL
     assessment = safety_gate.assess_sql(req.sql, dialect, origin)
     t0 = time.monotonic()

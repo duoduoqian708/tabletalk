@@ -56,49 +56,107 @@ def _have(conn_id: str) -> None:
 
 @router.post("/{conn_id}/build")
 async def build_index(conn_id: str) -> dict:
+    """启动后台构建任务（接入流程强制步骤）。返回后立即轮询 /build/progress。"""
     _have(conn_id)
     state = get_state()
-    schema = await get_schema(state, conn_id)
-    rt = state.runtime.get()
-    samples: dict[str, dict[str, list]] = {}
-    if rt.kb_sample_rows > 0:
-        for t in schema["tables"]:
-            try:
-                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-            except Exception:
-                samples[t["name"]] = {}
-    stats = await state.knowledge.build(conn_id, schema, samples)
-    return stats
+    if state.build_jobs.is_running(conn_id):
+        raise HTTPException(status_code=409, detail="构建已在运行")
+    state.connections.set_kb_status(conn_id, "building")
+
+    async def _run(report):
+        report("发现结构", 5)
+        schema = await get_schema(state, conn_id)
+        report("发现结构", 10)
+        rt = state.runtime.get()
+        samples: dict[str, dict[str, list]] = {}
+        if rt.kb_sample_rows > 0:
+            n = max(1, len(schema["tables"]))
+            for i, t in enumerate(schema["tables"]):
+                report("抽样取值", 10 + 5 * i // n)
+                try:
+                    samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
+                except Exception:
+                    samples[t["name"]] = {}
+        return await state.knowledge.build(conn_id, schema, samples, on_progress=report)
+
+    state.build_jobs.start(conn_id, _run)
+    return {"job_id": conn_id, "kb_status": "building", "stage": "排队中"}
+
+
+@router.get("/{conn_id}/build/progress")
+async def build_progress(conn_id: str) -> dict:
+    """轮询构建进度（500ms）：{stage, percent, done, error, kb_status}。"""
+    _have(conn_id)
+    state = get_state()
+    cfg = state.connections.get(conn_id)
+    p = state.build_jobs.progress(conn_id)
+    if p is None:
+        return {"stage": "idle", "percent": 0, "done": True, "error": None, "kb_status": cfg.kb_status}
+    p["kb_status"] = cfg.kb_status
+    return p
+
+
+@router.post("/{conn_id}/build/cancel")
+async def build_cancel(conn_id: str) -> dict:
+    """取消构建：清理半成品，kb_status 回 none。"""
+    _have(conn_id)
+    state = get_state()
+    return {"cancelled": state.build_jobs.cancel(conn_id)}
+
+
+@router.get("/{conn_id}/status")
+async def kb_status(conn_id: str) -> dict:
+    """状态机查询：{kb_status, kb_updated_at, pending, building}。"""
+    _have(conn_id)
+    state = get_state()
+    cfg = state.connections.get(conn_id)
+    state.knowledge.ensure_loaded(conn_id)  # 重启后恢复内存态
+    return {
+        "kb_status": cfg.kb_status,
+        "kb_updated_at": cfg.kb_updated_at,
+        "pending": state.knowledge.pending_counts(conn_id),
+        "building": state.build_jobs.is_running(conn_id),
+    }
+
+
+@router.post("/{conn_id}/confirm-all")
+async def confirm_all(conn_id: str) -> dict:
+    """确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。"""
+    _have(conn_id)
+    state = get_state()
+    n = state.knowledge.confirm_all(conn_id)
+    state.connections.set_kb_status(conn_id, "ready")
+    return {**n, "kb_status": "ready"}
 
 
 @router.get("/{conn_id}/overview")
 async def overview(conn_id: str) -> dict:
     _have(conn_id)
     state = get_state()
+    cfg = state.connections.get(conn_id)
     if not state.knowledge.is_built(conn_id):
-        schema = await get_schema(state, conn_id)
-        rt = state.runtime.get()
-        samples = {}
-        if rt.kb_sample_rows > 0:
-            for t in schema["tables"]:
-                try:
-                    samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-                except Exception:
-                    samples[t["name"]] = {}
-        await state.knowledge.build(conn_id, schema, samples)
-    else:
-        # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
-        state.knowledge.ensure_loaded(conn_id)
+        # 未构建：返回空结构 + kb_status，前端据此弹构建窗（不再隐式同步构建）
+        return {
+            "built": False, "kb_status": cfg.kb_status,
+            "tables": [], "columns": [], "graph": {"edges": []},
+            "tags": {"library": [], "tables": {}},
+            "draft_count": 0, "tag_draft_count": 0, "sample_cols": 0,
+            "embedding_provider": state.runtime.get().embedding_provider,
+        }
+    # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
+    state.knowledge.ensure_loaded(conn_id)
     await state.knowledge.reembed_if_needed(conn_id)  # 用户更换嵌入模型 → 向量重嵌
-    return state.knowledge.overview(conn_id)
+    return {**state.knowledge.overview(conn_id), "built": True, "kb_status": cfg.kb_status}
 
 
 @router.get("/{conn_id}/graph")
 async def graph(conn_id: str) -> dict:
     _have(conn_id)
     state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        return {"built": False, "kb_status": state.connections.get(conn_id).kb_status, "edges": []}
     state.knowledge.ensure_loaded(conn_id)
-    return state.knowledge.graph(conn_id)
+    return {**state.knowledge.graph(conn_id), "built": True}
 
 
 @router.get("/{conn_id}/retrieve")

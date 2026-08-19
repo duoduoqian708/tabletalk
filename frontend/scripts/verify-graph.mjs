@@ -1,5 +1,6 @@
 // P2 图谱画布验证：连接演示库 → 画布出节点/边 → 单击检查器 → 双击开数据 → 工具栏切回 → ⌘1/⌘2
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -40,6 +41,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
 
   // 画布出现
   await page.waitForSelector('.gcanvas', { timeout: 30000 })

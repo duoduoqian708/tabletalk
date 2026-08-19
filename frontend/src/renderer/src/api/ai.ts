@@ -68,7 +68,7 @@ export type AiEvent =
   | { type: 'sql_card'; card: AiCard }
   | { type: 'stage'; stage: string; value?: unknown; tables?: string[]; vec_tables?: string[] }
   | { type: 'done' }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; code?: string }
   // 报告模式事件
   | { type: 'report_start'; connection: string; report_id: string; snapshot_ts: string }
   | { type: 'clarify'; question: string; field: string }

@@ -1,5 +1,6 @@
 // P5 知识治理验证：治理模式统计条 → 检查器写注释(confirmed) → 加标签(draft) → 确认标签 → 节点状态刷新
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -39,6 +40,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 60000 })
 
   // ── 1. 治理模式统计条 ──

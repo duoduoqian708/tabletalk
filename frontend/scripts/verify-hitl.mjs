@@ -1,5 +1,6 @@
 // P4 HITL 验证（确定性）：mock 写操作链路 —— 上下文筹码 → 黄卡风险面板 → 不自动执行 → 确认 → 留痕 → 审计落盘
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -46,6 +47,7 @@ try {
   page.on('pageerror', e => console.log('PAGEERROR:', String(e).slice(0, 200)))
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('.g-node', { timeout: 60000 })
+  await buildAndConfirm(page)  // 新连接 → 过构建门禁（不构建卡死）
 
   // ── 1. 上下文筹码：单击节点 → 筹码出现并可移除 ──
   await page.click('.g-node')

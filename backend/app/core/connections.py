@@ -33,6 +33,8 @@ class ConnectionConfig:
     credential_ref: str | None = None   # 预留：钥匙串凭据引用
     created_at: str = ""
     sensitive: list[str] = field(default_factory=list)   # 敏感表/列 glob 名单，如 ["payroll_*"]
+    kb_status: str = "none"              # 知识库状态机：none|building|pending_review|ready
+    kb_updated_at: str = ""              # 构建/确认时间
 
     def to_dialect_config(self) -> DialectConfig:
         return DialectConfig(
@@ -107,6 +109,19 @@ class ConnectionRegistry:
         self._conns[cfg.id] = cfg
         self.save()
         return cfg
+
+    def set_kb_status(self, conn_id: str, status: str) -> None:
+        """更新知识库状态机位（none|building|pending_review|ready），持久化。"""
+        cfg = self.get(conn_id)
+        cfg.kb_status = status
+        if status != "building":
+            cfg.kb_updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            self.save()
+        except PermissionError:
+            # 只读数据目录/沙箱等极端情况：内存态优先，落盘失败不致命
+            import logging
+            logging.getLogger(__name__).warning("连接状态写盘失败（只读目录？）：%s", self._path)
 
     def update(self, conn_id: str, patch: dict[str, Any]) -> ConnectionConfig:
         cfg = self.get(conn_id)

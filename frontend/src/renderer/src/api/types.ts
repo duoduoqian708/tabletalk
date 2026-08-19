@@ -14,6 +14,8 @@ export interface ConnectionConfig {
   credential_ref: string | null
   created_at: string
   sensitive: string[]
+  kb_status?: 'none' | 'building' | 'pending_review' | 'ready'
+  kb_updated_at?: string
 }
 
 export interface TableInfo {
@@ -149,6 +151,8 @@ export interface GraphEdge {
 }
 
 export interface KnowledgeOverview {
+  built?: boolean
+  kb_status?: string
   tables: ReviewTable[]
   columns: ReviewColumn[]
   graph: { edges: GraphEdge[] }
@@ -157,6 +161,21 @@ export interface KnowledgeOverview {
   tag_draft_count: number
   sample_cols: number
   embedding_provider: string
+}
+
+export interface BuildProgress {
+  stage: string
+  percent: number
+  done: boolean
+  error: string | null
+  kb_status: string
+}
+
+export interface KbStatus {
+  kb_status: string
+  kb_updated_at: string
+  pending: { draft_docs: number; draft_tags: number }
+  building: boolean
 }
 
 export interface RouteResult {

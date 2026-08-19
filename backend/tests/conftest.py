@@ -17,11 +17,14 @@ def pytest_configure(config):
 
 @pytest.fixture(autouse=True)
 async def _isolate(tmp_path):
-    """每个测试前重建应用状态（独立数据目录）；测试后关闭连接池，避免 aiosqlite 线程挂起进程退出。"""
-    from app.state import get_state, reset_state
+    """每个测试前重建应用状态（独立数据目录）；测试后关闭连接池，避免 aiosqlite 线程挂起进程退出。
 
-    prev = get_state()
-    if prev.pools:
+    注意：不调用 get_state()（它会初始化默认 ~/.cleared 并触发 kb_status 迁移写盘）。
+    """
+    from app.state import _state, reset_state
+
+    prev = _state
+    if prev is not None and prev.pools:
         await prev.pools.close_all()
     st = reset_state(tmp_path / "data")
     yield st
@@ -49,6 +52,8 @@ def conn_id(app_state, demo_db) -> str:
     c = app_state.connections.create(
         {"name": "demo", "dialect": "sqlite", "file": str(demo_db)}
     )
+    # 既有测试假定连接可直接使用：默认放行知识库状态机（状态机专属测试自管状态）
+    app_state.connections.set_kb_status(c.id, "ready")
     return c.id
 
 

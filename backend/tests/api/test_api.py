@@ -201,6 +201,7 @@ async def test_query_readonly_conn_blocks_writes(client, app_state, demo_db):
     ro = app_state.connections.create(
         {"name": "ro-demo", "dialect": "sqlite", "file": str(demo_db), "read_only": True}
     )
+    app_state.connections.set_kb_status(ro.id, "ready")  # 放行状态机（本测试只管只读语义）
     # 读 → 放行
     r = await client.post("/api/v1/query", json={"connection_id": ro.id, "sql": "SELECT * FROM orders LIMIT 3"})
     assert r.json()["verdict"] == "allow"
@@ -245,11 +246,29 @@ async def test_settings_update(client, app_state):
     assert "•••" in body["ai_api_key"] or body["ai_api_key"] == ""
 
 
-async def test_knowledge_build_retrieve_annotate(client, conn_id):
+async def _build_and_wait(client, conn_id):
+    """POST build → 轮询 progress 直到 done（任务化构建）。"""
+    import asyncio
+
     r = await client.post(f"/api/v1/knowledge/{conn_id}/build")
-    body = r.json()
-    assert body["docs"] > 0
-    assert body["graph_edges"] >= 0
+    assert r.status_code == 200
+    assert r.json()["kb_status"] == "building"
+    for _ in range(200):
+        p = (await client.get(f"/api/v1/knowledge/{conn_id}/build/progress")).json()
+        if p.get("done"):
+            assert not p.get("error"), p
+            return p
+        await asyncio.sleep(0.02)
+    raise AssertionError("build 超时")
+
+
+async def test_knowledge_build_retrieve_annotate(client, conn_id):
+    await _build_and_wait(client, conn_id)
+    # 构建完成 → 待确认；确认闸 → ready
+    st = (await client.get(f"/api/v1/knowledge/{conn_id}/status")).json()
+    assert st["kb_status"] == "pending_review"
+    r = await client.post(f"/api/v1/knowledge/{conn_id}/confirm-all")
+    assert r.json()["kb_status"] == "ready"
     r = await client.get(f"/api/v1/knowledge/{conn_id}/retrieve", params={"q": "orders"})
     assert r.json()["count"] >= 1
     r = await client.put(f"/api/v1/knowledge/{conn_id}/docs",
@@ -260,14 +279,15 @@ async def test_knowledge_build_retrieve_annotate(client, conn_id):
 
 
 async def test_knowledge_graph_and_overview(client, conn_id):
-    r = await client.post(f"/api/v1/knowledge/{conn_id}/build")
-    assert r.status_code == 200
+    await _build_and_wait(client, conn_id)
     # 图谱：FK 边存在
     g = await client.get(f"/api/v1/knowledge/{conn_id}/graph")
+    assert g.json()["built"] is True
     assert any(e["kind"] == "fk" for e in g.json()["edges"])
     # 审查视图：表/列 + 确认状态字段
     ov = await client.get(f"/api/v1/knowledge/{conn_id}/overview")
     o = ov.json()
+    assert o["built"] is True
     assert len(o["tables"]) > 0
     assert "comment_status" in o["tables"][0]
     assert "tags" in o["tables"][0]
@@ -275,7 +295,7 @@ async def test_knowledge_graph_and_overview(client, conn_id):
 
 
 async def test_knowledge_tags_flow(client, conn_id):
-    await client.post(f"/api/v1/knowledge/{conn_id}/build")
+    await _build_and_wait(client, conn_id)
     # AI 生成领域标签（mock 网关：按表名关键词）
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate-tags")
     assert r.json()["tables"] > 0
@@ -298,7 +318,6 @@ async def test_knowledge_tags_flow(client, conn_id):
     other = next(t["name"] for t in r.json()["library"] if t["name"] != name)
     d = await client.post(f"/api/v1/knowledge/{conn_id}/tags/reject", json={"name": other})
     assert d.json()["rejected"] is True
-    await client.post(f"/api/v1/knowledge/{conn_id}/build")
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate", json={"include_samples": False})
     assert r.json()["added"] > 0
     # 草案状态 = draft

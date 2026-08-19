@@ -1,5 +1,6 @@
 // 图谱 k-hop 探索 + 知识 top-N 检索验证
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -39,6 +40,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 60000 })
   await page.waitForTimeout(600)
 
@@ -64,7 +66,7 @@ try {
 
   // ── 3. 知识 top-N 检索 ──
   await page.click('button:has-text("知识库")')
-  await page.waitForSelector('.review-search', { timeout: 15000 })
+  await page.waitForSelector('.kb-search', { timeout: 15000 })
   await page.fill('.rs-input', '订单')
   await page.click('.rs-btn')
   await page.waitForSelector('.review-results', { timeout: 15000 })

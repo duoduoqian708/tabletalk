@@ -1,8 +1,8 @@
 {
-  "name": "cleared-frontend",
+  "name": "tabletalk-frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "DATUM — AI database client (Web SPA)",
+  "description": "tabletalk — AI database client (Web SPA)",
   "type": "module",
   "scripts": {
     "dev": "vite",

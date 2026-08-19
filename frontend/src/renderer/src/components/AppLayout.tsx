@@ -8,6 +8,7 @@ import { useUi, type MainView, type View } from '@renderer/store/ui'
 import { previewTable } from '@renderer/api/schema'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
+import { KbBuildGate } from './KbBuildGate'
 import { GraphCanvas } from './GraphCanvas'
 import { DataTable } from './DataTable'
 import { ReportCard } from './ReportCard'
@@ -295,6 +296,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
 
       <ConnectionModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onNewConnection={() => { setSettingsOpen(false); setModalOpen(true) }} />
+      <KbBuildGate />
     </div>
   )
 }

@@ -82,6 +82,16 @@ async def delete_connection(conn_id: str) -> dict:
     return {"deleted": conn_id}
 
 
+@router.post("/test-draft")
+async def test_draft_connection(body: ConnectionCreate) -> dict:
+    """接入流程前置：测试连接配置（不落盘）。通过后才允许 POST /connections 保存。
+
+    SQLite 无"库"概念 → 文件可读 + 能列出表即通过；其余方言真实连库。
+    """
+    state = get_state()
+    return await state.pools.test_draft(body.model_dump())
+
+
 @router.post("/{conn_id}/test")
 async def test_connection(conn_id: str) -> dict:
     state = get_state()

@@ -9,6 +9,7 @@ from app.core.chat_store import ChatStore
 from app.core.connections import ConnectionRegistry
 from app.core.pool import PoolManager
 from app.core.settings import SettingsStore
+from app.knowledge.jobs import BuildJobManager
 from app.knowledge.store import KnowledgeBase
 
 
@@ -21,6 +22,7 @@ class AppState:
     audit: AuditLogger
     knowledge: KnowledgeBase
     chats: ChatStore
+    build_jobs: "BuildJobManager"
 
 
 _state: AppState | None = None
@@ -32,15 +34,26 @@ def _build_state(data_dir=None) -> AppState:
     load_custom(env.data_dir)  # 恢复自定义技能（技能广场持久化）
     connections = ConnectionRegistry(env.data_dir)
     runtime = SettingsStore(env.data_dir)
+    knowledge = KnowledgeBase(env.data_dir, runtime=runtime)
+    _migrate_kb_status(knowledge, connections)  # 老连接：artifact 已存在 → 视为已就绪
     return AppState(
         env=env,
         runtime=runtime,
         connections=connections,
         pools=PoolManager(connections),
         audit=AuditLogger(env.data_dir),
-        knowledge=KnowledgeBase(env.data_dir, runtime=runtime),
+        knowledge=knowledge,
         chats=ChatStore(env.data_dir),
+        build_jobs=BuildJobManager(),
     )
+
+
+def _migrate_kb_status(knowledge, connections) -> None:
+    """状态机迁移：kb_status 字段是新加的；已有知识库 artifact 的老连接置为 ready，
+    避免"构建过却卡死"。artifact 不存在的连接保持 none（走新接入流程）。"""
+    for c in connections.list():
+        if c.kb_status == "none" and knowledge.is_built(c.id):
+            connections.set_kb_status(c.id, "ready")
 
 
 def init_state() -> AppState:

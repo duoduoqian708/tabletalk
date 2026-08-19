@@ -1,6 +1,7 @@
 // Playwright Web 截图工具：自起后端（隔离 data_dir）→ 连演示库 → 知识审查 → AI 生成标签 → 截图
 // 用法：node scripts/screenshot.mjs [输出路径]
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -60,7 +61,8 @@ try {
     await onboard.click()
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
-  await page.waitForSelector('.sch-item', { timeout: 20000 })
+  await buildAndConfirm(page)
+  await page.waitForSelector('.g-node', { timeout: 20000 })
 
   await page.click('button:has-text("知识库")')
   await page.waitForSelector('.review', { timeout: 20000 })

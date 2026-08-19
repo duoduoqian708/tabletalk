@@ -1,5 +1,6 @@
 // P3 验证：多标签结果 + 左缘微条关联跳转
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -38,6 +39,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 30000 })
 
   // 双击第一个节点 → 表格视图 + 标签栏 + 微条

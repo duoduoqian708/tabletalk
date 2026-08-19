@@ -1,5 +1,6 @@
 // Void 视觉验证：检查关键元素的 computed style 是否深色主题
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -50,6 +51,7 @@ try {
     await onboard.click()
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 30000 })
 
   const cs = (sel, prop) => page.evaluate(([s, p]) => {

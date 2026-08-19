@@ -364,6 +364,16 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
 
     session_id = state.chats.upsert(req.session_id, req.connection_id, req.title)
 
+    # 卡死边界：知识库未构建/未确认的数据源 AI 不可用（SSE 内报错，保持流式协议）
+    cfg = state.connections.get(req.connection_id)
+    if cfg.kb_status != "ready":
+
+        async def gen_err():
+            yield f"data: {json.dumps({'type': 'error', 'code': 'kb_not_built', 'message': '该数据源知识库未构建，请先构建并确认启用'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(gen_err(), media_type="text/event-stream")
+
     async def gen():
         events: list[dict] = []
         try:

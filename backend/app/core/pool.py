@@ -137,6 +137,33 @@ class PoolManager:
             if conn is not None:
                 await adapter.close(conn)
 
+    async def test_draft(self, cfg_data: dict[str, Any]) -> dict[str, Any]:
+        """不落盘测试（接入流程前置）：用待保存的配置直接连一次。
+
+        SQLite 无"库"概念 → 放宽为"文件可读 + 能列出表"；其余方言按真实链路连库。
+        """
+        from app.core.connections import ConnectionConfig
+
+        cfg = ConnectionConfig(id="draft", **cfg_data)
+        adapter = get_dialect(cfg.dialect)
+        t0 = time.monotonic()
+        conn = None
+        try:
+            conn = await adapter.connect(cfg.to_dialect_config())
+            ok = await adapter.is_healthy(conn)
+            detail = None
+            if ok and cfg.dialect == "sqlite":
+                tables = await adapter.list_tables(conn)
+                ok = len(tables) > 0
+                if not ok:
+                    detail = "文件可读但未发现任何表"
+            return {"ok": ok, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": detail}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": str(e)}
+        finally:
+            if conn is not None:
+                await adapter.close(conn)
+
     async def close(self, conn_id: str) -> None:
         p = self._pools.pop(conn_id, None)
         if p is not None:

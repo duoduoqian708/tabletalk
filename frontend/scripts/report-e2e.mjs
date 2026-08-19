@@ -1,6 +1,7 @@
 // 报告模式 E2E 验证：自起后端 → 连演示库 → 点"报告" → 输入问题 → 验证报告卡渲染
 // 用法：node scripts/report-e2e.mjs
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -65,6 +66,7 @@ try {
     await onboard.click()
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
+  await buildAndConfirm(page)
   await page.waitForSelector('.sch-item', { timeout: 20000 })
   check('schema 树加载', true)
 

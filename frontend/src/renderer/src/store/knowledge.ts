@@ -8,7 +8,8 @@ interface KnowledgeState {
   busy: boolean
   error: string | null
   load: (connId: string) => Promise<void>
-  build: (connId: string) => Promise<void>
+  /** 任务化构建：启动 + 轮询进度直到 done，然后刷新 overview */
+  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void) => Promise<void>
   annotateTags: (connId: string) => Promise<void>
   confirmComment: (connId: string, table: string, column?: string) => Promise<void>
   rejectComment: (connId: string, table: string, column?: string) => Promise<void>
@@ -37,10 +38,20 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     }
   },
 
-  async build(connId) {
+  async buildTask(connId, onProgress) {
     set({ busy: true, error: null })
     try {
       await api.build(connId)
+      // 轮询进度（任务化构建：后台跑，页面轮询）
+      for (let i = 0; i < 600; i++) {
+        await new Promise((r) => setTimeout(r, 500))
+        const p = await api.buildProgress(connId)
+        onProgress?.(p.percent, p.stage)
+        if (p.done) {
+          if (p.error && p.error !== 'cancelled') set({ error: p.error })
+          break
+        }
+      }
       await get().load(connId)
     } catch (e) {
       set({ error: (e as Error).message })
@@ -90,7 +101,7 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   },
 
   async confirmAll(connId) {
-    await api.confirmAll(connId)
+    await api.confirmAllEnabled(connId)
     await get().load(connId)
   }
 }))

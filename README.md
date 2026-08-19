@@ -1,0 +1,35 @@
+# tabletalk
+
+AI-first 数据库客户端（自托管 Web）。用自然语言对话查询你的数据库，背后是一套**模型无关的本地安全闸门**：AI 可以写，但永远不能危险地写。
+
+> 曾用名：CLEARED → DATUM。现正式命名为 **tabletalk**。
+
+## 核心能力
+
+- **自然语言 → SQL**：AI 副驾生成 SQL，读取自动执行，写操作强制预览 + 人工确认，DDL 仅手动执行
+- **安全闸门**：纯规则、模型无关（sqlglot 解析 → ALLOW / REVIEW / BLOCK），离线也能拦
+- **知识库 + 图谱**：接入数据源后自动构建（结构注释、领域标签、FK/值重叠图、向量索引），带进度条与一键确认闸；未构建的数据源不可用
+- **向量检索**：内置 numpy 批量索引（几万条毫秒级）+ SQLite 持久化，统一 VectorStore 接口（collection + metadata 过滤），企业版可换 LanceDB/pgvector/Qdrant 实现
+- **审计留痕**：所有真实执行写入 JSONL 审计日志
+
+## 快速开始
+
+```bash
+python3 backend/cleared.py        # 一键：建 venv → 装依赖 → 构建前端 → 起服务 → 开浏览器
+```
+
+- 首次启动自动播种演示库（`~/.cleared/demo.db`），连接页「使用演示库」即可体验
+- 大模型与嵌入模型**必须用户自配**（系统设置里配置任意 OpenAI 兼容端点）；未配置嵌入模型时降级为词面+图谱检索
+- 数据目录默认 `~/.cleared`（连接配置 / 审计 / 会话 / 知识库），可用 `CLEARED_DATA_DIR` 覆盖
+
+## 技术栈
+
+- **后端**：FastAPI sidecar（Python）——独占数据库连接、安全闸门与 AI 编排
+- **前端**：React 18 + TypeScript + Vite + Zustand（Web SPA，由后端同源托管）
+- **数据库**：SQLite（内置）/ PostgreSQL / MySQL，方言适配器注册制
+- **SQL 解析**：sqlglot（安全闸门语法树）
+
+## 文档
+
+- 架构与决策：`CLAUDE.md`、`backend/AGENTS.md`、`frontend/AGENTS.md`
+- 设计定稿：`docs/superpowers/specs/`（V2 愿景、接入流程与知识库页、向量库通用化等）

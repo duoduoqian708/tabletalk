@@ -1,6 +1,7 @@
 // 大模型管理 E2E 验证：多模型列表 / 添加 / 测试连接 / 设为默认 / 嵌入模型 tab
 // 用法：node scripts/models-e2e.mjs
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -58,6 +59,7 @@ try {
   // 连演示库
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.sch-item', { timeout: 20000 })
 
   // 打开设置抽屉

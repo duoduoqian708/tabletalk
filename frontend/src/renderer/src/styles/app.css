@@ -4543,3 +4543,106 @@ body.g-panning .gcanvas {
   color: var(--ink-faint);
   margin-left: 6px;
 }
+
+/* ============ 构建门禁（右下浮卡，不阻塞页面） ============ */
+.kb-gate {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 400px;
+  z-index: 900;
+  background: linear-gradient(160deg, var(--void-2) 0%, var(--void-3) 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(124, 140, 255, 0.06);
+  backdrop-filter: blur(10px);
+  animation: kb-gate-in 200ms var(--ease);
+  overflow: hidden;
+}
+@keyframes kb-gate-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kb-gate-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(124, 140, 255, 0.04);
+}
+.kb-gate-head .mono {
+  font-size: 12px;
+  color: var(--ink);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kb-gate-x {
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  transition: all var(--dur) var(--ease);
+}
+.kb-gate-x:hover { color: var(--ink); background: var(--void-1); }
+.kb-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.kb-badge.building { color: var(--accent-soft); border-color: var(--accent); animation: kb-pulse 1.4s ease-in-out infinite; }
+.kb-badge.pending { color: #e8b35c; border-color: rgba(232, 179, 92, 0.5); }
+.kb-badge.ready { color: #7ee0a3; border-color: rgba(126, 224, 163, 0.4); }
+.kb-badge.none { color: var(--ink-dim); }
+@keyframes kb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.kb-gate-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kb-gate-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.kb-gate-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.kb-gate-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-bar {
+  height: 6px;
+  border-radius: 4px;
+  background: var(--void-1);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.kb-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width 300ms var(--ease);
+}
+.kb-bar-stage {
+  font-size: 10px;
+  color: var(--ink-dim);
+  text-align: right;
+}

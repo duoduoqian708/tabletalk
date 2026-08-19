@@ -1,5 +1,6 @@
 // 报告数字回溯验证（真实模型）：报告出章节 → 点来源 → 滚动+展开明细+高亮 → SQL 可展开
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -45,6 +46,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 60000 })
 
   // 报告模式提问（真实模型，等待较久）

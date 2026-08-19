@@ -1,6 +1,7 @@
 // P4 真实模型验证：复用用户配置（火山引擎 deepseek-v4-flash）
 // 只读查询自动执行（硬性）+ DML 黄卡（尽力而为，失败时输出对话诊断）
 import { chromium } from '@playwright/test'
+import { buildAndConfirm } from './lib-onboard.mjs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -44,6 +45,7 @@ try {
   await page.waitForSelector('.appbar, .onboarding', { timeout: 40000 })
   const onboard = await page.$('.onboarding .primary')
   if (onboard) { await onboard.click(); await page.waitForSelector('.appbar', { timeout: 20000 }) }
+  await buildAndConfirm(page)
   await page.waitForSelector('.g-node', { timeout: 60000 })
 
   // 只读查询（真实模型）
