@@ -229,3 +229,115 @@ async def annotate_domain(state: "AppState", conn_id: str) -> dict[str, Any]:
         "new_tags": len(tag_props),
         "library_size": len(state.knowledge.tags(conn_id)["library"]),
     }
+
+
+# ---------- 枚举取值字典生成（KC3） ----------
+
+ENUM_MAX_VALUES = 50  # 单列去重取值超过此数视为非枚举（长文本/主键），不抽
+
+
+def _distinct_enum_values(samples: dict[str, list[Any]], table: str, column: str) -> list[str]:
+    vals = samples.get(table, {}).get(column) if samples else None
+    if not vals:
+        return []
+    seen: list[str] = []
+    for v in vals:
+        if v is None:
+            continue
+        s = str(v)
+        if s not in seen:
+            seen.append(s)
+        if len(seen) >= ENUM_MAX_VALUES:
+            break
+    return seen
+
+
+def _mock_enums(schema: dict[str, Any], samples: dict[str, dict[str, list[Any]]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for c in schema["columns"]:
+        table, column = c["table"], c["name"]
+        distinct = _distinct_enum_values(samples, table, column)
+        if not (2 <= len(distinct) <= ENUM_MAX_VALUES):
+            continue
+        items.append({
+            "table": table, "column": column,
+            "entries": [{"value": v, "meaning": f"{v}（{column} 的枚举取值，业务含义待确认）"} for v in distinct],
+        })
+    return items
+
+
+def _parse_enum_items(text: str) -> list[dict[str, Any]]:
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*", "", t)
+        t = re.sub(r"\s*```$", "", t)
+    try:
+        data = json.loads(t)
+    except Exception:
+        m = re.search(r"\[.*\]", t, re.S)
+        if not m:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return []
+    if not isinstance(data, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for it in data:
+        if not isinstance(it, dict) or not it.get("table") or not it.get("column"):
+            continue
+        entries = it.get("entries") or []
+        if not isinstance(entries, list):
+            continue
+        clean = [{"value": str(e.get("value", "")), "meaning": str(e.get("meaning", "")).strip()}
+                 for e in entries if isinstance(e, dict) and e.get("value") not in (None, "")]
+        if clean:
+            out.append({"table": it["table"], "column": it["column"], "entries": clean})
+    return out
+
+
+async def annotate_enums(state: "AppState", conn_id: str) -> dict[str, Any]:
+    """AI 生成列级枚举取值字典（draft），写入知识库待人工确认。
+
+    枚举型列判定：样本去重取值数 ∈ [2, ENUM_MAX_VALUES]。AI 需样本取值才能解释含义，
+    因此枚举抽取总是发送去重取值（不单独受 kb_ai_annotation_samples 门控——无意义）。
+    mock 网关时生成确定性占位含义，保证无 key 也能跑通管线。
+    """
+    schema = await get_schema(state, conn_id)
+    rt = state.runtime.get()
+    samples: dict[str, dict[str, list[Any]]] = {}
+    if rt.kb_sample_rows > 0:
+        for t in schema["tables"]:
+            try:
+                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
+            except Exception:
+                samples[t["name"]] = {}
+
+    enum_cols = [
+        c for c in schema["columns"]
+        if 2 <= len(_distinct_enum_values(samples, c["table"], c["name"])) <= ENUM_MAX_VALUES
+    ]
+    if not enum_cols:
+        return {"columns": 0, "entries": 0}
+
+    provider_cfg = rt.provider_config()
+    if gw.is_effective_mock(provider_cfg):
+        items = _mock_enums(schema, samples)
+    else:
+        col_lines = []
+        for c in enum_cols:
+            distinct = _distinct_enum_values(samples, c["table"], c["name"])
+            col_lines.append(f"- {c['table']}.{c['name']}（类型 {c.get('type','')}）取值样本: {distinct}")
+        prompt = (
+            "你是数据库知识构建助手。下面给出若干列及其出现的取值样本。请为【每个取值】给出简短中文业务含义。\n"
+            "返回 JSON 数组，元素形如 "
+            "{\"table\":\"表名\",\"column\":\"列名\",\"entries\":[{\"value\":\"取值\",\"meaning\":\"中文含义\"}]}。\n"
+            "只返回 JSON，不要多余文字。\n" + "\n".join(col_lines)
+        )
+        provider = gw.build_provider(provider_cfg)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        items = _parse_enum_items(resp.content or "")
+
+    added = state.knowledge.annotate_enums(conn_id, items)
+    return {"columns": len(items), "entries": added, "samples_used": True}

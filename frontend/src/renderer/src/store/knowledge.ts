@@ -11,13 +11,21 @@ interface KnowledgeState {
   /** 任务化构建：启动 + 轮询进度直到 done，然后刷新 overview */
   buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void) => Promise<void>
   annotateTags: (connId: string) => Promise<void>
+  annotateEnums: (connId: string) => Promise<void>
   confirmComment: (connId: string, table: string, column?: string) => Promise<void>
   rejectComment: (connId: string, table: string, column?: string) => Promise<void>
   confirmTag: (connId: string, name: string) => Promise<void>
   rejectTag: (connId: string, name: string) => Promise<void>
+  confirmEnum: (connId: string, table: string, column: string) => Promise<void>
+  rejectEnum: (connId: string, table: string, column: string) => Promise<void>
+  saveEnum: (connId: string, table: string, column: string, value: string, meaning: string) => Promise<void>
   assignTags: (connId: string, table: string, tags: string[]) => Promise<void>
   saveNote: (connId: string, table: string, note: string) => Promise<void>
   confirmAll: (connId: string) => Promise<void>
+  /** 图谱编辑（持久化到知识库） */
+  addEdge: (connId: string, edge: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }) => Promise<void>
+  removeEdge: (connId: string, edge: { from_table: string; to_table: string; kind: string }) => Promise<void>
+  setExcluded: (connId: string, table: string, excluded: boolean) => Promise<void>
 }
 
 export const useKnowledge = create<KnowledgeState>((set, get) => ({
@@ -70,6 +78,16 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     }
   },
 
+  async annotateEnums(connId) {
+    set({ busy: true })
+    try {
+      await api.annotateEnums(connId)
+      await get().load(connId)
+    } finally {
+      set({ busy: false })
+    }
+  },
+
   async confirmComment(connId, table, column) {
     await api.confirmComment(connId, table, column)
     await get().load(connId)
@@ -90,6 +108,21 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     await get().load(connId)
   },
 
+  async confirmEnum(connId, table, column) {
+    await api.confirmEnum(connId, table, column)
+    await get().load(connId)
+  },
+
+  async rejectEnum(connId, table, column) {
+    await api.rejectEnum(connId, table, column)
+    await get().load(connId)
+  },
+
+  async saveEnum(connId, table, column, value, meaning) {
+    await api.saveEnum(connId, table, column, value, meaning)
+    await get().load(connId)
+  },
+
   async assignTags(connId, table, tags) {
     await api.assignTags(connId, table, tags)
     await get().load(connId)
@@ -103,5 +136,26 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   async confirmAll(connId) {
     await api.confirmAllEnabled(connId)
     await get().load(connId)
+  },
+
+  async addEdge(connId, edge) {
+    const r = await api.addEdge(connId, edge)
+    set((s) => s.overview ? {
+      overview: { ...s.overview, graph: { ...s.overview.graph, edges: r.graph.edges } }
+    } : {})
+  },
+
+  async removeEdge(connId, edge) {
+    const r = await api.removeEdge(connId, edge)
+    set((s) => s.overview ? {
+      overview: { ...s.overview, graph: { ...s.overview.graph, edges: r.graph.edges } }
+    } : {})
+  },
+
+  async setExcluded(connId, table, excluded) {
+    const r = await api.setExcluded(connId, table, excluded)
+    set((s) => s.overview ? {
+      overview: { ...s.overview, graph: { ...s.overview.graph, excluded: r.excluded } }
+    } : {})
   }
 }))

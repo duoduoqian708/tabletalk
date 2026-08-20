@@ -121,6 +121,14 @@ class PostgresAdapter(DialectAdapter):
             await cur.execute(sql)
             return [FKRef(table=r[0], column=r[1], ref_table=r[2], ref_column=r[3]) for r in await cur.fetchall()]
 
+    async def count_rows(self, conn: Any, table: str) -> int:
+        from psycopg.rows import dict_row
+
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(f'SELECT COUNT(*) AS n FROM {self.quote_ident(table)}')
+            row = await cur.fetchone()
+            return int(row["n"]) if row else 0
+
     def quote_ident(self, name: str) -> str:
         return f'"{name.replace(chr(34), chr(34)*2)}"'
 

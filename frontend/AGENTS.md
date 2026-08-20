@@ -32,7 +32,7 @@ State = **zustand 4.5 only**. No router library, no chart/graph lib (all hand-ro
 
 ## Scripts
 
-`npm run dev` (Vite :5173, proxies `/api`→`127.0.0.1:8765`; backend must be running) ·
+`npm run dev` (Vite :5173, proxies `/api`→`127.0.0.1:8777`; backend must be running) ·
 `npm run typecheck` (tsc --noEmit) · `npm run build` (→ `frontend/dist`) ·
 `npm run screenshot` (Playwright: spawns backend on isolated
 `TABLETALK_DATA_DIR=/tmp/tabletalk-shot` + port **8766**, connects demo DB, runs

@@ -81,7 +81,7 @@ def _rewrite_connection_files(data_dir: Path, legacy: Path) -> None:
 @dataclass
 class Settings:
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = 8777
     data_dir: Path = field(default_factory=lambda: _expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk")))
     # 前端 SPA 构建产物目录（相对 backend cwd）；后端同源托管
     web_dist: Path = field(default_factory=lambda: Path(os.environ.get("TABLETALK_WEB_DIST", "../frontend/dist")))
@@ -131,7 +131,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             host=os.environ.get("TABLETALK_HOST", "127.0.0.1"),
-            port=int(os.environ.get("TABLETALK_PORT", "8765")),
+            port=int(os.environ.get("TABLETALK_PORT", "8777")),
             data_dir=_expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk")),
             web_dist=Path(os.environ.get("TABLETALK_WEB_DIST", "../frontend/dist")),
             ai_provider=os.environ.get("TABLETALK_AI_PROVIDER", "mock"),

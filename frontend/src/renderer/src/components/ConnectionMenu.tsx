@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
+import { useI18n } from '@renderer/store/i18n'
 
 interface Props {
   onNew: () => void
@@ -7,6 +8,7 @@ interface Props {
 
 export function ConnectionMenu({ onNew }: Props): React.JSX.Element {
   const { list, currentId, select } = useConnections()
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const current = list.find((c) => c.id === currentId)
@@ -23,12 +25,12 @@ export function ConnectionMenu({ onNew }: Props): React.JSX.Element {
     <div className="dd" ref={ref}>
       <button className="dd-trigger" onClick={() => setOpen((o) => !o)}>
         <span className="sd" />
-        <span>{current ? `${current.name} · ${current.dialect}` : '未连接'}</span>
+        <span>{current ? `${current.name} · ${current.dialect}` : t('conn.menu.notConnected')}</span>
         <span className="chev">▾</span>
       </button>
       {open && (
         <div className="menu">
-          <div className="m-title">连接</div>
+          <div className="m-title">{t('conn.menu.title')}</div>
           {list.map((c) => (
             <button
               key={c.id}
@@ -42,7 +44,7 @@ export function ConnectionMenu({ onNew }: Props): React.JSX.Element {
               <span>{c.name}</span>
               <span className="m-sub">
                 {c.dialect}
-                {c.read_only ? ' · 只读' : ''}
+                {c.read_only ? ' · ' + t('conn.readOnly') : ''}
               </span>
               {c.id === currentId && <span className="m-check">✓</span>}
             </button>
@@ -50,7 +52,7 @@ export function ConnectionMenu({ onNew }: Props): React.JSX.Element {
           <div className="sep" />
           <button className="mi" onClick={() => { setOpen(false); onNew() }}>
             <span style={{ width: 7 }} />
-            <span>＋ 新建连接</span>
+            <span>＋ {t('conn.menu.newConnection')}</span>
           </button>
         </div>
       )}

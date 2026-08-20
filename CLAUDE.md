@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 开发依据（先读这个）
+
+`docs/product-handbook/` 是本产品唯一的开发蓝图（定位与原则 / 功能需求详规 / 交互与视觉规范 / 技术架构 / 路线图 / 知识库架构）。**接到任何开发任务，先读其 README.md 的「给 AI 助手的操作指引」节**，按其中的任务循环与硬性规则工作；本文件只负责"代码现状"，手册负责"该长成什么样"，两者冲突时以手册为方向、以本文件为现状细节。
+
 ## Status
 
 **Backend implemented & fully tested (2026-08, 116 pytest + 8 docker-gated integration). Frontend is a Web SPA (React + Vite, served by the backend at `/`) — all milestones M2–M4 done & verified: connections/schema tree/results table, M3 AI chat rail (SSE) + report mode, M4 audit page / settings drawer / knowledge graph; M5 packaging/polish is the remaining loose end.** Product & architecture decisions below were locked during brainstorming and the backend implements them. Verified 2026-08 against the actual source.
@@ -19,7 +23,7 @@ python3 backend/tabletalk.py
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python scripts/seed_demo_db.py     # 生成 ~/.tabletalk/demo.db 演示库
-.venv/bin/python -m uvicorn app.main:app --reload --port 8765   # 启动 sidecar
+.venv/bin/python -m uvicorn app.main:app --reload --port 8777   # 启动 sidecar
 .venv/bin/python -m pytest -q                # 全量测试（116 个，SQLite）
 docker compose -f docker-compose.integration.yml up -d && TABLETALK_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v   # PG/MySQL 集成测试（Docker 门控）
 ```
@@ -29,14 +33,14 @@ docker compose -f docker-compose.integration.yml up -d && TABLETALK_INTEGRATION=
 ```bash
 cd frontend
 npm install            # 首次
-npm run dev            # Vite dev server（5173），proxy /api → 127.0.0.1:8765（需后端已起）
+npm run dev            # Vite dev server（5173），proxy /api → 127.0.0.1:8777（需后端已起）
 npm run typecheck      # tsc --noEmit
 npm run build          # 产出 frontend/dist/，由后端 StaticFiles 同源托管
 npm run screenshot     # Playwright 截图验证（自起后端 → 连演示库 → 知识审查 → AI 标签）
 ```
 
 - 浏览器经 `GET /api/v1/bootstrap`（免鉴权）拿 `{token, dataDir}`，`src/renderer/src/hooks/useBootstrap.ts` 轮询注入 `src/renderer/src/api/client.ts`，请求自动带 `X-TableTalk-Token`。
-- **生产访问**：起后端（`uvicorn app.main:app --port 8765`）+ `npm run build`，浏览器打开 `http://127.0.0.1:8765`。
+- **生产访问**：起后端（`uvicorn app.main:app --port 8777`）+ `npm run build`，浏览器打开 `http://127.0.0.1:8777`。
 - **开发访问**：后端单独起，再 `npm run dev` 后开 `http://localhost:5173`。
 - 演示库由后端 lifespan 首次启动自动播种 `data_dir/demo.db`；连接页"使用演示库"即指向它。
 

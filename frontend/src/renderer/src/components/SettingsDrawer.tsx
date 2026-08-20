@@ -4,6 +4,7 @@ import { testGateway, testEmbedding } from '@renderer/api/ai'
 import { getSettings, updateSettings } from '@renderer/api/settings'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
 import { SkillPlaza } from './SkillPlaza'
+import { useI18n } from '@renderer/store/i18n'
 
 interface Props {
   open: boolean
@@ -12,12 +13,12 @@ interface Props {
 }
 
 const SECTIONS = [
-  { key: 'dsm', ic: '⛁', label: '数据源管理' },
-  { key: 'theme', ic: '◐', label: '主题风格' },
-  { key: 'llm', ic: '◎', label: '大模型接入' },
-  { key: 'skills', ic: '✦', label: '技能广场' },
-  { key: 'safety', ic: '▣', label: '安全参数' },
-  { key: 'general', ic: '⚙', label: '通用' }
+  { key: 'dsm', ic: '⛁', labelKey: 'settings.section.dsm' },
+  { key: 'theme', ic: '◐', labelKey: 'settings.section.theme' },
+  { key: 'llm', ic: '◎', labelKey: 'settings.section.llm' },
+  { key: 'skills', ic: '✦', labelKey: 'settings.section.skills' },
+  { key: 'safety', ic: '▣', labelKey: 'settings.section.safety' },
+  { key: 'general', ic: '⚙', labelKey: 'settings.section.general' }
 ] as const
 
 type Sec = (typeof SECTIONS)[number]['key']
@@ -30,6 +31,7 @@ function ConnRow({ conn, onSelect, onRemove, isCurrent }: {
   onRemove: () => void
   isCurrent: boolean
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState((conn.sensitive ?? []).join(', '))
   const [saving, setSaving] = useState(false)
@@ -52,27 +54,27 @@ function ConnRow({ conn, onSelect, onRemove, isCurrent }: {
       <span className={`st${isCurrent ? ' live' : ' idle'}`} />
       <span className="cn mono">{conn.name}</span>
       <span className="cd mono">{conn.dialect}</span>
-      {conn.read_only && <span className="ro-tag mono">只读</span>}
+      {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
       {(conn.sensitive ?? []).length > 0 && (
-        <span className="sens-tag mono" title={conn.sensitive!.join(', ')}>屏蔽 {(conn.sensitive ?? []).length} 项</span>
+        <span className="sens-tag mono" title={conn.sensitive!.join(', ')}>{t('settings.conn.blocked', { n: (conn.sensitive ?? []).length })}</span>
       )}
       <span className="spacer" />
       <button className="mini-btn" onClick={() => { setOpen((o) => !o); setDraft((conn.sensitive ?? []).join(', ')) }}>
-        敏感名单{open ? ' ▴' : ' ▾'}
+        {t('settings.conn.sensitiveList')}{open ? ' ▴' : ' ▾'}
       </button>
-      <button className="mini-btn set" onClick={onSelect}>设为当前</button>
-      <button className="mini-btn dang" onClick={onRemove}>删除</button>
+      <button className="mini-btn set" onClick={onSelect}>{t('settings.conn.setCurrent')}</button>
+      <button className="mini-btn dang" onClick={onRemove}>{t('common.delete')}</button>
       {open && (
         <div className="conn-sens">
           <input
             className="sens-input mono"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="payroll_*, *secret*（表/列 glob，逗号分隔）"
+            placeholder={t('settings.conn.sensitivePlaceholder')}
             onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
           />
-          <span className="sens-hint">屏蔽的表/列不进 AI 上下文与知识库，不影响你直接查询。</span>
-          <button className="mini-btn set" disabled={saving} onClick={() => void save()}>保存</button>
+          <span className="sens-hint">{t('settings.conn.sensitiveHint')}</span>
+          <button className="mini-btn set" disabled={saving} onClick={() => void save()}>{t('common.save')}</button>
         </div>
       )}
     </div>
@@ -88,29 +90,30 @@ function isMaskedKey(k: unknown): boolean {
   return typeof k === 'string' && k.includes('•••')
 }
 
-const CAP_LABELS: Record<string, { label: string; cls: string }> = {
-  connectivity: { label: '连通', cls: 'ok' },
-  function_calling: { label: 'FC', cls: 'fc' },
-  reasoning: { label: '推理', cls: 'reasoning' },
-  streaming: { label: '流', cls: 'ok' },
+const CAP_LABELS: Record<string, { i18nKey: string; cls: string }> = {
+  connectivity: { i18nKey: 'settings.cap.connectivity', cls: 'ok' },
+  function_calling: { i18nKey: 'settings.cap.fc', cls: 'fc' },
+  reasoning: { i18nKey: 'settings.cap.reasoning', cls: 'reasoning' },
+  streaming: { i18nKey: 'settings.cap.streaming', cls: 'ok' },
 }
 
 function CapBadges({ caps }: { caps?: { connectivity?: boolean; function_calling?: boolean; reasoning?: boolean | null; streaming?: boolean; context_window?: number | null; latency_ms?: number } }): React.JSX.Element {
-  if (!caps) return <span className="cap-badge no">未测试</span>
+  const { t } = useI18n()
+  if (!caps) return <span className="cap-badge no">{t('settings.model.untested')}</span>
   const items: { key: string; ok: boolean | null | undefined; label: string; cls: string }[] = []
   for (const [k, v] of Object.entries(CAP_LABELS)) {
     const val = caps[k as keyof typeof caps]
-    items.push({ key: k, ok: val as boolean | null | undefined, label: v.label, cls: v.cls })
+    items.push({ key: k, ok: val as boolean | null | undefined, label: t(v.i18nKey), cls: v.cls })
   }
   return (
     <div className="mi-badges">
       {items.map((it) => (
         <span key={it.key} className={`cap-badge ${it.ok ? it.cls : 'no'}`} title={it.key}>
-          {it.ok ? it.label : (it.ok == null && it.key === 'reasoning' ? '未探测' : `无${it.label}`)}
+          {it.ok ? it.label : (it.ok == null && it.key === 'reasoning' ? t('settings.cap.untested') : t('settings.cap.none', { label: it.label }))}
         </span>
       ))}
       {caps.context_window && (
-        <span className="cap-badge" title="上下文窗口">{Math.round(caps.context_window / 1000)}K</span>
+        <span className="cap-badge" title={t('settings.cap.contextWindow')}>{Math.round(caps.context_window / 1000)}K</span>
       )}
       {caps.latency_ms !== undefined && (
         <span className="cap-badge">{caps.latency_ms}ms</span>
@@ -123,6 +126,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
   const [sec, setSec] = useState<Sec>('dsm')
   const { list, currentId, select, remove } = useConnections()
   const [savedMsg, setSavedMsg] = useState('')
+  const { locale, setLocale, t } = useI18n()
 
   // 主题：亮色（默认）/ 深色，localStorage 记忆
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -247,14 +251,14 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
             reasoning: caps?.reasoning != null ? caps.reasoning : ((prev as Partial<AiModelConfig>).reasoning ?? null),
           }))
           const capTexts = []
-          if (caps?.connectivity) capTexts.push('连通')
-          if (caps?.function_calling) capTexts.push('FC')
-          if (caps?.reasoning) capTexts.push('推理')
-          if (caps?.streaming) capTexts.push('流式')
+          if (caps?.connectivity) capTexts.push(t('settings.cap.connectivity'))
+          if (caps?.function_calling) capTexts.push(t('settings.cap.fc'))
+          if (caps?.reasoning) capTexts.push(t('settings.cap.reasoning'))
+          if (caps?.streaming) capTexts.push(t('settings.cap.streamingFull'))
           if (caps?.context_window) capTexts.push(`${Math.round(caps.context_window / 1000)}K`)
-          setTestMsg(`✓ 连接成功 · ${r.latency_ms ?? '?'}ms${capTexts.length ? ` · ${capTexts.join(' / ')}` : ''}`)
+          setTestMsg(`${t('settings.testOk', { ms: r.latency_ms ?? '?' })}${capTexts.length ? ` · ${capTexts.join(' / ')}` : ''}`)
         } else {
-          setTestMsg(`✗ 测试失败：${r.error ?? '未知错误'}`)
+          setTestMsg(t('settings.testFail', { error: r.error ?? t('common.unknownError') }))
         }
       } else {
         const r = await testEmbedding({
@@ -269,13 +273,13 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
             last_test: { ok: true, dimensions: r.dimensions, latency_ms: r.latency_ms },
             dimensions: r.dimensions,
           }))
-          setTestMsg(`✓ 连接成功 · ${r.dimensions} 维 · ${r.latency_ms ?? '?'}ms`)
+          setTestMsg(t('settings.embTestOk', { dims: r.dimensions ?? 0, ms: r.latency_ms ?? '?' }))
         } else {
-          setTestMsg(`✗ 测试失败：${r.error ?? '未知错误'}`)
+          setTestMsg(t('settings.testFail', { error: r.error ?? t('common.unknownError') }))
         }
       }
     } catch (e) {
-      setTestMsg(`✗ 测试失败：${(e as Error).message}`)
+      setTestMsg(t('settings.testFail', { error: (e as Error).message }))
     } finally {
       setTesting(false)
     }
@@ -327,10 +331,10 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
       if (settings && settings.pool_size !== poolSize) patch.pool_size = poolSize
       await updateSettings(patch)
       setSettings((s) => (s ? { ...(s as SettingsPublic), ...(patch as SettingsPublic) } : s))
-      setSavedMsg('✓ 已保存')
+      setSavedMsg(t('settings.saveSuccess'))
       return true
     } catch (e) {
-      setSavedMsg(`✗ 保存失败：${(e as Error).message}`)
+      setSavedMsg(t('settings.saveFail', { msg: (e as Error).message }))
       return false
     }
   }
@@ -357,8 +361,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
     <div className="set-mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <aside className="set-drawer">
         <div className="set-head">
-          <span className="set-title">系统设置</span>
-          <span className="set-sub mono">平台级 · 与数据源无关</span>
+          <span className="set-title">{t('settings.titleFull')}</span>
+          <span className="set-sub mono">{t('settings.sub')}</span>
           <button className="set-x" onClick={onClose}>✕</button>
         </div>
 
@@ -366,7 +370,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
           <nav className="set-rail">
             {SECTIONS.map((s) => (
               <button key={s.key} className={`sr-it${sec === s.key ? ' on' : ''}`} onClick={() => setSec(s.key)}>
-                <span className="sr-ic">{s.ic}</span>{s.label}
+                <span className="sr-ic">{s.ic}</span>{t(s.labelKey)}
               </button>
             ))}
           </nav>
@@ -374,49 +378,57 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
           <div className="set-content">
             {sec === 'dsm' && (
               <section className="set-sec">
-                <div className="sec-h">数据源管理<span className="sec-s mono">连接注册表</span></div>
-                <div className="sec-d">平台级连接清单。顶栏「数据源切换」是全局锚，切换后所有模块跟随；这里的连接本身与数据源无关。</div>
+                <div className="sec-h">{t('settings.section.dsm')}<span className="sec-s mono">{t('settings.dsm.sub')}</span></div>
+                <div className="sec-d">{t('settings.dsm.desc')}</div>
                 <div className="conn-list">
                   {list.map((c) => (
                     <ConnRow key={c.id} conn={c} onSelect={() => select(c.id)} onRemove={() => void remove(c.id)} isCurrent={c.id === currentId} />
                   ))}
-                  {list.length === 0 && <div className="mpage-empty">暂无连接</div>}
-                  <button className="conn-add" onClick={onNewConnection}>＋ 添加连接</button>
+                  {list.length === 0 && <div className="mpage-empty">{t('settings.dsm.empty')}</div>}
+                  <button className="conn-add" onClick={onNewConnection}>＋ {t('settings.conn.addConnection')}</button>
                 </div>
               </section>
             )}
 
             {sec === 'theme' && (
               <section className="set-sec">
-                <div className="sec-h">主题风格<span className="sec-s mono">日光图纸 / 深空仪表台</span></div>
-                <div className="sec-d">亮色（默认）与深色两套主题，选择即时生效并记忆。</div>
+                <div className="sec-h">{t('settings.section.theme')}<span className="sec-s mono">{t('settings.theme.sub')}</span></div>
+                <div className="sec-d">{t('settings.theme.desc')}</div>
                 <div className="theme-row">
-                  {(['light', 'dark'] as const).map((t) => (
+                  {(['light', 'dark'] as const).map((th) => (
                     <button
-                      key={t}
-                      className={`theme-opt${theme === t ? ' on' : ''}`}
-                      onClick={() => applyTheme(t)}
+                      key={th}
+                      className={`theme-opt${theme === th ? ' on' : ''}`}
+                      onClick={() => applyTheme(th)}
                     >
-                      <span className="theme-opt-swatch" style={{ background: t === 'light' ? '#f2f0e9' : '#08090d' }} />
-                      <span className="theme-opt-name">{t === 'light' ? '日光图纸' : '深空仪表台'}</span>
-                      {theme === t && <span className="theme-opt-check mono">✓</span>}
+                      <span className="theme-opt-swatch" style={{ background: th === 'light' ? '#f4f5f7' : '#08090d' }} />
+                      <span className="theme-opt-name">{th === 'light' ? t('settings.theme.light') : t('settings.theme.dark')}</span>
+                      {theme === th && <span className="theme-opt-check mono">✓</span>}
                     </button>
                   ))}
+                </div>
+                <div className="set-row">
+                  <label>{t('settings.language')}</label>
+                  <div className="seg">
+                    <button className={`seg-b${locale === 'zh-CN' ? ' on' : ''}`} onClick={() => setLocale('zh-CN')}>中文</button>
+                    <button className={`seg-b${locale === 'en-US' ? ' on' : ''}`} onClick={() => setLocale('en-US')}>English</button>
+                  </div>
+                  <span className="set-hint">{t('settings.languageHint')}</span>
                 </div>
               </section>
             )}
 
             {sec === 'llm' && (
               <section className="set-sec">
-                <div className="sec-h">大模型接入<span className="sec-s mono">文本推理 + 向量嵌入</span></div>
-                <div className="sec-d">任意 OpenAI 兼容端点（云端 API / Ollama / vLLM / 私有网关）。隐私：行数据默认不回传模型。</div>
+                <div className="sec-h">{t('settings.section.llm')}<span className="sec-s mono">{t('settings.llm.sub')}</span></div>
+                <div className="sec-d">{t('settings.llm.desc')}</div>
 
                 <div className="model-tabs">
                   <button className={`model-tab${mTab === 'chat' ? ' on' : ''}`} onClick={() => { setMTab('chat'); cancelEdit() }}>
-                    文本推理模型
+                    {t('settings.llm.chatTab')}
                   </button>
                   <button className={`model-tab${mTab === 'embedding' ? ' on' : ''}`} onClick={() => { setMTab('embedding'); cancelEdit() }}>
-                    向量嵌入模型
+                    {t('settings.llm.embTab')}
                   </button>
                 </div>
 
@@ -430,11 +442,11 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                               <span className="mi-model">{m.model || '—'}</span>
                               <div className="mi-actions">
                                 <button className={`mini-btn set${m.id === defaultAi ? ' cur' : ''}`} onClick={() => { setDefaultAi(m.id); persist(aiModels, m.id) }}>
-                                {m.id === defaultAi ? '当前' : '设为默认'}
+                                {m.id === defaultAi ? t('settings.model.current') : t('settings.model.setDefault')}
                               </button>
-                              <button className="mini-btn" onClick={() => startEditChat(m)}>编辑</button>
+                              <button className="mini-btn" onClick={() => startEditChat(m)}>{t('settings.model.edit')}</button>
                               {!m.builtin && aiModels.length > 1 && (
-                                <button className="mini-btn dang" onClick={() => removeChatModel(m.id)}>删除</button>
+                                <button className="mini-btn dang" onClick={() => removeChatModel(m.id)}>{t('common.delete')}</button>
                               )}
                             </div>
                           </div>
@@ -443,14 +455,14 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           </div>
                         </div>
                       ))}
-                      {aiModels.length === 0 && <div className="model-empty">暂无文本模型</div>}
+                      {aiModels.length === 0 && <div className="model-empty">{t('settings.llm.emptyChat')}</div>}
                     </div>
 
                     {editingChat && (
                       <div className="model-edit">
                         <div className="me-row">
                           <label>Provider</label>
-                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="火山引擎 / OpenAI …" />
+                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholder')} />
                         </div>
                         {editing.provider !== 'mock' && (
                           <>
@@ -459,43 +471,43 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                               <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
                             </div>
                             <div className="me-row">
-                              <label>模型 ID</label>
+                              <label>{t('settings.model.modelId')}</label>
                               <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="gpt-4o / claude-sonnet-4.5" />
                             </div>
                             <div className="me-row">
                               <label>API Key</label>
-                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? `已保存 ${editing.api_key} · 留空则不变` : '粘贴新 key，留空 = 免 key 端点'} />
+                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
                             </div>
                           </>
                         )}
                         <div className="me-row">
-                          <label>温度</label>
+                          <label>{t('settings.model.temperature')}</label>
                           <input type="range" className="temp-slider" min="0" max="2" step="0.05" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) })} />
                           <span className="temp-val mono">{((editing as Partial<AiModelConfig>).temperature ?? 0.2).toFixed(2)}</span>
-                          <span className="hint" style={{ flex: 1 }}>越低越稳定，越高越有创意</span>
+                          <span className="hint" style={{ flex: 1 }}>{t('settings.model.tempHint')}</span>
                         </div>
                         <div className="me-row">
-                          <label>推理思考</label>
+                          <label>{t('settings.model.reasoningLabel')}</label>
                           <span className={`re-status${(editing as Partial<AiModelConfig>).reasoning == null ? '' : ((editing as Partial<AiModelConfig>).reasoning ? ' on' : ' off')}`}>
                             {(editing as Partial<AiModelConfig>).reasoning == null
-                              ? '未测试'
-                              : ((editing as Partial<AiModelConfig>).reasoning ? '支持' : '不支持')}
+                              ? t('settings.model.untested')
+                              : ((editing as Partial<AiModelConfig>).reasoning ? t('settings.model.reasoningOn') : t('settings.model.reasoningOff'))}
                           </span>
                         </div>
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
-                            {testing ? '测试中…' : '测试连接'}
+                            {testing ? t('conn.modal.testing') : t('conn.modal.test')}
                           </button>
                           <span className="spacer" />
-                          <button className="mini-btn" onClick={cancelEdit}>取消</button>
-                          <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? '添加' : '保存'}</button>
+                          <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
+                          <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? t('settings.model.add') : t('common.save')}</button>
                         </div>
                         {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
                     {!editingChat && (
-                      <button className="model-add" onClick={startNewChat}>＋ 添加文本模型</button>
+                      <button className="model-add" onClick={startNewChat}>＋ {t('settings.llm.addChat')}</button>
                     )}
                   </>
                 )}
@@ -511,20 +523,20 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                             <span className="mi-model">{m.model || '—'}</span>
                             <div className="mi-actions">
                               <button className={`mini-btn set${m.id === defaultEmb ? ' cur' : ''}`} onClick={() => { setDefaultEmb(m.id); persist(undefined, undefined, embModels, m.id) }}>
-                                {m.id === defaultEmb ? '当前' : '设为默认'}
+                                {m.id === defaultEmb ? t('settings.model.current') : t('settings.model.setDefault')}
                               </button>
-                              <button className="mini-btn" onClick={() => startEditEmb(m)}>编辑</button>
+                              <button className="mini-btn" onClick={() => startEditEmb(m)}>{t('settings.model.edit')}</button>
                               {embModels.length > 1 && (
-                                <button className="mini-btn dang" onClick={() => removeEmbModel(m.id)}>删除</button>
+                                <button className="mini-btn dang" onClick={() => removeEmbModel(m.id)}>{t('common.delete')}</button>
                               )}
                             </div>
                           </div>
                           <div className="mi-cap">
                             <div className="mi-badges">
                               {m.last_test?.ok ? (
-                                <span className="cap-badge ok">{m.last_test.dimensions ?? '?'} 维</span>
+                                <span className="cap-badge ok">{t('settings.cap.dims', { n: m.last_test.dimensions ?? '?' })}</span>
                               ) : (
-                                <span className="cap-badge no">未测试</span>
+                                <span className="cap-badge no">{t('settings.model.untested')}</span>
                               )}
                               {m.last_test?.latency_ms !== undefined && (
                                 <span className="cap-badge">{m.last_test.latency_ms}ms</span>
@@ -533,19 +545,19 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                           </div>
                         </div>
                       ))}
-                      {embModels.length === 0 && <div className="model-empty">暂无嵌入模型</div>}
+                      {embModels.length === 0 && <div className="model-empty">{t('settings.llm.emptyEmb')}</div>}
                     </div>
 
                     {editingEmb && (
                       <div className="model-edit">
                         <div className="me-row">
-                          <label>名称</label>
-                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="我的嵌入模型" />
+                          <label>{t('settings.model.name')}</label>
+                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholderEmb')} />
                         </div>
                         <div className="me-row">
                           <label>Provider</label>
                           <select value={editing.provider ?? 'api'} onChange={(e) => setEditing({ ...editing, provider: e.target.value })}>
-                            <option value="api">API（OpenAI 兼容）</option>
+                            <option value="api">{t('settings.model.apiProvider')}</option>
                           </select>
                         </div>
                         {editing.provider !== 'hash' && (
@@ -555,29 +567,29 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                               <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
                             </div>
                             <div className="me-row">
-                              <label>模型 ID</label>
+                              <label>{t('settings.model.modelId')}</label>
                               <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="text-embedding-3-small / bge-m3" />
                             </div>
                             <div className="me-row">
                               <label>API Key</label>
-                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? `已保存 ${editing.api_key} · 留空则不变` : '粘贴新 key，留空 = 免 key 端点'} />
+                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })}                               placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
                             </div>
                           </>
                         )}
                         <div className="me-actions">
                           <button className="btn tl" disabled={testing || (editing.provider !== 'hash' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
-                            {testing ? '测试中…' : '测试连接'}
+                            {testing ? t('conn.modal.testing') : t('conn.modal.test')}
                           </button>
                           <span className="spacer" />
-                          <button className="mini-btn" onClick={cancelEdit}>取消</button>
-                          <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? '添加' : '保存'}</button>
+                          <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
+                          <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? t('settings.model.add') : t('common.save')}</button>
                         </div>
                         {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
                     {!editingEmb && (
-                      <button className="model-add" onClick={startNewEmb}>＋ 添加嵌入模型</button>
+                      <button className="model-add" onClick={startNewEmb}>＋ {t('settings.llm.addEmb')}</button>
                     )}
                   </>
                 )}
@@ -586,13 +598,13 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
 
             {sec === 'safety' && (
               <section className="set-sec">
-                <div className="sec-h">安全参数<span className="sec-s mono">闸门 · 行数上限 · 连接池</span></div>
-                <div className="sec-d">安全闸门是平台级本地规则引擎（模型无关，AI 与手动同闸门）；此处配运行参数。</div>
+                <div className="sec-h">{t('settings.section.safety')}<span className="sec-s mono">{t('settings.safety.sub')}</span></div>
+                <div className="sec-d">{t('settings.safety.desc')}</div>
                 <div className="panel">
-                  <div className="p-h">闸门参数<span className="p-s mono">运行时覆盖</span></div>
+                  <div className="p-h">{t('settings.safety.gateParams')}<span className="p-s mono">{t('settings.safety.runtimeOverride')}</span></div>
                   <div className="p-b">
-                    <div className="set-row inline"><span className="sr-l">单次查询最大行数</span><input type="number" min={1} value={maxRows} onChange={(e) => setMaxRows(Number(e.target.value) || 1)} onBlur={() => { void persist(); }} /></div>
-                    <div className="set-row inline"><span className="sr-l">连接池大小</span><input type="number" min={1} value={poolSize} onChange={(e) => setPoolSize(Number(e.target.value) || 1)} onBlur={() => { void persist(); }} /><span className="hint" style={{ marginLeft: 6 }}>SQLite 固定 1 · PG/MySQL 默认 3</span></div>
+                    <div className="set-row inline"><span className="sr-l">{t('settings.safety.maxRows')}</span><input type="number" min={1} value={maxRows} onChange={(e) => setMaxRows(Number(e.target.value) || 1)} onBlur={() => { void persist(); }} /></div>
+                    <div className="set-row inline"><span className="sr-l">{t('settings.safety.poolSize')}</span><input type="number" min={1} value={poolSize} onChange={(e) => setPoolSize(Number(e.target.value) || 1)} onBlur={() => { void persist(); }} /><span className="hint" style={{ marginLeft: 6 }}>{t('settings.safety.poolHint')}</span></div>
                   </div>
                 </div>
               </section>
@@ -606,19 +618,19 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
 
             {sec === 'general' && (
               <section className="set-sec">
-                <div className="sec-h">通用<span className="sec-s mono">本地 sidecar · 同源托管</span></div>
-                <div className="sec-d">本地 AI 优先数据库查询工具（浏览器访问 · 本机 sidecar 同源托管）。</div>
+                <div className="sec-h">{t('settings.section.general')}<span className="sec-s mono">{t('settings.general.sub')}</span></div>
+                <div className="sec-d">{t('settings.general.desc')}</div>
                 <div className="panel">
-                  <div className="p-h">服务<span className="p-s mono">本机 · 127.0.0.1</span></div>
+                  <div className="p-h">{t('settings.general.service')}<span className="p-s mono">{t('settings.general.serviceSub')}</span></div>
                   <div className="p-b">
                     {loading || !runtime ? (
-                      <div className="sd-hint">加载中…</div>
+                      <div className="sd-hint">{t('common.loading')}</div>
                     ) : (
                       <>
-                        <div className="set-row readonly inline"><span className="sr-l">数据目录</span><input type="text" value={runtime.data_dir} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">服务端口</span><input type="text" value={String(runtime.port)} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">鉴权方式</span><input type="text" value={runtime.auth} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">最大连接数</span><input type="text" value={String(poolSize)} readOnly /></div>
+                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.dataDir')}</span><input type="text" value={runtime.data_dir} readOnly /></div>
+                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.port')}</span><input type="text" value={String(runtime.port)} readOnly /></div>
+                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.auth')}</span><input type="text" value={runtime.auth} readOnly /></div>
+                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.maxConn')}</span><input type="text" value={String(poolSize)} readOnly /></div>
                       </>
                     )}
                   </div>

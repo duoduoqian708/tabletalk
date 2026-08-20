@@ -32,4 +32,4 @@ python3 backend/tabletalk.py        # 一键：建 venv → 装依赖 → 构建
 ## 文档
 
 - 架构与决策：`CLAUDE.md`、`backend/AGENTS.md`、`frontend/AGENTS.md`
-- 设计定稿：`docs/superpowers/specs/`（V2 愿景、接入流程与知识库页、向量库通用化等）
+- 产品与开发蓝图：`docs/product-handbook/`（定位与原则 / 功能需求详规 / 交互与视觉规范 / 技术架构 / 路线图与验收；方向性论述见 `00-product-direction.md`）

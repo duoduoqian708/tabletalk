@@ -1,6 +1,6 @@
 """tabletalk sidecar — FastAPI 应用入口。
 
-运行：uvicorn app.main:app --reload --port 8765
+运行：uvicorn app.main:app --reload --port 8777
 """
 from __future__ import annotations
 
@@ -57,6 +57,15 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def no_cache_html(request: Request, call_next):
+        """SPA 外壳(index.html)完全禁止缓存，避免浏览器长期持有指向旧 JS 的 HTML；
+        带 hash 的静态资源(js/css)保持默认缓存即可。"""
+        resp = await call_next(request)
+        if resp.headers.get("content-type", "").startswith("text/html"):
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.middleware("http")
     async def sidecar_token_guard(request: Request, call_next):

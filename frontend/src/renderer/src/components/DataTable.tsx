@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { pageSize, selectRows, useResults } from '@renderer/store/results'
 import { toastMsg } from '@renderer/utils/toast'
+import { useI18n } from '@renderer/store/i18n'
 
 /* 三个列头操作 icon（北欧极简细线） */
 function IconUp(): React.JSX.Element {
@@ -101,6 +102,7 @@ interface PopState {
 
 /** 单元格预览浮层：点击单元格的「⋯」触发，位置锚定打开时刻。 */
 function CellPop({ pop, onClose }: { pop: PopState; onClose: () => void }): React.JSX.Element {
+  const { t } = useI18n()
   const [fmt, setFmt] = useState<{ ok: true; pretty: string } | null>(null)
   const [err, setErr] = useState(false)
   const isJson = /^\s*[{[]/.test(pop.value)
@@ -119,26 +121,27 @@ function CellPop({ pop, onClose }: { pop: PopState; onClose: () => void }): Reac
         <span className="cp-tag">{isJson ? 'JSON' : 'TEXT'}</span>
         <span className="cp-acts">
           {isJson && (
-            <button
-              className={`cp-btn${fmt ? ' on' : ''}`}
-              onClick={() => {
-                const r = tryFormatJson(pop.value)
-                if (r.ok) { setFmt(r); setErr(false) } else { setFmt(null); setErr(true) }
-              }}
-            >
-              格式化
-            </button>
+              <button
+                className={`cp-btn${fmt ? ' on' : ''}`}
+                onClick={() => {
+                  const r = tryFormatJson(pop.value)
+                  if (r.ok) { setFmt(r); setErr(false) } else { setFmt(null); setErr(true) }
+                }}
+              >
+                {t('ws.format')}
+              </button>
           )}
           <button className="cp-btn" onClick={onClose}>✕</button>
         </span>
       </div>
       <div className="cp-body" dangerouslySetInnerHTML={{ __html: fmt ? highlightJson(fmt.pretty) : highlightJson(pop.value) }} />
-      {err && <div className="cp-err">非 JSON，无法格式化</div>}
+      {err && <div className="cp-err">{t('table.jsonErr')}</div>}
     </div>
   )
 }
 
 export function DataTable(): React.JSX.Element {
+  const { t } = useI18n()
   const { filter, sort, page, setFilter, sortBy, cycleSort, setPage } = useResults()
   const active = useResults((s) => s.tabs.find((t) => t.id === s.activeId) ?? null)
   const result = active?.kind === 'data' ? active.result : null
@@ -182,9 +185,9 @@ export function DataTable(): React.JSX.Element {
       <div className="tableview">
         <div className="empty">
           <div>
-            <div style={{ fontSize: 13, color: 'var(--ink-dim)', marginBottom: 6 }}>还没有结果</div>
-            在右侧问 tabletalk，或在 schema 树点一张表预览，<br />
-            结果会出现在这里。
+            <div style={{ fontSize: 13, color: 'var(--ink-dim)', marginBottom: 6 }}>{t('table.noResult')}</div>
+            {t('table.hint1', { brand: 'tabletalk' })}<br />
+            {t('table.hint2')}
           </div>
         </div>
       </div>
@@ -229,19 +232,19 @@ export function DataTable(): React.JSX.Element {
       await navigator.clipboard.writeText(text)
       toastMsg(what)
     } catch {
-      toastMsg('复制失败')
+      toastMsg(t('ws.copyFail'))
     }
   }
 
   function copyCell(v: unknown): void {
-    void copyText(String(v), '已复制')
+    void copyText(String(v), t('toast.copied'))
   }
 
   function copyRow(ri: number): void {
     if (!result) return
     const obj: Record<string, unknown> = {}
     result.headers.forEach((h, i) => { obj[h] = pageRows[ri][i] })
-    void copyText(JSON.stringify(obj), '已复制整行')
+    void copyText(JSON.stringify(obj), t('ws.copyRow'))
   }
 
   return (
@@ -253,7 +256,7 @@ export function DataTable(): React.JSX.Element {
           <input
             autoFocus
             value={activeFilter}
-            placeholder="过滤该列…"
+            placeholder={t('table.filterCol')}
             onChange={(e) => setFilter({ col: filterCol, text: e.target.value })}
             onKeyDown={(e) => { if (e.key === 'Escape') toggleColFilter(filterCol) }}
           />
@@ -273,17 +276,17 @@ export function DataTable(): React.JSX.Element {
                     <span className="th-ops">
                       <span
                         className={`th-op${sort?.index === i && sort.dir === 1 ? ' on' : ''}`}
-                        title={sort?.index === i && sort.dir === 1 ? '取消升序' : '升序'}
+                        title={sort?.index === i && sort.dir === 1 ? t('table.ascClear') : t('table.asc')}
                         onClick={(e) => { e.stopPropagation(); sortBy(i, 1) }}
                       ><IconUp /></span>
                       <span
                         className={`th-op${sort?.index === i && sort.dir === -1 ? ' on' : ''}`}
-                        title={sort?.index === i && sort.dir === -1 ? '取消降序' : '降序'}
+                        title={sort?.index === i && sort.dir === -1 ? t('table.descClear') : t('table.desc')}
                         onClick={(e) => { e.stopPropagation(); sortBy(i, -1) }}
                       ><IconDown /></span>
                       <span
                         className={`th-op${filterCol === i ? ' on' : ''}`}
-                        title={filterCol === i ? '取消过滤' : '过滤该列'}
+                        title={filterCol === i ? t('table.filterClear') : t('table.filterOn')}
                         onClick={(e) => { e.stopPropagation(); toggleColFilter(i) }}
                       ><IconFilter /></span>
                     </span>
@@ -297,7 +300,7 @@ export function DataTable(): React.JSX.Element {
               <tr key={ri} className={hlRow === ri ? 'hl' : ''}>
                 <td
                   className="rowno num"
-                  title="点击复制整行"
+                  title={t('ws.copyRowTip')}
                   onMouseEnter={() => setHlRow(ri)}
                   onMouseLeave={() => setHlRow(null)}
                   onClick={() => copyRow(ri)}
@@ -311,7 +314,7 @@ export function DataTable(): React.JSX.Element {
                     <td
                       key={ci}
                       className={cls}
-                      title="点击复制"
+                      title={t('ws.copyTip')}
                       onClick={() => copyCell(c)}
                     >
                       <span className="c-text">{s}</span>
@@ -325,12 +328,12 @@ export function DataTable(): React.JSX.Element {
         </table>
       </div>
       <div className="tv-foot">
-        <span className="ro mono" style={{ color: 'var(--teal)' }}>共 {total} 行</span>
+        <span className="ro mono" style={{ color: 'var(--teal)' }}>{t('table.rowCount', { n: total })}</span>
         <span className="spacer" />
         {showPager && (
           <span className="pager">
             <button disabled={page <= 0} onClick={() => setPage(page - 1)}>‹</button>
-            <span style={{ margin: '0 6px' }}>第 {page + 1} / {pageCount} 页</span>
+            <span style={{ margin: '0 6px' }}>{t('table.pageOf', { cur: page + 1, total: pageCount })}</span>
             <button disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>›</button>
           </span>
         )}
@@ -344,6 +347,7 @@ export function DataTable(): React.JSX.Element {
 
 /** 「⋯」按钮：内容被截断时显示；点击打开预览（不触发行复制）。 */
 function CellMore({ onOpen }: { onOpen: (td: HTMLTableCellElement) => void }): React.JSX.Element {
+  const { t } = useI18n()
   const [truncated, setTruncated] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
 
@@ -358,7 +362,7 @@ function CellMore({ onOpen }: { onOpen: (td: HTMLTableCellElement) => void }): R
     <button
       ref={btnRef}
       className={`c-more${truncated ? '' : ' hidden'}`}
-      title="查看完整内容"
+      title={t('table.viewFull')}
       onClick={(e) => {
         e.stopPropagation()
         const td = e.currentTarget.closest('td')

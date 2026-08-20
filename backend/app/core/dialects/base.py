@@ -89,6 +89,10 @@ class DialectAdapter(ABC):
         ...
 
     @abstractmethod
+    async def count_rows(self, conn: Any, table: str) -> int:
+        """返回表的总行数（用于前端图谱节点大小）。"""
+
+    @abstractmethod
     def quote_ident(self, name: str) -> str:
         ...
 

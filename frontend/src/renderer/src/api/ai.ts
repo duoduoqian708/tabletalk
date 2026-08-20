@@ -1,4 +1,5 @@
 import { getRuntime, request } from './client'
+import { useI18n } from '@renderer/store/i18n'
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 
@@ -176,7 +177,7 @@ export async function setSessionTitle(sessionId: string, title: string): Promise
 /** SSE 流式聊天：逐事件回调。服务端无状态，前端带完整消息历史。 */
 export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => void): Promise<void> {
   const rt = getRuntime()
-  if (!rt) throw new Error('sidecar 未就绪')
+  if (!rt) throw new Error(useI18n.getState().t('api.sidecarNotReady'))
   const res = await fetch(`${rt.baseUrl}/api/v1/ai/chat`, {
     method: 'POST',
     headers: {

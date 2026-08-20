@@ -176,7 +176,7 @@
 
 .mini-acts button:hover {
   color: var(--teal);
-  border-color: rgba(124, 140, 255, 0.3);
+  border-color: color-mix(in srgb, var(--violet) 3%, transparent);
 }
 
 .rv-tags {
@@ -202,13 +202,13 @@
 .tag-chip.confirmed {
   color: var(--teal);
   background: var(--teal-dim);
-  border-color: rgba(124, 140, 255, 0.3);
+  border-color: color-mix(in srgb, var(--violet) 3%, transparent);
 }
 
 .tag-chip.draft {
   color: var(--amber);
   background: var(--amber-dim);
-  border-color: rgba(246, 173, 85, 0.3);
+  border-color: color-mix(in srgb, var(--amber) 3%, transparent);
 }
 
 .tag-acts {
@@ -242,7 +242,7 @@
 
 .tag-add-btn:hover {
   color: var(--teal);
-  border-color: rgba(124, 140, 255, 0.4);
+  border-color: color-mix(in srgb, var(--violet) 4%, transparent);
 }
 
 .tag-add {
@@ -362,7 +362,7 @@
 
 .route-chip.on {
   color: var(--teal);
-  border-color: rgba(124, 140, 255, 0.4);
+  border-color: color-mix(in srgb, var(--violet) 4%, transparent);
   background: var(--teal-dim);
 }
 
@@ -404,7 +404,7 @@
 
 .kg-node.tagged circle {
   fill: var(--teal-dim);
-  stroke: rgba(124, 140, 255, 0.5);
+  stroke: color-mix(in srgb, var(--violet) 5%, transparent);
 }
 
 .kg-node.hl circle {
@@ -469,12 +469,12 @@
 .emb-state.off {
   color: var(--amber);
   background: var(--amber-dim);
-  border: 1px solid rgba(246, 173, 85, 0.3);
+  border: 1px solid color-mix(in srgb, var(--amber) 3%, transparent);
 }
 .emb-state.on {
   color: var(--green);
   background: var(--green-dim);
-  border: 1px solid rgba(110, 231, 183, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 3%, transparent);
 }
 
 /* 知识 top-N 检索 */
@@ -604,7 +604,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: linear-gradient(90deg, rgba(124, 140, 255, 0.1), rgba(124, 140, 255, 0.03));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--violet) 1%, transparent), color-mix(in srgb, var(--violet) 03%, transparent));
   border: 1px solid var(--accent-dim);
   border-radius: 10px;
   font-size: 11.5px;
@@ -772,13 +772,13 @@
 }
 .kg2-node.tagged circle { fill: var(--void-2); stroke: var(--accent-dim); }
 .kg2-node.hl circle { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 2.5; }
-.kg2-node.sel circle { fill: var(--accent); stroke: var(--accent-soft); stroke-width: 3; filter: drop-shadow(0 0 6px rgba(124, 140, 255, 0.8)); }
+.kg2-node.sel circle { fill: var(--accent); stroke: var(--accent-soft); stroke-width: 3; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--violet) 8%, transparent)); }
 .kg2-node .kg2-label {
   fill: var(--ink-dim);
   font-size: 11px;
   pointer-events: none;
 }
-.kg2-node.sel .kg2-label { fill: #fff; font-weight: 700; }
+.kg2-node.sel .kg2-label { fill: var(--ink-strong); font-weight: 700; }
 .kg2-draft-dot { fill: var(--amber); }
 .kg2-legend {
   position: absolute;
@@ -820,3 +820,169 @@
   font-size: 11px;
   color: var(--ink-faint);
 }
+
+/* ============ 审阅队列（多态：注释/标签/枚举） ============ */
+.kb-tab-cnt {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--amber-dim, color-mix(in srgb, var(--amber) 13%, transparent));
+  color: var(--amber);
+  border-radius: 99px;
+  padding: 0 6px;
+  margin-left: 4px;
+  min-width: 18px;
+  text-align: center;
+  line-height: 18px;
+}
+.kb-review-queue {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+.rv-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.rv-filter-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-faint);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.rv-filter-btn:hover { color: var(--ink); background: var(--void-3); }
+.rv-filter-btn.on {
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  border-color: color-mix(in srgb, var(--accent) 2%, transparent);
+  font-weight: 600;
+}
+.rv-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 20px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  text-align: center;
+}
+.rv-empty-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--green-dim, color-mix(in srgb, var(--green) 13%, transparent));
+  color: var(--green);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--green) 3%, transparent);
+}
+.rv-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--void-2);
+  transition: border-color var(--dur) var(--ease);
+}
+.rv-card:hover { border-color: var(--accent-dim); }
+.rv-card-kind {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--mono);
+}
+.rv-kind-comment { color: var(--blue); background: var(--blue-dim, color-mix(in srgb, var(--blue) 13%, transparent)); }
+.rv-kind-tag { color: var(--violet); background: var(--violet-dim, color-mix(in srgb, var(--violet) 13%, transparent)); }
+.rv-kind-enum { color: var(--orange); background: var(--orange-dim); }
+.rv-card-main { flex: 1; min-width: 0; }
+.rv-card-ctx {
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--ink-faint);
+  margin-bottom: 4px;
+}
+.rv-card-ctx b { color: var(--ink); }
+.rv-card-body {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.rv-card-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  width: 32px;
+}
+.rv-btn-ok, .rv-btn-no {
+  width: 32px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all var(--dur) var(--ease);
+}
+.rv-btn-ok {
+  background: var(--green-dim, color-mix(in srgb, var(--green) 13%, transparent));
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 3%, transparent);
+}
+.rv-btn-ok:hover { background: var(--green); color: var(--accent-ink); }
+.rv-btn-no {
+  background: color-mix(in srgb, var(--red) 1%, transparent);
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 3%, transparent);
+}
+.rv-btn-no:hover { background: var(--red); color: var(--red-ink); }
+.rv-enum-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.rv-enum-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.rv-enum-val { color: var(--orange); font-weight: 600; }
+.rv-enum-arrow { color: var(--ink-faint); }
+.rv-enum-meaning {
+  color: var(--ink);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background var(--dur) var(--ease);
+}
+.rv-enum-meaning:hover { background: var(--void-3); }
+.rv-enum-meaning-input {
+  background: var(--void-1);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+  width: 100%;
+}
+.rv-tagname { font-weight: 600; margin-right: 8px; }
+.rv-tagdesc { color: var(--ink-dim); font-size: 12px; }

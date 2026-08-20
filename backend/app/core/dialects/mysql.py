@@ -116,6 +116,12 @@ class MySQLAdapter(DialectAdapter):
             rows = await cur.fetchall()
         return [FKRef(table=r[0], column=r[1], ref_table=r[2], ref_column=r[3]) for r in rows]
 
+    async def count_rows(self, conn: Any, table: str) -> int:
+        async with conn.cursor() as cur:
+            await cur.execute(f"SELECT COUNT(*) AS n FROM {self.quote_ident(table)}")
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
     def quote_ident(self, name: str) -> str:
         return f"`{name.replace('`', '``')}`"
 

@@ -3,6 +3,7 @@ import { build, buildCancel, buildProgress, confirmAllEnabled, kbStatus } from '
 import type { BuildProgress, KbStatus } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKbGate } from '@renderer/store/kbgate'
+import { useI18n } from '@renderer/store/i18n'
 import { useUi } from '@renderer/store/ui'
 
 /**
@@ -17,6 +18,7 @@ export function KbBuildGate(): React.JSX.Element | null {
   const setView = useUi((s) => s.setView)
   const forceConnId = useKbGate((s) => s.forceConnId)
   const clearForce = useKbGate((s) => s.clearForce)
+  const { t } = useI18n()
   const [status, setStatus] = useState<KbStatus | null>(null)
   const [progress, setProgress] = useState<BuildProgress | null>(null)
   const [starting, setStarting] = useState(false)
@@ -113,20 +115,20 @@ export function KbBuildGate(): React.JSX.Element | null {
   }
 
   const badge = {
-    none: { text: '未构建', cls: 'kb-badge none' },
-    building: { text: `构建中 ${progress?.percent ?? 0}%`, cls: 'kb-badge building' },
-    pending_review: { text: '待确认', cls: 'kb-badge pending' },
-    ready: { text: '已就绪', cls: 'kb-badge ready' },
+    none: { text: t('kb.badgeNone'), cls: 'kb-badge none' },
+    building: { text: t('kb.building', { n: progress?.percent ?? 0 }), cls: 'kb-badge building' },
+    pending_review: { text: t('kb.badgePending'), cls: 'kb-badge pending' },
+    ready: { text: t('kb.badgeReady'), cls: 'kb-badge ready' },
   }[st] ?? { text: st, cls: 'kb-badge' }
 
   return (
     <div className="kb-gate">
       <div className="kb-gate-head">
-        <span className="mono" style={{ fontWeight: 600 }}>知识库 · {conn.name}</span>
+        <span className="mono" style={{ fontWeight: 600 }}>{t('kb.title')} · {conn.name}</span>
         <span className={badge.cls}>{badge.text}</span>
         <button
           className="kb-gate-x"
-          title="稍后（切回该数据源会再次提醒）"
+          title={t('kb.laterTitle')}
           onClick={() => {
             setDismissed(currentId)
             clearForce()
@@ -137,11 +139,11 @@ export function KbBuildGate(): React.JSX.Element | null {
       {st === 'none' && (
         <div className="kb-gate-body">
           <div className="kb-gate-text">
-            该数据源需要先构建知识库（含图谱）才能使用。构建全自动、带进度，完成后可审阅并一键确认启用。
+            {t('kb.gateNoneDesc')}
           </div>
           <div className="kb-gate-actions">
             <button className="btn save" disabled={starting} onClick={() => void startBuild()}>
-              {starting ? '启动中…' : '开始构建'}
+              {starting ? t('kb.starting') : t('kb.build')}
             </button>
           </div>
         </div>
@@ -153,10 +155,10 @@ export function KbBuildGate(): React.JSX.Element | null {
             <div className="kb-bar">
               <div className="kb-bar-fill" style={{ width: `${progress?.percent ?? 0}%` }} />
             </div>
-            <span className="kb-bar-stage mono">{progress?.stage ?? '排队中'} · {progress?.percent ?? 0}%</span>
+            <span className="kb-bar-stage mono">{progress?.stage ?? t('kb.queuing')} · {progress?.percent ?? 0}%</span>
           </div>
           <div className="kb-gate-actions">
-            <button className="btn ghost" onClick={() => void cancelBuild()}>取消构建</button>
+            <button className="btn ghost" onClick={() => void cancelBuild()}>{t('kb.cancelBuild')}</button>
           </div>
         </div>
       )}
@@ -164,11 +166,11 @@ export function KbBuildGate(): React.JSX.Element | null {
       {st === 'pending_review' && (
         <div className="kb-gate-body">
           <div className="kb-gate-text">
-            构建完成。请在知识库页查看内容（可修正），然后一键确认启用——确认后标签与图谱才参与 AI 路由。
+            {t('kb.gatePendingDesc')}
           </div>
           <div className="kb-gate-actions">
-            <button className="btn tl" onClick={() => setView('knowledge')}>查看并修正</button>
-            <button className="btn save" onClick={() => void goConfirm()}>一键确认启用</button>
+            <button className="btn tl" onClick={() => setView('knowledge')}>{t('kb.viewFix')}</button>
+            <button className="btn save" onClick={() => void goConfirm()}>{t('kb.confirmAll')}</button>
           </div>
         </div>
       )}

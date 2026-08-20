@@ -46,10 +46,12 @@ class KbSnapshot:
     table_vec: dict[str, list[float]] = field(default_factory=dict)
     tags: dict[str, Any] = field(default_factory=dict)
     table_tags: dict[str, list[str]] = field(default_factory=dict)
+    enums: dict[str, Any] = field(default_factory=dict)
     schema: dict[str, Any] = field(default_factory=dict)
     emb_fingerprint: str = ""
     schema_fingerprint: str = ""          # 结构指纹（增量对比用）
     edge_tombstones: list[dict] = field(default_factory=list)  # 用户删除的 overlap 边（不复活）
+    excluded: list[str] = field(default_factory=list)          # 图谱视图中移出的表（不影响审查页）
     synced_at: str = ""                   # 最近一次增量同步时间
 
 
@@ -105,10 +107,12 @@ class JsonStorage:
                 snap.table_vec = data.get("table_vec", {})
                 snap.tags = data.get("tags", {})
                 snap.table_tags = data.get("table_tags", {})
+                snap.enums = data.get("enums", {})
                 snap.schema = data.get("schema", {})
                 snap.emb_fingerprint = data.get("emb_fingerprint", "")
                 snap.schema_fingerprint = data.get("schema_fingerprint", "")
                 snap.edge_tombstones = data.get("edge_tombstones", [])
+                snap.excluded = data.get("excluded", [])
                 snap.synced_at = data.get("synced_at", "")
             except Exception:
                 pass
@@ -135,10 +139,12 @@ class JsonStorage:
                 "table_vec": snap.table_vec,
                 "tags": snap.tags,
                 "table_tags": snap.table_tags,
+                "enums": snap.enums,
                 "schema": snap.schema,
                 "emb_fingerprint": snap.emb_fingerprint,
                 "schema_fingerprint": snap.schema_fingerprint,
                 "edge_tombstones": snap.edge_tombstones,
+                "excluded": snap.excluded,
                 "synced_at": snap.synced_at,
             }, ensure_ascii=False),
             encoding="utf-8",
@@ -256,6 +262,9 @@ class SqliteStorage:
                 tombs = self._meta(conn, "edge_tombstones")
                 if tombs:
                     snap.edge_tombstones = json.loads(tombs)
+                excl = self._meta(conn, "excluded_tables")
+                if excl:
+                    snap.excluded = json.loads(excl)
                 for row in conn.execute("SELECT * FROM docs"):
                     d = dict(row)
                     d["table"] = d.pop("table_name")
@@ -274,6 +283,9 @@ class SqliteStorage:
                     snap.tags[row["name"]] = {"description": row["description"] or "", "status": row["status"]}
                 for row in conn.execute("SELECT table_name, tags FROM table_tags"):
                     snap.table_tags[row["table_name"]] = json.loads(row["tags"] or "[]")
+                enums_json = self._meta(conn, "enums")
+                if enums_json:
+                    snap.enums = json.loads(enums_json)
                 for row in conn.execute("SELECT doc_id, vec FROM embeddings"):
                     snap.vec[row["doc_id"]] = _f32_list(row["vec"])
                 for row in conn.execute("SELECT table_name, vec FROM table_embeddings"):
@@ -339,8 +351,11 @@ class SqliteStorage:
                 conn.execute("INSERT INTO meta (key, value) VALUES ('synced_at', ?)", (snap.synced_at,))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('edge_tombstones', ?)",
                              (json.dumps(snap.edge_tombstones, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('excluded_tables', ?)",
+                             (json.dumps(snap.excluded, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('enums', ?)", (json.dumps(snap.enums, ensure_ascii=False),))
                 # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）
                 if self._vec_ok:
                     conn.execute("DELETE FROM doc_vec")

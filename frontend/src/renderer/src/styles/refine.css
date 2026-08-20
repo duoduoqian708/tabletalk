@@ -11,7 +11,7 @@
   padding: 0 16px;
   background: var(--void-1);
   border-bottom: 1px solid var(--line-strong);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
+  box-shadow: 0 1px 0 var(--line-soft) inset;
 }
 .appbar .wordmark {
   font-family: var(--font-display);
@@ -54,7 +54,7 @@
 }
 .appbar .tab.on {
   color: var(--ink-strong);
-  background: linear-gradient(180deg, rgba(139, 152, 255, 0.14), rgba(139, 152, 255, 0.06));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--violet) 14%, transparent), color-mix(in srgb, var(--violet) 06%, transparent));
 }
 .appbar .tab.on::after {
   left: 14px;
@@ -87,12 +87,12 @@
   transform: translateY(1px);
 }
 .btn.save {
-  background: linear-gradient(135deg, var(--accent) 0%, #6d7cff 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--violet) 100%);
   color: var(--accent-ink);
-  box-shadow: 0 4px 18px rgba(139, 152, 255, 0.28);
+  box-shadow: 0 4px 18px color-mix(in srgb, var(--violet) 28%, transparent);
 }
 .btn.save:hover {
-  box-shadow: 0 6px 24px rgba(139, 152, 255, 0.42);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--violet) 42%, transparent);
   filter: brightness(1.08);
 }
 .btn.tl {
@@ -212,8 +212,7 @@
 /* ── AI 栏 ── */
 .airail {
   border-left: 1px solid var(--line-strong);
-  background-color: var(--void-1);
-  background-image: linear-gradient(180deg, rgba(14, 16, 21, 0.96), rgba(10, 11, 15, 0.98));
+  background: var(--void-1);
 }
 .compose-input {
   font-size: 13.5px;
@@ -235,16 +234,16 @@
   font-weight: 600;
   padding: 9px 16px;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--accent), #6d7cff);
+  background: linear-gradient(135deg, var(--accent), var(--violet));
   color: var(--accent-ink);
   border: none;
   cursor: pointer;
   transition: all var(--dur) var(--ease);
-  box-shadow: 0 3px 14px rgba(139, 152, 255, 0.25);
+  box-shadow: 0 3px 14px color-mix(in srgb, var(--violet) 25%, transparent);
 }
 .airail .send:hover {
   filter: brightness(1.08);
-  box-shadow: 0 5px 20px rgba(139, 152, 255, 0.4);
+  box-shadow: 0 5px 20px color-mix(in srgb, var(--violet) 4%, transparent);
 }
 
 /* ── 对话轮次 ── */
@@ -292,7 +291,7 @@
 .risk-panel {
   border-radius: 10px;
   border: 1px solid var(--amber-dim);
-  background: linear-gradient(180deg, rgba(255, 196, 107, 0.08), rgba(255, 196, 107, 0.02));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--amber) 08%, transparent), color-mix(in srgb, var(--amber) 02%, transparent));
 }
 .risk-panel .rp-title {
   font-size: 13px;
@@ -333,7 +332,7 @@
 .kb-topbar {
   border-radius: 12px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, rgba(19, 22, 29, 0.9), rgba(14, 16, 21, 0.9));
+  background: var(--void-1);
   padding: 10px 14px;
 }
 .kb-left,
@@ -394,7 +393,7 @@
 .emb-state.on {
   color: var(--green);
   background: var(--green-dim);
-  border: 1px solid rgba(124, 232, 181, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent-bright) 25%, transparent);
 }
 
 /* ── 空状态 / 引导 ── */

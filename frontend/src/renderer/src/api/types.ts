@@ -23,6 +23,7 @@ export interface TableInfo {
   kind: string
   comment: string
   column_count: number
+  row_count: number
 }
 
 export interface ColumnInfo {
@@ -113,12 +114,25 @@ export interface AuditEntry {
   status: string
   sql: string
   elapsed_ms: number
+  report_id?: string
 }
 
 export interface TagInfo {
   name: string
   description: string
   status: 'draft' | 'confirmed'
+}
+
+export interface EnumEntry {
+  value: string
+  meaning: string
+  status: 'draft' | 'confirmed'
+}
+
+export interface EnumColumn {
+  table: string
+  column: string
+  entries: EnumEntry[]
 }
 
 export interface ReviewTable {
@@ -142,12 +156,12 @@ export interface ReviewColumn {
 
 export interface GraphEdge {
   from: string
-  from_col?: string
+  from_col?: string | null
   to: string
-  to_col?: string
-  kind: 'fk' | 'overlap'
-  weight?: number
-  shared?: number
+  to_col?: string | null
+  kind: 'fk' | 'overlap' | 'user'
+  weight?: number | null
+  shared?: number | null
 }
 
 export interface KnowledgeOverview {
@@ -156,10 +170,12 @@ export interface KnowledgeOverview {
   synced_at?: string
   tables: ReviewTable[]
   columns: ReviewColumn[]
-  graph: { edges: GraphEdge[] }
+  graph: { edges: GraphEdge[]; excluded?: string[] }
   tags: { library: TagInfo[]; tables: Record<string, string[]> }
+  enums: EnumColumn[]
   draft_count: number
   tag_draft_count: number
+  enum_draft_count: number
   sample_cols: number
   embedding_provider: string
 }

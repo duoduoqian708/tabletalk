@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "screenshot": "node scripts/screenshot.mjs"
+    "screenshot": "node scripts/screenshot.mjs",
+    "i18n:check": "node scripts/i18n-parity.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -17,6 +17,7 @@ class _FakeAdapter(DialectAdapter):
     async def list_tables(self, conn): return []
     async def list_columns(self, conn, table): return []
     async def list_foreign_keys(self, conn): return []
+    async def count_rows(self, conn, table): return 0
     def quote_ident(self, name): return f'"{name}"'
     def quote_literal(self, value): return str(value)
 

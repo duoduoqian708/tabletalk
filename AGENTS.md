@@ -12,7 +12,7 @@ easy-to-miss, verified facts.
   (not repo root) and build output is `frontend/dist/` (Vite `outDir: ../../dist`
   relative to `src/renderer`). The backend serves that dist same-origin at `/`.
 - The frontend is NOT a separate server in prod: build it (`frontend/dist/`) and
-  the backend serves it. Dev uses Vite on :5173 proxying `/api` → `127.0.0.1:8765`.
+  the backend serves it. Dev uses Vite on :5173 proxying `/api` → `127.0.0.1:8777`.
 
 ## Backend commands
 
@@ -23,7 +23,7 @@ python3 backend/tabletalk.py        # 重复运行幂等秒起；--check 只检�
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python scripts/seed_demo_db.py     # creates ~/.tabletalk/demo.db demo DB
-.venv/bin/python -m uvicorn app.main:app --reload --port 8765
+.venv/bin/python -m uvicorn app.main:app --reload --port 8777
 .venv/bin/python -m pytest -q                # full suite (~116, SQLite only)
 ```
 
@@ -87,10 +87,10 @@ overridable via `PUT /api/v1/settings`.
 ## 会话死规矩（用户强制要求，务必自动执行，不等提醒）
 
 - **改完后端（Python）代码后，必须主动重启后端 sidecar，不要等用户喊：**
-  1. 找到占用端口的进程（默认 `TABLETALK_PORT=8765`）：`lsof -ti tcp:8765`；
-  2. `kill -9 <pid>` 杀掉旧进程，确认端口空闲（`lsof -ti tcp:8765` 无输出）；
-  3. 重新拉起：`cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8765`；
-  4. 验证：`curl -s http://127.0.0.1:8765/api/v1/health` 返回预期字段（尤其改了 health/settings 后要确认新字段出现，旧进程会返回旧结构导致前端显示 `—`）。
+  1. 找到占用端口的进程（默认 `TABLETALK_PORT=8777`）：`lsof -ti tcp:8777`；
+  2. `kill -9 <pid>` 杀掉旧进程，确认端口空闲（`lsof -ti tcp:8777` 无输出）；
+  3. 重新拉起：`cd backend && .venv/bin/python -m uvicorn app.main:app --reload --port 8777`；
+  4. 验证：`curl -s http://127.0.0.1:8777/api/v1/health` 返回预期字段（尤其改了 health/settings 后要确认新字段出现，旧进程会返回旧结构导致前端显示 `—`）。
 - **改完前端代码后，必须 `cd frontend && npm run typecheck && npm run build`**：后端 serve 的是 `frontend/dist`，不 rebuild 前端改动不生效。
 - 任何改动收尾都要实际跑验证命令并确认输出，再向用户汇报结果。
 - **执行写任务（改代码/文件）后，用精简表格汇报结果（用户强制要求，跨会话永久生效）**：

@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { BuildProgress, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
+import type { BuildProgress, GraphEdge, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
 
 export interface TagLibrary {
   library: TagInfo[]
@@ -51,6 +51,22 @@ export function tags(connId: string): Promise<TagLibrary> {
 
 export function annotateTags(connId: string): Promise<{ tables: number; descriptions: number; new_tags: number; library_size: number }> {
   return request(`/api/v1/knowledge/${connId}/annotate-tags`, { method: 'POST' })
+}
+
+export function annotateEnums(connId: string): Promise<{ columns: number; entries: number }> {
+  return request(`/api/v1/knowledge/${connId}/annotate-enums`, { method: 'POST' })
+}
+
+export function confirmEnum(connId: string, table: string, column: string): Promise<{ confirmed: number }> {
+  return request(`/api/v1/knowledge/${connId}/enums/confirm`, { method: 'POST', body: JSON.stringify({ table, column }) })
+}
+
+export function rejectEnum(connId: string, table: string, column: string): Promise<{ rejected: number }> {
+  return request(`/api/v1/knowledge/${connId}/enums/reject`, { method: 'POST', body: JSON.stringify({ table, column }) })
+}
+
+export function saveEnum(connId: string, table: string, column: string, value: string, meaning: string): Promise<{ saved: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/enums/save`, { method: 'POST', body: JSON.stringify({ table, column, value, meaning }) })
 }
 
 export function confirmTag(connId: string, name: string): Promise<{ confirmed: boolean }> {
@@ -105,4 +121,34 @@ export interface KbDoc {
 
 export function retrieve(connId: string, q: string, k = 10): Promise<{ count: number; docs: KbDoc[] }> {
   return request(`/api/v1/knowledge/${connId}/retrieve?q=${encodeURIComponent(q)}&k=${k}`)
+}
+
+export interface GraphEdgeInput {
+  from_table: string
+  to_table: string
+  kind?: 'user'
+  from_col?: string | null
+  to_col?: string | null
+  weight?: number | null
+}
+
+export function addEdge(connId: string, edge: GraphEdgeInput): Promise<{ edge: GraphEdge; graph: { edges: GraphEdge[] } }> {
+  return request(`/api/v1/knowledge/${connId}/graph/edges`, {
+    method: 'POST',
+    body: JSON.stringify({ kind: 'user', ...edge }),
+  })
+}
+
+export function removeEdge(connId: string, edge: { from_table: string; to_table: string; kind: string }): Promise<{ removed: number; graph: { edges: GraphEdge[] } }> {
+  return request(`/api/v1/knowledge/${connId}/graph/edges`, {
+    method: 'DELETE',
+    body: JSON.stringify(edge),
+  })
+}
+
+export function setExcluded(connId: string, table: string, excluded: boolean): Promise<{ excluded: string[] }> {
+  return request(`/api/v1/knowledge/${connId}/graph/exclude`, {
+    method: 'POST',
+    body: JSON.stringify({ table, excluded }),
+  })
 }

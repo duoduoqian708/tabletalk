@@ -40,13 +40,15 @@ class KnowledgeBase:
         self._samples: dict[str, dict[str, dict[str, list[Any]]]] = {}  # conn -> table -> column -> [values]
         self._graph: dict[str, dict[str, Any]] = {}                       # conn -> {edges}
         self._vec: dict[str, dict[str, list[float]]] = {}                 # conn -> doc_id -> 向量
-        self._tags: dict[str, dict[str, dict[str, Any]]] = {}             # conn -> tag名 -> {description,status}
+        self._tags: dict[str, dict[str, dict[str, Any]]] = {}               # conn -> tag名 -> {description,status}
         self._table_tags: dict[str, dict[str, list[str]]] = {}            # conn -> table -> [tag名]
+        self._enums: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}  # conn -> table -> column -> [{value,meaning,status}]
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
         self._schema_fingerprint_map: dict[str, str] = {}                 # conn -> 结构指纹（增量对比）
         self._edge_tombstones: dict[str, list[dict]] = {}                 # conn -> 用户删除的 overlap 边（不复活）
+        self._excluded: dict[str, set[str]] = {}                          # conn -> 图谱视图中移出的表
         self._synced_at: dict[str, str] = {}                              # conn -> 最近增量同步时间
         self._vstore: dict[str, VectorStore] = {}                        # conn -> 统一向量索引（doc+table 归一，collection 区分）
         self._lock = threading.Lock()
@@ -85,10 +87,12 @@ class KnowledgeBase:
         self._table_vec[conn_id] = snap.table_vec
         self._tags[conn_id] = snap.tags
         self._table_tags[conn_id] = snap.table_tags
+        self._enums[conn_id] = snap.enums
         self._schema[conn_id] = snap.schema
         self._artifact_fingerprint[conn_id] = snap.emb_fingerprint
         self._schema_fingerprint_map[conn_id] = snap.schema_fingerprint
         self._edge_tombstones[conn_id] = snap.edge_tombstones
+        self._excluded[conn_id] = set(snap.excluded)
         self._synced_at[conn_id] = snap.synced_at
         self._rebuild_vstore(conn_id)
 
@@ -106,10 +110,12 @@ class KnowledgeBase:
                 table_vec=self._table_vec.get(conn_id, {}),
                 tags=self._tags.get(conn_id, {}),
                 table_tags=self._table_tags.get(conn_id, {}),
+                enums=self._enums.get(conn_id, {}),
                 schema=self._schema.get(conn_id, {}),
                 emb_fingerprint=self._artifact_fingerprint.get(conn_id, ""),
                 schema_fingerprint=self._schema_fingerprint_map.get(conn_id, ""),
                 edge_tombstones=self._edge_tombstones.get(conn_id, []),
+                excluded=list(self._excluded.get(conn_id, set())),
                 synced_at=self._synced_at.get(conn_id, ""),
             )
             self._storage(conn_id).save(snap)
@@ -820,7 +826,7 @@ class KnowledgeBase:
         return len(targets)
 
     def confirm_all(self, conn_id: str) -> dict[str, int]:
-        """确认闸（构建后一键启用）：批量确认全部草案文档 + 全部 draft 标签。
+        """确认闸（构建后一键启用）：批量确认全部草案文档 + 全部 draft 标签 + 全部 draft 枚举。
 
         标签确认后才参与"问题→选表"路由；文档确认后检索优先。
         kb_status → ready 由调用方（api 层）负责。
@@ -830,12 +836,16 @@ class KnowledgeBase:
         for name in list(self._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
-        return {"docs": n_docs, "tags": n_tags}
+        n_enums = 0
+        for table, cols in self._enums.get(conn_id, {}).items():
+            for column in list(cols.keys()):
+                n_enums += self.confirm_enum(conn_id, table, column)
+        return {"docs": n_docs, "tags": n_tags, "enums": n_enums}
 
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
         for d in (self._auto, self._user, self._drafts, self._samples, self._graph,
-                  self._vec, self._tags, self._table_tags, self._schema,
+                  self._vec, self._tags, self._table_tags, self._enums, self._schema,
                   self._table_vec, self._artifact_fingerprint, self._vstore,
                   self._schema_fingerprint_map, self._edge_tombstones, self._synced_at):
             d.pop(conn_id, None)
@@ -844,10 +854,16 @@ class KnowledgeBase:
         return self._synced_at.get(conn_id, "")
 
     def pending_counts(self, conn_id: str) -> dict[str, int]:
-        """待确认数（确认闸 UI 用）：草案文档 + draft 标签。"""
+        """待确认数（确认闸 UI 用）：草案文档 + draft 标签 + draft 枚举。"""
+        enum_drafts = sum(
+            1 for cols in self._enums.get(conn_id, {}).values()
+            for entries in cols.values()
+            for e in entries if e.get("status") == "draft"
+        )
         return {
             "draft_docs": len(self._drafts.get(conn_id, [])),
             "draft_tags": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
+            "draft_enums": enum_drafts,
         }
 
     def reject(self, conn_id: str, doc_id: str) -> bool:
@@ -928,6 +944,90 @@ class KnowledgeBase:
 
     def confirmed_tags(self, conn_id: str) -> list[str]:
         return [n for n, v in self._tags.get(conn_id, {}).items() if v.get("status") == "confirmed"]
+
+    # ---------- 枚举（列级取值字典：value -> meaning，draft→人工确认） ----------
+    def annotate_enums(self, conn_id: str, items: list[dict[str, Any]]) -> int:
+        """AI 提案的列级枚举字典入库（status=draft）。items: [{table, column, entries:[{value, meaning}]}]。
+        (table, column, value) 去重，已存在（任意状态）的 value 跳过。"""
+        conn = self._enums.setdefault(conn_id, {})
+        added = 0
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        for it in items:
+            table = it.get("table")
+            column = it.get("column")
+            entries = it.get("entries") or []
+            if not table or not column or not entries:
+                continue
+            col = conn.setdefault(table, {}).setdefault(column, [])
+            seen = {(e.get("value")) for e in col}
+            for e in entries:
+                value = e.get("value")
+                if value is None or value == "":
+                    continue
+                if value in seen:
+                    continue
+                seen.add(value)
+                col.append({
+                    "value": value,
+                    "meaning": (e.get("meaning") or "").strip(),
+                    "status": "draft",
+                    "updated_at": now,
+                })
+                added += 1
+        if added:
+            self._save_conn(conn_id)
+        return added
+
+    def enum_drafts(self, conn_id: str) -> list[dict[str, Any]]:
+        """枚举 draft 列表（按列聚合），供审阅队列。"""
+        out: list[dict[str, Any]] = []
+        for table, cols in self._enums.get(conn_id, {}).items():
+            for column, entries in cols.items():
+                drafts = [e for e in entries if e.get("status") == "draft"]
+                if drafts:
+                    out.append({"table": table, "column": column, "entries": drafts})
+        return out
+
+    def confirm_enum(self, conn_id: str, table: str, column: str) -> int:
+        """确认某列全部 draft 枚举 → confirmed。"""
+        col = self._enums.get(conn_id, {}).get(table, {}).get(column)
+        if not col:
+            return 0
+        n = 0
+        for e in col:
+            if e.get("status") == "draft":
+                e["status"] = "confirmed"
+                n += 1
+        if n:
+            self._save_conn(conn_id)
+        return n
+
+    def reject_enum(self, conn_id: str, table: str, column: str) -> int:
+        """拒绝某列全部 draft 枚举 → 移除。"""
+        cols = self._enums.get(conn_id, {}).get(table)
+        if not cols or column not in cols:
+            return 0
+        before = len(cols[column])
+        cols[column] = [e for e in cols[column] if e.get("status") != "draft"]
+        if not cols[column]:
+            del cols[column]
+        removed = before - len(cols[column])
+        if removed:
+            self._save_conn(conn_id)
+        return removed
+
+    def save_enum(self, conn_id: str, table: str, column: str, value: str, meaning: str) -> bool:
+        """编辑某枚举值的 meaning（确认前人工修正）。"""
+        col = self._enums.get(conn_id, {}).get(table, {}).get(column)
+        if not col:
+            return False
+        for e in col:
+            if e.get("value") == value:
+                e["meaning"] = (meaning or "").strip()
+                e["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                self._save_conn(conn_id)
+                return True
+        return False
 
     def _fk_adj(self, conn_id: str) -> dict[str, set[str]]:
         adj: dict[str, set[str]] = {}
@@ -1102,10 +1202,19 @@ class KnowledgeBase:
         return {
             "tables": tables,
             "columns": columns,
-            "graph": self._graph.get(conn_id, {"edges": []}),
+            "graph": {
+                "edges": self._graph.get(conn_id, {"edges": []}).get("edges", []),
+                "excluded": self.excluded_tables(conn_id),
+            },
             "tags": self.tags(conn_id),
+            "enums": self.enum_drafts(conn_id),
             "draft_count": len(self._drafts.get(conn_id, [])),
             "tag_draft_count": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
+            "enum_draft_count": sum(
+                1 for cols in self._enums.get(conn_id, {}).values()
+                for entries in cols.values()
+                for e in entries if e.get("status") == "draft"
+            ),
             "sample_cols": sum(len(cols) for cols in self._samples.get(conn_id, {}).values()),
             "embedding_provider": (
                 self._runtime.get().embedding_provider if self._runtime else "hash"
@@ -1122,6 +1231,53 @@ class KnowledgeBase:
 
     def graph(self, conn_id: str) -> dict[str, Any]:
         return self._graph.get(conn_id, {"edges": []})
+
+    # ---------- 图谱编辑（持久化到知识库） ----------
+    def excluded_tables(self, conn_id: str) -> list[str]:
+        """图谱视图中已被移出的表（不影响审查页的表列表）。"""
+        return sorted(self._excluded.get(conn_id, set()))
+
+    def set_table_excluded(self, conn_id: str, table: str, excluded: bool) -> None:
+        s = self._excluded.setdefault(conn_id, set())
+        if excluded:
+            s.add(table)
+        else:
+            s.discard(table)
+        self._save_conn(conn_id)
+
+    def add_graph_edge(self, conn_id: str, frm: str, to: str, kind: str,
+                       frm_col: str | None = None, to_col: str | None = None,
+                       weight: float | None = None) -> dict[str, Any]:
+        """新增一条图谱边（user 为用户手动连线；fk/overlap 为恢复结构/取值边）。"""
+        if kind not in ("fk", "overlap", "user"):
+            raise ValueError("kind 必须是 fk|overlap|user")
+        tables = {t["name"] for t in self._schema.get(conn_id, {}).get("tables", [])}
+        if frm not in tables or to not in tables:
+            raise ValueError("未知表名")
+        edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
+        existing = next((e for e in edges
+                        if e["from"] == frm and e["to"] == to and e.get("kind") == kind), None)
+        if existing:
+            return existing
+        e = {"from": frm, "from_col": frm_col, "to": to, "to_col": to_col,
+             "kind": kind, "weight": weight, "shared": None}
+        edges.append(e)
+        self._save_conn(conn_id)
+        return e
+
+    def remove_graph_edge(self, conn_id: str, frm: str, to: str, kind: str) -> int:
+        """删除一条图谱边。删除结构/取值派生边时记入 tombstone，避免重建复活。"""
+        edges = self._graph.get(conn_id, {"edges": []})["edges"]
+        before = len(edges)
+        edges[:] = [e for e in edges
+                    if not (e["from"] == frm and e["to"] == to and e.get("kind") == kind)]
+        removed = before - len(edges)
+        if removed and kind in ("overlap", "fk"):
+            self._edge_tombstones.setdefault(conn_id, []).append(
+                {"from": frm, "to": to, "kind": kind})
+        if removed:
+            self._save_conn(conn_id)
+        return removed
 
     def samples(self, conn_id: str) -> dict[str, dict[str, list[Any]]]:
         return self._samples.get(conn_id, {})

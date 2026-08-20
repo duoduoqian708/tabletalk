@@ -1,4 +1,5 @@
 import type { SidecarRuntime } from '@shared/types'
+import { useI18n } from '@renderer/store/i18n'
 
 let rt: SidecarRuntime | null = null
 
@@ -20,7 +21,7 @@ export class ApiError extends Error {
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const r = rt
-  if (!r) throw new ApiError(0, 'sidecar 未就绪')
+  if (!r) throw new ApiError(0, useI18n.getState().t('api.sidecarNotReady'))
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...((init.headers as Record<string, string>) ?? {})

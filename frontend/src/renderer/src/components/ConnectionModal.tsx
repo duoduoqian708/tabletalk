@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { testDraftConnection } from '@renderer/api/connections'
 import { useConnections } from '@renderer/store/connections'
+import { useI18n } from '@renderer/store/i18n'
 
 interface Props {
   open: boolean
@@ -42,6 +43,7 @@ function loadDraft(): Draft {
 
 export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | null {
   const create = useConnections((s) => s.create)
+  const { t } = useI18n()
   const [form, setForm] = useState<Draft>(loadDraft)
   const [testedAt, setTestedAt] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
@@ -89,12 +91,12 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
       setTestMsg({
         ok: r.ok,
         text: r.ok
-          ? `✓ 连接测试通过 · ${r.latency_ms}ms${isSqlite ? ' · 文件可读且可列出表' : ''}`
-          : `✕ 测试失败：${r.error ?? '未知错误'}`
+          ? t('conn.modal.testOk', { ms: r.latency_ms }) + (isSqlite ? t('conn.modal.testOkSqlite') : '')
+          : t('conn.modal.testFail', { error: r.error ?? t('common.unknownError') })
       })
     } catch (e) {
       setTestedAt(null)
-      setTestMsg({ ok: false, text: `✕ 测试失败：${(e as Error).message}` })
+      setTestMsg({ ok: false, text: t('conn.modal.testFail', { error: (e as Error).message }) })
     } finally {
       setTesting(false)
     }
@@ -119,17 +121,17 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
   return (
     <div className="modal-mask open" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
-        <div className="mh">
-          <span className="t">新建连接</span>
-          <button className="close" onClick={onClose}>✕</button>
-        </div>
-        <div className="mb">
-          <div className="fld">
-            <label>连接名称</label>
-            <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="my-connection" />
+          <div className="mh">
+            <span className="t">{t('conn.modal.title')}</span>
+            <button className="close" onClick={onClose}>✕</button>
           </div>
-          <div className="fld">
-            <label>数据库</label>
+          <div className="mb">
+            <div className="fld">
+              <label>{t('conn.modal.name')}</label>
+              <input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="my-connection" />
+            </div>
+            <div className="fld">
+              <label>{t('conn.modal.database')}</label>
             <select
               className="fld-input"
               value={form.dialect}
@@ -143,30 +145,30 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
           </div>
           {isSqlite ? (
             <div className="fld">
-              <label>SQLite 文件路径</label>
+              <label>{t('conn.modal.sqlitePath')}</label>
               <input value={form.file} onChange={(e) => set('file', e.target.value)} placeholder="~/.tabletalk/demo.db" />
               <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: 'var(--ink-dim)' }}>
-                SQLite 无“库”概念：测试 = 文件可读且能列出表
+                {t('conn.modal.sqliteNote')}
               </div>
             </div>
           ) : (
             <>
               <div className="fld">
-                <label>地址</label>
+                <label>{t('conn.modal.address')}</label>
                 <div className="row">
                   <input value={form.host} onChange={(e) => set('host', e.target.value)} placeholder="host" />
                   <input value={form.port} onChange={(e) => set('port', e.target.value)} placeholder="port" style={{ width: 90 }} />
                 </div>
               </div>
               <div className="fld">
-                <label>凭据</label>
+                <label>{t('conn.modal.credentials')}</label>
                 <div className="row">
                   <input value={form.user} onChange={(e) => set('user', e.target.value)} placeholder="user" />
                   <input value={form.password} onChange={(e) => set('password', e.target.value)} type="password" placeholder="password" />
                 </div>
               </div>
               <div className="fld">
-                <label>数据库名</label>
+                <label>{t('conn.modal.databaseName')}</label>
                 <input value={form.database} onChange={(e) => set('database', e.target.value)} placeholder="database" />
               </div>
             </>
@@ -177,12 +179,12 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
                 <input type="checkbox" checked={form.ssl} onChange={(e) => set('ssl', e.target.checked)} /> SSL / TLS
               </label>
               <label className="toggle-ssl">
-                <input type="checkbox" checked={form.readOnly} onChange={(e) => set('readOnly', e.target.checked)} /> 只读连接
+                <input type="checkbox" checked={form.readOnly} onChange={(e) => set('readOnly', e.target.checked)} /> {t('conn.modal.readOnly')}
               </label>
             </div>
           </div>
-          <div className="fld">
-            <label>敏感名单（表/列 glob，逗号分隔；屏蔽项不进 AI 上下文与知识库）</label>
+            <div className="fld">
+              <label>{t('conn.modal.sensitive')}</label>
             <input value={form.sensitive} onChange={(e) => set('sensitive', e.target.value)} placeholder="payroll_*, *secret*" />
           </div>
           {testMsg && (
@@ -192,17 +194,17 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
           )}
           {!canSave && testedAt !== null && (
             <div className="note" style={{ fontSize: 12, color: 'var(--ink-dim)' }}>
-              表单已改动，需重新测试
+              {t('conn.modal.formChanged')}
             </div>
           )}
         </div>
         <div className="mf">
-          <button className="btn ghost" onClick={onClose}>取消</button>
+          <button className="btn ghost" onClick={onClose}>{t('common.cancel')}</button>
           <button className="btn tl" disabled={testing} onClick={handleTest}>
-            {testing ? '测试中…' : '测试连接'}
+            {testing ? t('conn.modal.testing') : t('conn.modal.test')}
           </button>
-          <button className="btn save" disabled={!canSave} onClick={handleSave} title={canSave ? '' : '请先测试连接，通过后保存'}>
-            保存连接
+          <button className="btn save" disabled={!canSave} onClick={handleSave} title={canSave ? '' : t('conn.modal.saveHint')}>
+            {t('conn.modal.save')}
           </button>
         </div>
       </div>

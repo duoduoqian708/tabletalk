@@ -1,38 +1,49 @@
+/* ============================================================
+   TABLETALK · 设计系统「信号绿指挥舱」
+   深空黑底 × 磷光信号绿。安全闸门是护盾，图谱是雷达。
+   单一来源：所有组件只允许引用本文件变量，禁止硬编码色值。
+   ============================================================ */
+
 :root,
-:root[data-theme='light'] {
-  /* ── 日光图纸 · 亮色（默认） ──
-     暖米白底（非纯白）、墨色文字、电光紫点缀；可读性 ≥ 12:1 */
-  --void-0: #f2f0e9; /* 应用底色（暖米白） */
-  --void-1: #f8f7f2; /* 面板 */
-  --void-2: #ffffff; /* 浮层 / 卡片 */
-  --void-3: #f0eee6; /* 输入底 / hover 浅 */
-  --void-4: #e8e6dc; /* hover */
-  --void-5: #dedbd0; /* 活动 / 选中底 */
+:root[data-theme='dark'] {
+  /* ── 表面层级（夜空黑，蓝调递进） ── */
+  --void-0: #05070b;   /* 应用底色（最深） */
+  --void-1: #0b0f16;   /* 面板 */
+  --void-2: #0f1520;   /* 卡片 / 浮层 */
+  --void-3: #131b29;   /* 输入底 / hover 浅 */
+  --void-4: #1a2436;   /* hover */
+  --void-5: #26324a;   /* 活动 / 选中底 */
 
-  --ink: #1c1f27;        /* 主文字（墨色） */
-  --ink-dim: #4d5468;    /* 次要文字 */
-  --ink-faint: #767e92;  /* 弱化文字（≥4.5:1） */
-  --ink-strong: #0e1017; /* 强调文字 */
+  --ink: #d7e1ec;        /* 主文字（冷白） */
+  --ink-dim: #8fa0b4;    /* 次要文字 */
+  --ink-faint: #5a6a7e;  /* 弱化文字 */
+  --ink-strong: #f4f8fc; /* 强调文字 */
 
-  --line: rgba(24, 28, 38, 0.1);
-  --line-strong: rgba(24, 28, 38, 0.2);
-  --line-soft: rgba(24, 28, 38, 0.05);
+  --line: rgba(160, 185, 215, 0.09);
+  --line-strong: rgba(160, 185, 215, 0.17);
+  --line-soft: rgba(160, 185, 215, 0.045);
 
-  --accent: #5a6cff;       /* 电光紫（深一档保证白底对比） */
-  --accent-bright: #4254e8;
-  --accent-dim: rgba(90, 108, 255, 0.12);
-  --accent-soft: #4354e0;
-  --accent-ink: #ffffff;   /* 强调底上的文字 */
-  --accent-glow: rgba(90, 108, 255, 0.28);
+  /* ── 品牌：磷光信号绿（= 安全 = 信任） ── */
+  --accent: #2ee6a8;
+  --accent-bright: #79f2c4;
+  --accent-dim: rgba(46, 230, 168, 0.12);
+  --accent-soft: #a6f4d6;
+  --accent-ink: #03130c;
+  --accent-glow: rgba(46, 230, 168, 0.45);
 
-  --green: #0f9d6e;
-  --green-dim: rgba(15, 157, 110, 0.12);
-  --amber: #b26a00;
-  --amber-dim: rgba(178, 106, 0, 0.12);
-  --red: #d64545;
-  --red-dim: rgba(214, 69, 69, 0.12);
-  --blue: #5a6cff;
-  --blue-dim: rgba(90, 108, 255, 0.12);
+  /* ── 语义：安全闸门三色 ── */
+  --green: #35d99a;
+  --green-dim: rgba(53, 217, 154, 0.13);
+  --amber: #ffb454;
+  --amber-dim: rgba(255, 180, 84, 0.13);
+  --red: #ff6b81;
+  --red-dim: rgba(255, 107, 129, 0.13);
+  --blue: #63c8ff;
+  --blue-dim: rgba(99, 200, 255, 0.13);
+  --violet: #b18cff;
+  --violet-dim: rgba(177, 140, 255, 0.13);
+  --orange: #ffab70;
+  --orange-dim: rgba(255, 171, 112, 0.13);
 
   /* ── V1 兼容别名 ── */
   --bg: var(--void-0);
@@ -48,16 +59,16 @@
   --r-md: 10px;
   --r-lg: 14px;
   --r-full: 99px;
-  --shadow-1: 0 2px 14px rgba(24, 28, 38, 0.12);
-  --shadow-2: 0 10px 36px rgba(24, 28, 38, 0.18), 0 0 0 1px rgba(24, 28, 38, 0.05);
+  --shadow-1: 0 2px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(160, 185, 215, 0.05);
+  --shadow-2: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(160, 185, 215, 0.08);
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
-  --topbar-h: 48px;
+  --topbar-h: 52px;
   --rail-w: 40px;
-  --ai-w: 380px;
+  --ai-w: 400px;
   --z-sticky: 30;
   --z-pop: 60;
   --z-modal: 90;
@@ -73,84 +84,88 @@
   --fs-6: 20px;
   --fs-7: 30px;
 
-  --domain-1: #5a6cff;
-  --domain-2: #0f9d6e;
-  --domain-3: #b26a00;
+  --domain-1: #63c8ff;
+  --domain-2: #35d99a;
+  --domain-3: #ffb454;
 
-  --font-display: 'Sora', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-sans: 'Manrope', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --font-display: 'Instrument Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Instrument Sans', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
 
   /* ── 图谱画布主题变量 ── */
   --g-canvas-bg: var(--void-0);
-  --g-grid: rgba(24, 28, 38, 0.05);
-  --g-node-fill: #ffffff;
-  --g-node-stroke: rgba(24, 28, 38, 0.22);
-  --g-node-fill-sel: #5a6cff;
-  --g-node-stroke-sel: #4254e8;
+  --g-grid: rgba(110, 150, 190, 0.09);
+  --g-node-fill: #0e141d;
+  --g-node-stroke: rgba(160, 185, 215, 0.28);
+  --g-node-fill-sel: #1d3a2e;
+  --g-node-stroke-sel: #2ee6a8;
   --g-node-text: var(--ink);
-  --g-node-text-sel: #ffffff;
-  --g-edge: rgba(24, 28, 38, 0.22);
-  --g-edge-hot: #5a6cff;
-  --g-edge-build: #0f9d6e;
-  --g-edge-pending: rgba(178, 106, 0, 0.55);
-  --g-node-build-fill: rgba(15, 157, 110, 0.1);
+  --g-node-text-sel: #d9fff0;
+  --g-edge: rgba(160, 185, 215, 0.22);
+  --g-edge-hot: #2ee6a8;
+  --g-edge-build: #63c8ff;
+  --g-edge-pending: rgba(255, 180, 84, 0.6);
+  --g-node-build-fill: rgba(99, 200, 255, 0.1);
 }
 
-:root[data-theme='dark'] {
-  /* ── 深空仪表台 · 深色（可选） ── */
-  --void-0: #08090d;
-  --void-1: #0e1015;
-  --void-2: #13161d;
-  --void-3: #181c25;
-  --void-4: #1e2330;
-  --void-5: #2a3040;
+:root[data-theme='light'] {
+  /* ── 日光图纸（次要变体，默认深色） ── */
+  --void-0: #f2f4f7;
+  --void-1: #fafbfd;
+  --void-2: #ffffff;
+  --void-3: #eef0f4;
+  --void-4: #e4e8ee;
+  --void-5: #d8dde6;
 
-  --ink: #f2f4f8;
-  --ink-dim: #aeb6c6;
-  --ink-faint: #7e8798;
-  --ink-strong: #ffffff;
+  --ink: #1b2029;
+  --ink-dim: #4d5566;
+  --ink-faint: #727c90;
+  --ink-strong: #0d1117;
 
-  --line: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --line-soft: rgba(255, 255, 255, 0.04);
+  --line: rgba(24, 30, 42, 0.1);
+  --line-strong: rgba(24, 30, 42, 0.2);
+  --line-soft: rgba(24, 30, 42, 0.05);
 
-  --accent: #8b98ff;
-  --accent-bright: #aab4ff;
-  --accent-dim: rgba(139, 152, 255, 0.16);
-  --accent-soft: #c3caff;
-  --accent-ink: #0a0c14;
-  --accent-glow: rgba(139, 152, 255, 0.35);
+  --accent: #0d9e6c;
+  --accent-bright: #0f7d58;
+  --accent-dim: rgba(13, 158, 108, 0.12);
+  --accent-soft: #0b6b4c;
+  --accent-ink: #ffffff;
+  --accent-glow: rgba(13, 158, 108, 0.3);
 
-  --green: #7ce8b5;
-  --green-dim: rgba(124, 232, 181, 0.14);
-  --amber: #ffc46b;
-  --amber-dim: rgba(255, 196, 107, 0.14);
-  --red: #ff8a8a;
-  --red-dim: rgba(255, 138, 138, 0.14);
-  --blue: #8b98ff;
-  --blue-dim: rgba(139, 152, 255, 0.16);
+  --green: #0f9d6e;
+  --green-dim: rgba(15, 157, 110, 0.12);
+  --amber: #b26a00;
+  --amber-dim: rgba(178, 106, 0, 0.12);
+  --red: #d64545;
+  --red-dim: rgba(214, 69, 69, 0.12);
+  --blue: #2b7fd4;
+  --blue-dim: rgba(43, 127, 212, 0.12);
+  --violet: #7a5af0;
+  --violet-dim: rgba(122, 90, 240, 0.12);
+  --orange: #c76f2b;
+  --orange-dim: rgba(199, 111, 43, 0.12);
 
-  --shadow-1: 0 2px 14px rgba(0, 0, 0, 0.5);
-  --shadow-2: 0 10px 36px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-1: 0 2px 14px rgba(24, 30, 42, 0.1);
+  --shadow-2: 0 10px 36px rgba(24, 30, 42, 0.16), 0 0 0 1px rgba(24, 30, 42, 0.05);
 
-  --domain-1: #8b98ff;
-  --domain-2: #7ce8b5;
-  --domain-3: #ffc46b;
+  --domain-1: #2b7fd4;
+  --domain-2: #0f9d6e;
+  --domain-3: #b26a00;
 
   --g-canvas-bg: var(--void-0);
-  --g-grid: rgba(255, 255, 255, 0.05);
-  --g-node-fill: #14161d;
-  --g-node-stroke: rgba(255, 255, 255, 0.22);
-  --g-node-fill-sel: #8b98ff;
-  --g-node-stroke-sel: #aab4ff;
-  --g-node-text: #f2f4f8;
-  --g-node-text-sel: #0a0c14;
-  --g-edge: rgba(255, 255, 255, 0.22);
-  --g-edge-hot: #8b98ff;
-  --g-edge-build: #6ee7b7;
-  --g-edge-pending: rgba(246, 173, 85, 0.55);
-  --g-node-build-fill: rgba(110, 231, 183, 0.1);
+  --g-grid: rgba(24, 30, 42, 0.06);
+  --g-node-fill: #ffffff;
+  --g-node-stroke: rgba(24, 30, 42, 0.22);
+  --g-node-fill-sel: #e2f6ee;
+  --g-node-stroke-sel: #0d9e6c;
+  --g-node-text: var(--ink);
+  --g-node-text-sel: #06281c;
+  --g-edge: rgba(24, 30, 42, 0.22);
+  --g-edge-hot: #0d9e6c;
+  --g-edge-build: #2b7fd4;
+  --g-edge-pending: rgba(178, 106, 0, 0.55);
+  --g-node-build-fill: rgba(43, 127, 212, 0.1);
 }
 
 * {
@@ -171,11 +186,14 @@ body {
   line-height: 1.55;
   color: var(--ink);
   background-color: var(--void-0);
-  /* 细腻噪点 + 微弱紫晕（浅色下极淡） */
+  /* 数据控制台底纹：噪点 + 网格 + 信号绿/青双辉光 */
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.1 0 0 0 0 0.12 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
-    radial-gradient(1200px 560px at 86% -10%, rgba(90, 108, 255, 0.05), transparent 62%),
-    radial-gradient(900px 500px at -8% 110%, rgba(90, 108, 255, 0.035), transparent 55%);
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.6 0 0 0 0 0.65 0 0 0 0 0.72 0 0 0 0.025 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
+    linear-gradient(rgba(160, 185, 215, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(160, 185, 215, 0.028) 1px, transparent 1px),
+    radial-gradient(1100px 520px at 82% -12%, rgba(46, 230, 168, 0.06), transparent 60%),
+    radial-gradient(900px 500px at -8% 108%, rgba(99, 200, 255, 0.045), transparent 55%);
+  background-size: 140px 140px, 48px 48px, 48px 48px, auto, auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;

@@ -1,7 +1,7 @@
 import { chromium } from '@playwright/test'
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1480, height: 940 } })
-await page.goto('http://127.0.0.1:8765', { waitUntil: 'domcontentloaded' })
+await page.goto('http://127.0.0.1:8777', { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('.g-node', { timeout: 40000 })
 await page.waitForTimeout(1500)
 const layout = await page.evaluate(() => {

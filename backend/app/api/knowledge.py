@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.core.schema import get_schema, sample_values
 from app.core.sensitive import filter_sensitive
-from app.knowledge.annotator import annotate_domain, annotate_knowledge
+from app.knowledge.annotator import annotate_domain, annotate_enums, annotate_knowledge
 from app.state import get_state
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
@@ -51,6 +51,38 @@ class RejectRequest(BaseModel):
 class RejectCommentRequest(BaseModel):
     table: str
     column: str | None = None
+
+
+class GraphEdgeRequest(BaseModel):
+    from_table: str
+    to_table: str
+    kind: str = "user"
+    from_col: str | None = None
+    to_col: str | None = None
+    weight: float | None = None
+
+
+class GraphEdgeDelete(BaseModel):
+    from_table: str
+    to_table: str
+    kind: str
+
+
+class GraphExcludeRequest(BaseModel):
+    table: str
+    excluded: bool = True
+
+
+class EnumConfirmRequest(BaseModel):
+    table: str
+    column: str
+
+
+class EnumSaveRequest(BaseModel):
+    table: str
+    column: str
+    value: str
+    meaning: str
 
 
 def _have(conn_id: str) -> None:
@@ -177,7 +209,8 @@ async def overview(conn_id: str) -> dict:
             "built": False, "kb_status": cfg.kb_status,
             "tables": [], "columns": [], "graph": {"edges": []},
             "tags": {"library": [], "tables": {}},
-            "draft_count": 0, "tag_draft_count": 0, "sample_cols": 0,
+            "enums": [],
+            "draft_count": 0, "tag_draft_count": 0, "enum_draft_count": 0, "sample_cols": 0,
             "embedding_provider": state.runtime.get().embedding_provider,
         }
     # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
@@ -195,6 +228,48 @@ async def graph(conn_id: str) -> dict:
         return {"built": False, "kb_status": state.connections.get(conn_id).kb_status, "edges": []}
     state.knowledge.ensure_loaded(conn_id)
     return {**state.knowledge.graph(conn_id), "built": True}
+
+
+@router.post("/{conn_id}/graph/edges")
+async def add_graph_edge(conn_id: str, body: GraphEdgeRequest) -> dict:
+    """新增一条图谱边（kind=user 为用户手动连线）。持久化到知识库。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    try:
+        edge = state.knowledge.add_graph_edge(
+            conn_id, body.from_table, body.to_table, body.kind,
+            body.from_col, body.to_col, body.weight)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"edge": edge, "graph": state.knowledge.graph(conn_id)}
+
+
+@router.delete("/{conn_id}/graph/edges")
+async def remove_graph_edge(conn_id: str, body: GraphEdgeDelete) -> dict:
+    """删除一条图谱边。删除结构/取值派生边时记入 tombstone，重建不复活。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    removed = state.knowledge.remove_graph_edge(conn_id, body.from_table, body.to_table, body.kind)
+    return {"removed": removed, "graph": state.knowledge.graph(conn_id)}
+
+
+@router.post("/{conn_id}/graph/exclude")
+async def exclude_table(conn_id: str, body: GraphExcludeRequest) -> dict:
+    """将表移出/移回图谱视图（不影响审查页表列表）。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    state.knowledge.set_table_excluded(conn_id, body.table, body.excluded)
+    return {"excluded": state.knowledge.excluded_tables(conn_id)}
+
 
 
 @router.get("/{conn_id}/retrieve")
@@ -272,6 +347,41 @@ async def annotate_tags(conn_id: str) -> dict:
     _have(conn_id)
     state = get_state()
     return await annotate_domain(state, conn_id)
+
+
+@router.post("/{conn_id}/annotate-enums")
+async def annotate_enums_endpoint(conn_id: str) -> dict:
+    """AI 生成列级枚举取值字典（draft），写入知识库待人工确认。"""
+    _have(conn_id)
+    state = get_state()
+    return await annotate_enums(state, conn_id)
+
+
+@router.post("/{conn_id}/enums/confirm")
+async def confirm_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
+    """确认某列全部 draft 枚举 → confirmed。"""
+    _have(conn_id)
+    state = get_state()
+    n = state.knowledge.confirm_enum(conn_id, body.table, body.column)
+    return {"confirmed": n}
+
+
+@router.post("/{conn_id}/enums/reject")
+async def reject_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
+    """拒绝某列全部 draft 枚举 → 移除。"""
+    _have(conn_id)
+    state = get_state()
+    n = state.knowledge.reject_enum(conn_id, body.table, body.column)
+    return {"rejected": n}
+
+
+@router.post("/{conn_id}/enums/save")
+async def save_enum(conn_id: str, body: EnumSaveRequest) -> dict:
+    """编辑某枚举值的 meaning（确认前人工修正）。"""
+    _have(conn_id)
+    state = get_state()
+    ok = state.knowledge.save_enum(conn_id, body.table, body.column, body.value, body.meaning)
+    return {"saved": ok}
 
 
 @router.post("/{conn_id}/tags/confirm")

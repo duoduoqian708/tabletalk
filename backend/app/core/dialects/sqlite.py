@@ -94,6 +94,11 @@ class SQLiteAdapter(DialectAdapter):
                 )
         return fks
 
+    async def count_rows(self, conn: aiosqlite.Connection, table: str) -> int:
+        cur = await conn.execute(f'SELECT COUNT(*) FROM "{table}"')
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
     def quote_ident(self, name: str) -> str:
         return f'"{name}"'
 

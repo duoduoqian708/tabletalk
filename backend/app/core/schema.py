@@ -24,7 +24,8 @@ async def _discover(state: "AppState", conn_id: str):
             for t in tables:
                 columns += await adapter.list_columns(conn, t.name)
             fks = await adapter.list_foreign_keys(conn)
-            return tables, columns, fks
+            row_counts = {t.name: await adapter.count_rows(conn, t.name) for t in tables}
+            return tables, columns, fks, row_counts
 
         return inner()
 
@@ -37,7 +38,7 @@ async def get_schema(state: "AppState", conn_id: str, refresh: bool = False) -> 
         return cached[1]
 
     cfg = state.connections.get(conn_id)
-    tables, columns, fks = await _discover(state, conn_id)
+    tables, columns, fks, row_counts = await _discover(state, conn_id)
     fk_set = {(fk.table, fk.column) for fk in fks}
     for c in columns:
         c.is_fk = (c.table, c.name) in fk_set
@@ -48,7 +49,8 @@ async def get_schema(state: "AppState", conn_id: str, refresh: bool = False) -> 
         "databases": [cfg.database] if cfg.database else [],
         "tables": [
             {"name": t.name, "kind": t.kind, "comment": t.comment,
-             "column_count": sum(1 for c in columns if c.table == t.name)}
+             "column_count": sum(1 for c in columns if c.table == t.name),
+             "row_count": row_counts.get(t.name, 0)}
             for t in tables
         ],
         "columns": [

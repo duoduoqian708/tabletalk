@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { AiCard } from '@renderer/api/ai'
+import { useI18n } from '@renderer/store/i18n'
 
 /* 对话消息轮次（可序列化，存 localStorage） */
 export interface Turn {
@@ -120,14 +121,15 @@ export function generateTitle(q: string): string {
   const clean = q
     .replace(/[？?。.!！，,、\s]+$/g, '')          // 去句尾标点/词气
     .replace(/^(请|帮我|麻烦|给我|我想(要|看|知道|查)?|请问|帮我查|帮我分析)\s*/g, '') // 去常见祈使/语气前缀
-  if (!clean) return '新对话'
+  if (!clean) return useI18n.getState().t('chat.newConversation')
   return clean.length > 16 ? `${clean.slice(0, 16)}…` : clean
 }
 
 export function relTime(ts: number): string {
+  const t = useI18n.getState().t
   const d = Date.now() - ts
-  if (d < 60_000) return '刚刚'
-  if (d < 3_600_000) return `${Math.floor(d / 60_000)} 分钟前`
-  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)} 小时前`
-  return `${Math.floor(d / 86_400_000)} 天前`
+  if (d < 60_000) return t('chat.justNow')
+  if (d < 3_600_000) return t('chat.minutesAgo', { n: Math.floor(d / 60_000) })
+  if (d < 86_400_000) return t('chat.hoursAgo', { n: Math.floor(d / 3_600_000) })
+  return t('chat.daysAgo', { n: Math.floor(d / 86_400_000) })
 }

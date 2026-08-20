@@ -53,13 +53,15 @@ class AuditLogger:
     def list(
         self,
         connection: str | None = None,
+        origin: str | None = None,
+        tier: str | None = None,
         verdict: str | None = None,
-        limit: int = 100,
         from_ts: str | None = None,
         to_ts: str | None = None,
         report_id: str | None = None,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
+        """返回全量过滤结果（不窗口化）；分页由调用方按时间倒序切片。"""
         if not self.path.exists():
             return []
         entries: list[dict[str, Any]] = []
@@ -73,6 +75,10 @@ class AuditLogger:
                     continue
                 if connection and e.get("connection") != connection:
                     continue
+                if origin and e.get("origin") != origin:
+                    continue
+                if tier and e.get("tier") != tier:
+                    continue
                 if verdict and e.get("verdict") != verdict:
                     continue
                 if from_ts and e.get("ts", "") < from_ts:
@@ -84,4 +90,4 @@ class AuditLogger:
                 if source and e.get("source") != source:
                     continue
                 entries.append(e)
-        return entries[-limit:]
+        return entries

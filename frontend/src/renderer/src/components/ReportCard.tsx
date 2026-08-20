@@ -2,6 +2,7 @@
  * 北欧极简：白面板、细边框、蓝强调。报告数据为快照（生成时刻固化）。 */
 import { useState } from 'react'
 import type { ReportView, ReportSectionResult } from '@renderer/store/results'
+import { useI18n } from '@renderer/store/i18n'
 
 /* ---------- SVG 图表块：柱 / 折线 / 饼，北欧细线 ---------- */
 const PAL = ['#0a6dff', '#7ba6ff', '#9ec0ff', '#c5d8ff', '#5a8eff', '#2f7bff']
@@ -12,11 +13,12 @@ function num(v: unknown): number {
 }
 
 function ChartBlock({ section }: { section: ReportSectionResult }): React.JSX.Element {
+  const { t } = useI18n()
   const kind = section.chart?.kind ?? 'bar'
   const data: unknown[][] = section.chart?.data ?? []
   const cols: string[] = section.chart?.columns ?? section.columns ?? []
   if (data.length === 0 || cols.length === 0) {
-    return <div className="rpt-chart empty mono">无图表数据</div>
+    return <div className="rpt-chart empty mono">{t('report.noChart')}</div>
   }
   // 第一列标签 + 第二列数值（符合聚合查询 month/region → 值 的典型形态）
   const labels: string[] = data.map((r: unknown[]) => String(r[0] ?? ''))
@@ -106,6 +108,7 @@ function ChartBlock({ section }: { section: ReportSectionResult }): React.JSX.El
 
 /* ---------- 单章折叠数据块（复用表格观感，简化版） ---------- */
 function SectionData({ section, openFlag }: { section: ReportSectionResult; openFlag?: number }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [sqlOpen, setSqlOpen] = useState(false)
   // 数字回溯：外部请求展开（openFlag 变化时）
@@ -118,17 +121,17 @@ function SectionData({ section, openFlag }: { section: ReportSectionResult; open
   const cols: string[] = section.columns ?? []
   const rows: unknown[][] = section.rows ?? []
   if (!section.ok) {
-    return <div className="rpt-sec-fail mono">查询未通过闸门：{section.reason ?? '拦截'}</div>
+    return <div className="rpt-sec-fail mono">{t('report.gateFail')}{section.reason ?? t('report.blocked')}</div>
   }
   return (
     <div className="rpt-sec-data">
       <div className="rpt-sec-acts">
         <button className="rpt-fold" onClick={() => setOpen((o) => !o)}>
-          {open ? '▾ 折叠明细' : '▸ 展开明细'}（{section.row_count} 行 · {section.elapsed_ms ?? 0}ms）
+          {open ? '▾ ' : '▸ '}{open ? t('report.fold') : t('report.expand')}{t('report.rowsMs', { n: section.row_count, ms: section.elapsed_ms ?? 0 })}
         </button>
         {section.sql && (
           <button className="rpt-fold sql" onClick={() => setSqlOpen((o) => !o)}>
-            {sqlOpen ? '▾ 收起 SQL' : '▸ 来源 SQL'}
+            {sqlOpen ? '▾ ' : '▸ '}{sqlOpen ? t('report.collapseSql') : t('report.sourceSql')}
           </button>
         )}
       </div>
@@ -146,7 +149,7 @@ function SectionData({ section, openFlag }: { section: ReportSectionResult; open
                 <tr key={i}>{r.map((c: unknown, j: number) => <td key={j}>{String(c ?? '')}</td>)}</tr>
               ))}
               {rows.length > 50 && (
-                <tr><td className="muted" colSpan={cols.length}>共 {rows.length} 行，已截断至前 50</td></tr>
+                <tr><td className="muted" colSpan={cols.length}>{t('report.truncated', { n: rows.length })}</td></tr>
               )}
             </tbody>
           </table>
@@ -158,8 +161,9 @@ function SectionData({ section, openFlag }: { section: ReportSectionResult; open
 
 /* ---------- 叙述：支持 [rN] 上标 → 跳转该章来源（滚动 + 展开 + 高亮） ---------- */
 function Narration({ text, onJump }: { text: string; onJump: (id: string) => void }): React.JSX.Element {
+  const { t } = useI18n()
   if (!text) {
-    return <div className="rpt-narr mono muted">（叙述生成中…）</div>
+    return <div className="rpt-narr mono muted">{t('report.narrating')}</div>
   }
   // 把 [r1] 标注转为上标，点击时跳到对应章的来源查询
   const parts = text.split(/(\[r\d+\])/g)
@@ -169,7 +173,7 @@ function Narration({ text, onJump }: { text: string; onJump: (id: string) => voi
         const m = /^\[r(\d+)\]$/.exec(p)
         if (m) {
           return (
-            <button key={i} className="rpt-ref" onClick={() => onJump(`r${m[1]}`)} title={`跳到来源查询 r${m[1]}`}>
+             <button key={i} className="rpt-ref" onClick={() => onJump(`r${m[1]}`)} title={`${t('report.jumpTo')} r${m[1]}`}>
               r{m[1]}
             </button>
           )
@@ -182,6 +186,7 @@ function Narration({ text, onJump }: { text: string; onJump: (id: string) => voi
 
 /* ---------- 报告卡主体 ---------- */
 export function ReportCard({ report }: { report: ReportView }): React.JSX.Element {
+  const { t } = useI18n()
   // 数字回溯：跳到某章的来源查询（滚动 + 展开明细 + 高亮闪烁）
   const [jumpFlag, setJumpFlag] = useState<{ id: string; ts: number } | null>(null)
   const [expandId, setExpandId] = useState<string | null>(null)
@@ -202,8 +207,8 @@ export function ReportCard({ report }: { report: ReportView }): React.JSX.Elemen
       <header className="rpt-h">
         <div className="rpt-title">{report.title}</div>
         <div className="rpt-meta mono">
-          快照 {report.snapshotTs} · {report.sections.length} 章 · {report.refs.length} 个可回溯来源 · 模型可见聚合结果集
-          <span className="rpt-meta-tip">点 [rN] 或来源行 → 跳到该章 SQL 与明细</span>
+          {t('report.meta', { ts: report.snapshotTs, n: report.sections.length, m: report.refs.length })}
+          <span className="rpt-meta-tip">{t('report.metaTip')}</span>
         </div>
       </header>
 
@@ -221,18 +226,18 @@ export function ReportCard({ report }: { report: ReportView }): React.JSX.Elemen
 
       {report.narration && (
         <section className="rpt-sec narr-sec">
-          <div className="rpt-sec-h"><span className="rpt-sec-t">总结</span></div>
+          <div className="rpt-sec-h"><span className="rpt-sec-t">{t('report.summary')}</span></div>
           <Narration text={report.narration} onJump={jumpToSection} />
         </section>
       )}
 
       {report.refs.length > 0 && (
         <footer className="rpt-refs mono">
-          <div className="rpt-refs-t">数字回溯</div>
+          <div className="rpt-refs-t">{t('report.traceback')}</div>
           {report.refs.map((r: ReportView['refs'][number]) => (
             <button key={r.result_id} className="rpt-ref-line" onClick={() => jumpToSection(r.result_id)}>
-              <span className="rid">{r.result_id}</span> {r.title}
-              <span className="muted"> · {r.row_count} 行</span>
+               <span className="rid">{r.result_id}</span> {r.title}
+               <span className="muted"> · {r.row_count} {t('table.rows')}</span>
               <span className="muted sq"> {r.sql_head}</span>
             </button>
           ))}

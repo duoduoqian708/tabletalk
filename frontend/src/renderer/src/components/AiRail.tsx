@@ -18,6 +18,7 @@ import { toastMsg } from '@renderer/utils/toast'
 import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
+import { useI18n } from '@renderer/store/i18n'
 
 /* ---------- 推理步骤状态机 ---------- */
 type StepStatus = string
@@ -30,10 +31,10 @@ interface Step {
 }
 
 const STEP_DEFS: { id: string; label: string }[] = [
-  { id: 'intent', label: '意图分解匹配' },
-  { id: 'retrieval', label: '表范围检索' },
-  { id: 'sql', label: 'SQL 生成' },
-  { id: 'gate', label: '安全评估' }
+  { id: 'intent', label: 'ws.stepIntent' },
+  { id: 'retrieval', label: 'ws.stepRetrieval' },
+  { id: 'sql', label: 'ws.stepSql' },
+  { id: 'gate', label: 'ws.stepGate' }
 ]
 
 function makeSteps(): Step[] {
@@ -41,13 +42,14 @@ function makeSteps(): Step[] {
 }
 
 const GATE_LABEL: Record<string, string> = {
-  allow: '放行 · 只读',
-  review: '需确认 · 写操作',
-  block: '拦截'
+  allow: 'ws.gateAllow',
+  review: 'ws.gateReview',
+  block: 'ws.gateBlock'
 }
 
 /* 推理步骤：默认收成一行轻量指示，点击展开细节（真实事件驱动，无 mock 播放） */
 function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [openStep, setOpenStep] = useState<Set<string>>(new Set())
   const running = steps.some((s) => s.status === 'running')
@@ -70,12 +72,12 @@ function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
         {running ? (
           <>
             <span className="spin" />
-            <span>思考中…</span>
+            <span>{t('ws.thinking')}</span>
           </>
         ) : (
           <>
             <span className="ok">✓</span>
-            <span>已评估 {doneCount} 步</span>
+            <span>{t('ws.evalSteps', { n: doneCount })}</span>
           </>
         )}
         <span className="spacer" />
@@ -96,13 +98,13 @@ function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
                   </span>
                   <span className="step-label">
                     {first && <span className="tag">AI</span>}
-                    {s.label}
+                    {t(s.label)}
                   </span>
                   <span className="step-arrow">▾</span>
                 </div>
                 <div className={`step-detail${isOpen ? ' open' : ''}`}>
                   {s.detail.length === 0 ? (
-                    <div className="sd-empty mono">{s.status === 'running' ? '思考中…' : '—'}</div>
+                    <div className="sd-empty mono">{s.status === 'running' ? t('ws.thinking') : '—'}</div>
                   ) : (
                     s.detail.map((d, di) => (
                       <div key={di} className="sd-line mono">{d}</div>
@@ -196,8 +198,20 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
   onConfirm: (sql: string) => void
   onAnalyze: (kind: 'explain' | 'optimize' | 'risk', sql: string) => void
 }): React.JSX.Element {
+  const { t } = useI18n()
   const [draft, setDraft] = useState(card.sql)
   const [formatting, setFormatting] = useState(false)
+  // 闸门判定落地瞬间 → 一次性护盾闪光
+  const [flash, setFlash] = useState(false)
+  const wasPending = useRef(pending)
+  useEffect(() => {
+    if (wasPending.current && !pending) {
+      setFlash(true)
+      const t = window.setTimeout(() => setFlash(false), 800)
+      return () => window.clearTimeout(t)
+    }
+    wasPending.current = pending
+  }, [pending])
 
   const cls =
     card.verdict === 'block' ? 'block' : card.verdict === 'review' ? 'review' : card.tier === 'ddl' ? 'manual' : 'allow'
@@ -216,15 +230,16 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
   }
 
   const ANALYZE: { key: 'explain' | 'optimize' | 'risk'; label: string }[] = [
-    { key: 'explain', label: '解释' },
-    { key: 'optimize', label: '优化' },
-    { key: 'risk', label: '风险' }
+    { key: 'explain', label: 'ws.analyzeExplain' },
+    { key: 'optimize', label: 'ws.analyzeOptimize' },
+    { key: 'risk', label: 'ws.analyzeRisk' }
   ]
 
   return (
     <div className={`sql ${cls}${pending ? ' pending' : ''}`}>
+      {flash && <span className="gate-flash" />}
       <div className="c-h">
-        {pending ? <span className="fst eval">评估中</span> : <CardBadge card={card} />}
+        {pending ? <span className="fst eval">{t('ws.evaluating')}</span> : <CardBadge card={card} />}
         <span className="c-question" title={question}>{question}</span>
         <span className="c-acts">
           {!pending && ANALYZE.map((a) => (
@@ -243,34 +258,34 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
       <div className="c-f">
         {card.verdict === 'review' && !card.executed && (
           <div className="risk-panel">
-            <div className="rp-title">⚠ 写操作风险评估</div>
-            <div className="rp-line mono">影响范围：约 {card.preview_rows ?? '?'} 行</div>
+            <div className="rp-title">{t('ws.riskTitle')}</div>
+            <div className="rp-line mono">{t('ws.riskScope', { n: card.preview_rows ?? '?' })}</div>
             {card.reason && <div className="rp-line">{card.reason}</div>}
-            <div className="rp-line dim">确认时后端将重新评估（防 TOCTOU）· 执行后不可回滚，操作会留痕审计</div>
+            <div className="rp-line dim">{t('ws.riskNote')}</div>
           </div>
         )}
         {card.executed && (
-          <div className="exec-stamp mono">✓ 已执行 · {card.affected ?? 0} 行受影响 · 已写入审计</div>
+          <div className="exec-stamp mono">{t('ws.execStamp', { n: card.affected ?? 0 })}</div>
         )}
-        {blocked && <span className="c-p warn">已拦截</span>}
+        {blocked && <span className="c-p warn">{t('ws.blocked')}</span>}
         <span className="spacer" />
         {!pending && !card.executed && (
           <button className="btn gho" disabled={formatting} onClick={() => void handleFormat()}>
-            {formatting ? '…' : '格式化'}
+            {formatting ? '…' : t('ws.format')}
           </button>
         )}
         {pending ? (
-          <span className="c-p">安全评估中…</span>
+          <span className="c-p">{t('ws.gateEvaluating')}</span>
         ) : card.executed ? (
-          <span className="c-p done">✓ 完成</span>
+          <span className="c-p done">{t('ws.done')}</span>
         ) : card.verdict === 'allow' ? (
-          <button className="btn pri" disabled={busy || !draft.trim()} onClick={() => onRun(draft)}>▶ 运行</button>
+          <button className="btn pri" disabled={busy || !draft.trim()} onClick={() => onRun(draft)}>{t('ws.run')}</button>
         ) : card.verdict === 'review' ? (
-          <button className="btn warn" disabled={busy || !draft.trim()} onClick={() => onConfirm(draft)}>✓ 确认执行</button>
+          <button className="btn warn" disabled={busy || !draft.trim()} onClick={() => onConfirm(draft)}>{t('ws.confirmExec')}</button>
         ) : blocked ? (
-          <span className="c-r">DDL / 拦截 · 不执行</span>
+          <span className="c-r">{t('ws.ddlBlock')}</span>
         ) : (
-          <span className="c-r">草稿 · 手动执行</span>
+          <span className="c-r">{t('ws.draftManual')}</span>
         )}
       </div>
     </div>
@@ -279,9 +294,18 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
 
 const STEP_MS = 1500      // 每步停留时长
 
+/* 欢迎区推荐问题（演示库场景；点击直接发送） */
+const SUGGESTIONS: string[] = [
+  'ws.sug1',
+  'ws.sug2',
+  'ws.sug3',
+  'ws.sug4'
+]
+
 /* ---------- 主组件 ---------- */
-export function AiRail({ width, providerName, modelLabel }: { width: number; providerName?: string | null; modelLabel?: string | null }): React.JSX.Element {
+export function AiRail({ providerName, modelLabel }: { providerName?: string | null; modelLabel?: string | null }): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
+  const { t } = useI18n()
   const connDialect = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.dialect ?? 'sqlite')
   const selectedTable = useSchema((s) => s.selectedTable)
   const selectTable = useSchema((s) => s.selectTable)
@@ -295,6 +319,16 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   const [input, setInput] = useState('')
   const [histOpen, setHistOpen] = useState(false)
   const [sugs, setSugs] = useState<string[]>([])
+  // 对话面板：底部命令中心聚焦/发送时向上弹出
+  const [panelOpen, setPanelOpen] = useState(false)
+  useEffect(() => {
+    if (!panelOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setPanelOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [panelOpen])
   const ctxTable = selectedTable // 上下文筹码：当前选中的表
   const [settings, setSettings] = useState<SettingsPublic | null>(null)
   useEffect(() => {
@@ -441,8 +475,8 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   function attachCards(): void {
     const cards = cardsRef.current
     if (cards.length === 0) return
-    setTurns((t) => {
-      const n = [...t]
+    setTurns((tt) => {
+      const n = [...tt]
       const last = n[n.length - 1]
       if (last.role !== 'ai' || !last.steps) return n
       // 若已挂过同样数量的卡则跳过
@@ -455,8 +489,8 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
       last.pending = !gateDone
       // SQL 生成步（倒数第 2）挂 SQL 首行
       last.steps = last.steps.map((s, i) =>
-        i === sqlIdx && !s.detail.some((d) => d.startsWith('生成 SQL'))
-          ? { ...s, detail: [...s.detail, `生成 SQL：${cards[cards.length - 1].sql.split('\n')[0]}`] }
+        i === sqlIdx && !s.detail.some((d) => d.startsWith(t('ws.genSql')))
+          ? { ...s, detail: [...s.detail, `${t('ws.genSql')}${cards[cards.length - 1].sql.split('\n')[0]}`] }
           : s
       )
       return n
@@ -483,14 +517,16 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   /** 安全评估完成：取消 pending，挂判定。若流已结束且是读卡 → 自动执行（无需人点）。 */
   function finishGate(): void {
     const card = cardsRef.current[cardsRef.current.length - 1]
-    setTurns((t) => {
-      const n = [...t]
+    setTurns((tt) => {
+      const n = [...tt]
       const last = n[n.length - 1]
       if (last.role !== 'ai' || !last.steps) return n
       last.pending = false
       const g = last.steps[last.steps.length - 1]
-      if (card && !g.detail.some((d) => d.startsWith('判定 →'))) {
-        g.detail = [...g.detail, `判定 → ${GATE_LABEL[card.verdict] ?? card.verdict}${card.preview_rows != null ? `（约 ${card.preview_rows} 行）` : ''}`]
+      if (card && !g.detail.some((d) => d.startsWith(t('ws.verdictPrefix')))) {
+        const glKey = GATE_LABEL[card.verdict]
+        const glText = glKey ? t(glKey) : card.verdict
+        g.detail = [...g.detail, `${t('ws.verdictPrefix')} ${glText}${card.preview_rows != null ? t('ws.verdictRows', { n: card.preview_rows }) : ''}`]
       }
       return n
     })
@@ -591,11 +627,11 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
           }
           if (ev.type === 'plan') {
             // 规划完成：在 turn 文案里列章节
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
               if (last.role === 'ai') {
-                last.text = `已规划 ${ev.sections.length} 个章节：${ev.sections.map((s) => s.title).join(' / ')}`
+                last.text = `${t('ws.planSections', { n: ev.sections.length })}${ev.sections.map((s) => s.title).join(' / ')}`
               }
               return n
             })
@@ -623,13 +659,13 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
           }
           if (ev.type === 'narration') {
             setNarration(ev.text, ev.refs)
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
-              if (last.role === 'ai') last.text = '报告已生成，总结与图表见结果区。'
+              if (last.role === 'ai') last.text = t('ws.reportReady')
               return n
             })
-            toastMsg('报告已生成 · 见结果区')
+            toastMsg(t('ws.reportToast'))
             return
           }
           if (ev.type === 'report_done') {
@@ -659,23 +695,23 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
             })
           } else if (ev.type === 'stage' && ev.stage === 'intent') {
             // 四步展示：意图分解（真实标签路由结果）
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
               if (last.role === 'ai' && last.steps) {
                 const s = last.steps.find((x) => x.id === 'intent')
                 if (s) {
                   s.status = 'done'
                   const v = Array.isArray(ev.value) ? (ev.value as string[]).join(' / ') : String(ev.value ?? '')
-                  s.detail = [...s.detail, `意图标签：${v || '无（未命中领域路由）'}`]
+                  s.detail = [...s.detail, `${t('ws.intentTag')}${v || t('ws.intentNone')}`]
                 }
               }
               return n
             })
           } else if (ev.type === 'stage' && ev.stage === 'retrieval') {
             // 四步展示：表检索定位（真实候选表清单：标签路由 × 向量召回 → FK 扩展）
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
               if (last.role === 'ai' && last.steps) {
                 const s = last.steps.find((x) => x.id === 'retrieval')
@@ -685,7 +721,7 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
                   s.status = 'done'
                   s.detail = [
                     ...s.detail,
-                    `候选表 ${tables.length} 张：${tables.join(', ') || '（路由未命中，走全量摘要）'}${vecN > 0 ? ` · 向量召回 +${vecN}` : ''}`
+                    `${t('ws.candTables', { n: tables.length })}${tables.join(', ') || t('ws.candMiss')}${vecN > 0 ? t('ws.vecRecall', { n: vecN }) : ''}`
                   ]
                 }
               }
@@ -790,10 +826,10 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
           } else if (ev.type === 'clarify') {
             setClarifyPending({ q: ev.question, field: ev.field })
           } else if (ev.type === 'plan') {
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
-              if (last.role === 'ai') last.text = `已规划 ${ev.sections.length} 个章节：${ev.sections.map((s) => s.title).join(' / ')}`
+              if (last.role === 'ai') last.text = `${t('ws.planSections', { n: ev.sections.length })}${ev.sections.map((s) => s.title).join(' / ')}`
               return n
             })
           } else if (ev.type === 'section') {
@@ -805,13 +841,13 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
             upsertSection(s)
           } else if (ev.type === 'narration') {
             setNarration(ev.text, ev.refs)
-            setTurns((t) => {
-              const n = [...t]
+            setTurns((tt) => {
+              const n = [...tt]
               const last = n[n.length - 1]
-              if (last.role === 'ai') last.text = '报告已生成，总结与图表见结果区。'
+              if (last.role === 'ai') last.text = t('ws.reportReady')
               return n
             })
-            toastMsg('报告已生成 · 见结果区')
+            toastMsg(t('ws.reportToast'))
           } else if (ev.type === 'done') {
             setTurns((t) => {
               const n = [...t]
@@ -837,21 +873,22 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   /** 选中 SQL 解释/优化/风险：结果作为 AI 消息追加（不打断当前步骤流）。 */
   async function analyze(kind: 'explain' | 'optimize' | 'risk', sql: string): Promise<void> {
     if (!currentId) return
-    const label = kind === 'explain' ? '解释' : kind === 'optimize' ? '优化' : '风险'
-    setTurns((t) => [...t, { role: 'ai', text: `${label}分析中…`, thinks: [`分析 SQL（${label}）`] }])
+    const labelKey = kind === 'explain' ? 'ws.analyzeExplain' : kind === 'optimize' ? 'ws.analyzeOptimize' : 'ws.analyzeRisk'
+    const label = t(labelKey)
+    setTurns((tt) => [...tt, { role: 'ai', text: t('ws.analyzeThinking', { label }), thinks: [t('ws.analyzeOf', { label })] }])
     try {
       const r = await selection({ connection_id: currentId, sql, kind })
-      setTurns((t) => {
-        const n = [...t]
+      setTurns((tt) => {
+        const n = [...tt]
         const last = n[n.length - 1]
         if (last.role === 'ai') last.text = r.text
         return n
       })
     } catch (e) {
-      setTurns((t) => {
-        const n = [...t]
+      setTurns((tt) => {
+        const n = [...tt]
         const last = n[n.length - 1]
-        if (last.role === 'ai') last.text = `⚠ 分析失败：${(e as Error).message}`
+        if (last.role === 'ai') last.text = `${t('ws.analyzeFail')}${(e as Error).message}`
         return n
       })
     }
@@ -864,10 +901,10 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
       const r = await runQuery({ connectionId: currentId, sql, origin: 'ai', confirm })
       handleQueryResult(r, sql, question)
     } catch (e) {
-      setTurns((t) => {
-        const n = [...t]
+      setTurns((tt) => {
+        const n = [...tt]
         const last = n[n.length - 1]
-        if (last.role === 'ai') last.text = `⚠ 执行失败：${(e as Error).message}`
+        if (last.role === 'ai') last.text = `${t('ws.execFail')}${(e as Error).message}`
         return n
       })
     } finally {
@@ -888,30 +925,30 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
         return Number.isSafeInteger(n) || (n !== 0 && Math.abs(n) < 1e15) ? n : s
       }))
       push({
-        title: question ? `问 · ${question}` : `ai · ${sql.split('\n')[0].slice(0, 42)}`,
+        title: question ? `${t('ws.titleAsk')}${question}` : `ai · ${sql.split('\n')[0].slice(0, 42)}`,
         name: sql.slice(0, 20),
         headers: r.columns ?? [],
         types: r.types ?? [],
         rows,
-        meta: `${r.truncated ? '截断' : ''}${r.elapsed_ms}ms`.trim()
+        meta: `${r.truncated ? t('ws.truncated') : ''}${r.elapsed_ms}ms`.trim()
       })
-      toastMsg('结果已发到结果区 · READ')
+      toastMsg(t('ws.resultToast'))
     } else if (r.verdict === 'review') {
-      setTurns((t) => {
-        const n = [...t]
+      setTurns((tt) => {
+        const n = [...tt]
         const last = n[n.length - 1]
-        if (last.role === 'ai') last.text = `需确认：将影响约 ${r.preview_rows ?? '?'} 行。点卡片按钮确认执行。`
+        if (last.role === 'ai') last.text = t('ws.reviewMsg', { n: r.preview_rows ?? '?' })
         return n
       })
     } else if (r.verdict === 'block') {
-      setTurns((t) => {
-        const n = [...t]
+      setTurns((tt) => {
+        const n = [...tt]
         const last = n[n.length - 1]
-        if (last.role === 'ai') last.text = `已拦截：${r.reason}`
+        if (last.role === 'ai') last.text = `${t('ws.blockMsg')}${r.reason}`
         return n
       })
     } else if (r.verdict === 'executed') {
-      toastMsg(`已执行 · ${r.affected_rows ?? 0} 行受影响 · 已写入审计`)
+      toastMsg(t('ws.execToast', { n: r.affected_rows ?? 0 }))
       // 留痕：把最后一张 AI 卡标记为已执行（含影响行数）
       setTurns((t) => {
         const n = [...t]
@@ -932,146 +969,184 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
   }
 
   return (
-    <aside className="airail" style={{ width }}>
-      <div className="airail-head">
-        <span className="conv-title" title={activeConv?.title ?? '新对话'}>
-          {activeConv?.title ?? '新对话'}
-        </span>
-        <span className="spacer" />
-        <button className="ah-btn" title="新建对话" disabled={busy} onClick={newChat}>＋</button>
-        <div className="ah-dd" ref={histDdRef}>
-          <button
-            className={`ah-btn${histOpen ? ' on' : ''}`}
-            title="历史对话"
-            onClick={() => setHistOpen((o) => !o)}
-          >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
-              <circle cx="6" cy="6" r="4.6" />
-              <path d="M6 3.4 V6 L8.2 7.2" />
-            </svg>
-          </button>
-          {histOpen && (
-            <div className="ah-menu">
-              <div className="ah-mt mono">历史对话</div>
-              {conversations.filter((c) => c.connId === currentId).map((c) => (
-                <button
-                  key={c.id}
-                  className={`ah-mi${c.id === activeId ? ' on' : ''}`}
-                  onClick={() => switchTo(c.id, c)}
-                >
-                  <span className="ah-t">{c.title ?? '未命名对话'}</span>
-                  <span className="ah-time mono">{relTime(c.updatedAt)}</span>
-                </button>
-              ))}
-              {conversations.filter((c) => c.connId === currentId).length === 0 && (
-                <div className="ah-none mono">暂无历史对话</div>
+    <div className="ai-root">
+      {/* 对话面板：从底部命令中心向上弹出 */}
+      {panelOpen && (
+        <div className="ai-panel">
+          <div className="ai-panel-head">
+            <span className={`ai-panel-state${busy ? ' busy' : ''}`}><i />{busy ? 'THINKING' : 'ONLINE'}</span>
+            <span className="conv-title" title={activeConv?.title ?? t('chat.newConversation')}>
+              {activeConv?.title ?? t('chat.newConversation')}
+            </span>
+            <span className="spacer" />
+            <button className="ah-btn" title={t('ws.newConvTitle')} disabled={busy} onClick={newChat}>＋</button>
+            <div className="ah-dd" ref={histDdRef}>
+              <button
+                className={`ah-btn${histOpen ? ' on' : ''}`}
+                title={t('ws.historyTitle')}
+                onClick={() => setHistOpen((o) => !o)}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
+                  <circle cx="6" cy="6" r="4.6" />
+                  <path d="M6 3.4 V6 L8.2 7.2" />
+                </svg>
+              </button>
+              {histOpen && (
+                <div className="ah-menu">
+                  <div className="ah-mt mono">{t('ws.historyTitle')}</div>
+                  {conversations.filter((c) => c.connId === currentId).map((c) => (
+                    <button
+                      key={c.id}
+                      className={`ah-mi${c.id === activeId ? ' on' : ''}`}
+                      onClick={() => switchTo(c.id, c)}
+                    >
+                      <span className="ah-t">{c.title ?? t('ws.unnamed')}</span>
+                      <span className="ah-time mono">{relTime(c.updatedAt)}</span>
+                    </button>
+                  ))}
+                  {conversations.filter((c) => c.connId === currentId).length === 0 && (
+                    <div className="ah-none mono">{t('ws.noHistory')}</div>
+                  )}
+                </div>
               )}
+            </div>
+            <button className="ah-btn ai-close" title={t('ws.collapseEsc')} onClick={() => setPanelOpen(false)}>✕</button>
+          </div>
+
+          <div className="airail-scroll" ref={scrollRef}>
+            {turns.length === 0 && (
+              <div className="airail-hero">
+                <div className="ah-top">
+                  <span className="ah-brand mono">TABLETALK</span>
+                  <span className="ah-live mono"><i />AI ONLINE</span>
+                </div>
+                <div className="ah-title">
+                  {t('ws.hero1')}
+                  <br />
+                  <span className="ah-grad">{t('ws.hero2')}</span>
+                </div>
+                <div className="ah-sub">{t('ws.heroSub')}</div>
+                <div className="ah-sugs">
+                  {SUGGESTIONS.map((q) => (
+                    <button key={q} className="ah-sug" disabled={busy} onClick={() => void send(t(q))}>
+                      <span className="as-ic mono">▸</span>
+                      <span className="as-t">{t(q)}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="ah-feats">
+                  <span className="ah-feat"><i className="f-green" />{t('ws.featRead')}</span>
+                  <span className="ah-feat"><i className="f-amber" />{t('ws.featWrite')}</span>
+                  <span className="ah-feat"><i className="f-red" />{t('ws.featAudit')}</span>
+                </div>
+              </div>
+            )}
+
+            {turns.map((turn, i) =>
+              turn.role === 'user' ? (
+                <div className="m-u" key={i}>{turn.text}</div>
+              ) : (
+                <div className="m-a" key={i}>
+                  {(turn.text || (turn.cards && turn.cards.length > 0) || turn.steps) && (
+                    <div className="ai-id">
+                      <span className="ai-avatar">◆</span>
+                      <span className="ai-name">TABLETALK</span>
+                    </div>
+                  )}
+                  {turn.isReport && !turn.clarify && (
+                    <div className={`rpt-pill mono${turn.running ? ' live' : ''}`}>
+                      <span className="rp-ic">▦</span>{t('ws.reportMode')}{turn.text ?? t('ws.generating')}
+                    </div>
+                  )}
+                  {turn.clarify && (
+                    <div className="clarify-box">
+                      <div className="cl-q mono">{t('ws.clarifyTitle')}</div>
+                      {turn.clarify.map((cq, ci) => (
+                        <div key={ci} className="cl-line">{cq}</div>
+                      ))}
+                    </div>
+                  )}
+                  {turn.steps && <ThinkPanel steps={turn.steps} />}
+                  {turn.text && !turn.isReport && <div className="ai-txt">{turn.text}</div>}
+                  {turn.text && turn.isReport && turn.clarify && null}
+                  {turn.cards && turn.cards.map((c, ci) => (
+                    <SqlCard
+                      key={ci}
+                      card={c}
+                      question={turn.question ?? ''}
+                      busy={busy}
+                      pending={!!turn.pending}
+                      dialect={connDialect}
+                      onRun={(sql) => void exec(sql, false, turn.question)}
+                      onConfirm={(sql) => void exec(sql, true, turn.question)}
+                      onAnalyze={(kind, sql) => void analyze(kind, sql)}
+                    />
+                  ))}
+                  {turn.running && (
+                    <div className="think running">
+                      <span className="tn">···</span>
+                      <span className="tl">
+                        <i /><i /><i />
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+          </div>
+
+          {clarifyPending && (
+            <div className="clarify-input-box">
+              <div className="cl-prompt mono">{t('ws.clarifyPrompt')}</div>
+              <div className="cl-q-line">{clarifyPending.q}</div>
+              <div className="cl-ans">
+                <input
+                  className="a-field"
+                  value={clarifyInput}
+                  placeholder={t('ws.clarifyPlaceholder')}
+                  onChange={(e) => setClarifyInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void answerClarify() }}
+                  disabled={busy}
+                  autoFocus
+                />
+                <button className="send" disabled={busy || !clarifyInput.trim()} onClick={() => void answerClarify()}>→</button>
+              </div>
             </div>
           )}
         </div>
-      </div>
-
-      <div className="airail-scroll" ref={scrollRef}>
-        {turns.length === 0 && (
-          <div className="airail-empty">
-            <div className="e-ic">⌁</div>
-            <div className="e-t">ask your database…</div>
-            <div className="e-s mono">用一句话描述你想查的数，回车即可</div>
-          </div>
-        )}
-
-        {turns.map((t, i) =>
-          t.role === 'user' ? (
-            <div className="m-u" key={i}>{t.text}</div>
-          ) : (
-            <div className="m-a" key={i}>
-              {t.isReport && !t.clarify && (
-                <div className={`rpt-pill mono${t.running ? ' live' : ''}`}>
-                  <span className="rp-ic">▦</span>报告模式 · {t.text ?? '生成中…'}
-                </div>
-              )}
-              {t.clarify && (
-                <div className="clarify-box">
-                  <div className="cl-q mono">需要澄清口径（多轮交互）</div>
-                  {t.clarify.map((cq, ci) => (
-                    <div key={ci} className="cl-line">{cq}</div>
-                  ))}
-                </div>
-              )}
-              {t.steps && <ThinkPanel steps={t.steps} />}
-              {t.text && !t.isReport && <div className="ai-txt">{t.text}</div>}
-              {t.text && t.isReport && t.clarify && null}
-              {t.cards && t.cards.map((c, ci) => (
-                <SqlCard
-                  key={ci}
-                  card={c}
-                  question={t.question ?? ''}
-                  busy={busy}
-                  pending={!!t.pending}
-                  dialect={connDialect}
-                  onRun={(sql) => void exec(sql, false, t.question)}
-                  onConfirm={(sql) => void exec(sql, true, t.question)}
-                  onAnalyze={(kind, sql) => void analyze(kind, sql)}
-                />
-              ))}
-              {t.running && (
-                <div className="think running">
-                  <span className="tn">···</span>
-                  <span className="tl">
-                    <i /><i /><i />
-                  </span>
-                </div>
-              )}
-            </div>
-          )
-        )}
-      </div>
-
-      {clarifyPending && (
-        <div className="clarify-input-box">
-          <div className="cl-prompt mono">需回答才能出报告</div>
-          <div className="cl-q-line">{clarifyPending.q}</div>
-          <div className="cl-ans">
-            <input
-              className="a-field"
-              value={clarifyInput}
-              placeholder="回答这一个问题…"
-              onChange={(e) => setClarifyInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void answerClarify() }}
-              disabled={busy}
-              autoFocus
-            />
-            <button className="send" disabled={busy || !clarifyInput.trim()} onClick={() => void answerClarify()}>→</button>
-          </div>
-        </div>
       )}
 
-      <div className="airail-in">
+      {/* 底部 AI 命令中心 */}
+      <div className="ai-bar">
         {ctxTable && (
-          <div className="ctx-chips">
-            <span className="ctx-chip" title="提问时自动附带该表上下文">
-              上下文：{ctxTable}
-              <button className="ctx-x" title="移除上下文" onClick={() => selectTable(null)}>✕</button>
-            </span>
-          </div>
-        )}
-        {sugs.length > 0 && (
-          <div className="sug-strip">
-            {sugs.slice(0, 3).map((s, i) => (
-              <button key={i} className="sug-chip" disabled={busy} onClick={() => void send(s)} title={s}>
-                {s.length > 26 ? `${s.slice(0, 25)}…` : s}
-              </button>
-            ))}
+          <div className="ai-bar-top">
+            <div className="ctx-chips">
+              <span className="ctx-chip" title={t('ws.ctxTip')}>
+                {t('ws.context')}{ctxTable}
+                <button className="ctx-x" title={t('ws.removeContext')} onClick={() => selectTable(null)}>✕</button>
+              </span>
+            </div>
+            {sugs.length > 0 && (
+              <div className="sug-strip">
+                {sugs.slice(0, 3).map((s, i) => (
+                  <button key={i} className="sug-chip" disabled={busy} onClick={() => void send(s)} title={s}>
+                    {s.length > 26 ? `${s.slice(0, 25)}…` : s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
         <div className="ai-compose">
+          <span className="compose-ic mono">▸</span>
           <textarea
             ref={inputRef}
             className="compose-input"
             value={input}
-            placeholder="问你的数据库…"
+            placeholder={t('ws.composePlaceholder')}
             onChange={(e) => { setInput(e.target.value); autoGrow() }}
             onInput={autoGrow}
+            onFocus={() => {}}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -1081,22 +1156,22 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
             disabled={busy}
             rows={1}
           />
-          <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title="发送">→</button>
+          <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title={t('ws.send')}>→</button>
         </div>
         <div className="ai-in-foot">
-          <label className="ai-opt" title="会话安全策略">
-            <span className="ai-opt-l">安全策略</span>
+          <label className="ai-opt" title={t('ws.secPolicyTitle')}>
+            <span className="ai-opt-l">{t('ws.secPolicy')}</span>
             <select
               className="ai-sel"
               value={trustLevel}
               onChange={(e) => {
                 const v = e.target.value as TrustLevel
                 setTrustLevel(v)
-                toastMsg(v === 'all_confirm' ? '安全策略：全部人工确认' : '安全策略：读自动 · 写确认')
+                toastMsg(v === 'all_confirm' ? t('ws.policyAllConfirm') : t('ws.policyReadAuto'))
               }}
             >
-              <option value="read_auto">读自动·写确认</option>
-              <option value="all_confirm">全部人工确认</option>
+              <option value="read_auto">{t('ws.optReadAuto')}</option>
+              <option value="all_confirm">{t('ws.optAllConfirm')}</option>
             </select>
           </label>
           <button
@@ -1104,18 +1179,18 @@ export function AiRail({ width, providerName, modelLabel }: { width: number; pro
             className={`ai-toggle${reasoningEffort !== 'off' ? ' on' : ''}`}
             disabled={!supportsReasoning}
             onClick={() => setReasoningEffort(reasoningEffort === 'off' ? 'medium' : 'off')}
-            title={supportsReasoning ? '开启思考（仅支持推理的模型可用）' : '当前模型不支持思考'}
+            title={supportsReasoning ? t('ws.reasonOnTitle') : t('ws.reasonOffTitle')}
           >
-            <span className="ai-opt-l">开启思考</span>
+            <span className="ai-opt-l">{t('ws.reasonOn')}</span>
             <span className="tg-track"><span className="tg-knob" /></span>
-            {!supportsReasoning && <span className="tg-note">不支持</span>}
+            {!supportsReasoning && <span className="tg-note">{t('ws.unsupported')}</span>}
           </button>
+          <span className="spacer" />
+          <span className="ai-bar-status mono">
+            <b>{providerName ?? '—'}</b> · <b>{modelLabel ?? '—'}</b>
+          </span>
         </div>
       </div>
-      <div className="airail-foot">
-        <span>provider&nbsp;:&nbsp;<b>{providerName ?? '—'}</b></span>
-        <span>模型ID&nbsp;:&nbsp;<b>{modelLabel ?? '—'}</b></span>
-      </div>
-    </aside>
+    </div>
   )
 }

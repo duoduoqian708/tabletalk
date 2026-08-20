@@ -12,7 +12,7 @@
   4. 自动选空闲端口 → 启动 sidecar → 打开浏览器
 
 读取 backend/app.config 的环境变量（TABLETALK_PORT / TABLETALK_DATA_DIR / TABLETALK_HOST），
-默认 127.0.0.1:8765；端口被占用时自动向后探测空闲端口。
+默认 127.0.0.1:8777；端口被占用时自动向后探测空闲端口。
 """
 from __future__ import annotations
 
@@ -104,7 +104,7 @@ def _ensure_frontend() -> None:
 
 # ---------------------------------------------------------------- 4. 启动
 
-def _find_free_port(start: int = 8765) -> int:
+def _find_free_port(start: int = 8777) -> int:
     for port in range(start, start + 20):
         if not _is_used("127.0.0.1", port):
             return port

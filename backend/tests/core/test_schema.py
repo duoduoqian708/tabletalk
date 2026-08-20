@@ -13,6 +13,15 @@ async def test_get_schema(app_state, conn_id):
     assert schema["dialect"] == "sqlite"
 
 
+async def test_schema_has_row_count(app_state, conn_id):
+    schema = await get_schema(app_state, conn_id, refresh=True)
+    by_name = {t["name"]: t for t in schema["tables"]}
+    assert "row_count" in by_name["orders"]
+    assert isinstance(by_name["orders"]["row_count"], int)
+    assert by_name["orders"]["row_count"] >= 1
+
+
+
 async def test_columns_with_pk_fk(app_state, conn_id):
     schema = await get_schema(app_state, conn_id, refresh=True)
     cols = {(c["table"], c["name"]): c for c in schema["columns"]}

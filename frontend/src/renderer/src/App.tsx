@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { HealthStatus, SidecarRuntime } from '@shared/types'
 import { request } from '@renderer/api/client'
 import { useBootstrap } from '@renderer/hooks/useBootstrap'
+import { useI18n } from '@renderer/store/i18n'
 import { useConnections } from '@renderer/store/connections'
 import { useSchema } from '@renderer/store/schema'
 import { AppLayout } from '@renderer/components/AppLayout'
@@ -53,6 +54,7 @@ function Boot({ title, hint }: { title: string; hint: string }): React.JSX.Eleme
 export default function App(): React.JSX.Element {
   const rt = useBootstrap()
   const health = useHealth(rt)
+  const { t } = useI18n()
   const loadConns = useConnections((s) => s.load)
   const currentId = useConnections((s) => s.currentId)
   const loadSchema = useSchema((s) => s.load)
@@ -65,7 +67,7 @@ export default function App(): React.JSX.Element {
     if (currentId) void loadSchema(currentId)
   }, [currentId, loadSchema])
 
-  if (!rt) return <Boot title="connecting to tabletalk" hint="正在连接本地 tabletalk 服务…" />
-  if (!health) return <Boot title="waiting for service" hint="等待本地服务就绪…" />
+  if (!rt) return <Boot title="connecting to tabletalk" hint={t('bootstrap.connectingHint')} />
+  if (!health) return <Boot title="waiting for service" hint={t('bootstrap.readyHint')} />
   return <AppLayout health={health} />
 }
