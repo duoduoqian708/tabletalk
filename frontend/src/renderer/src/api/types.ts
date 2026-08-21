@@ -73,15 +73,44 @@ export interface QueryAllow {
   elapsed_ms: number
   total: number | null
   reason: string
+  reasons?: GateReason[]
   suggestions: string[]
   tables?: string[]
+}
+
+export interface GateReason {
+  rule_id: string
+  message: string
+  message_en?: string
+  objects: string[]
+}
+
+export interface BlastDirect {
+  table: string
+  estimated_rows: number | null
+}
+export interface BlastCascade {
+  table: string
+  via: string | null
+  fk: string | null
+  hops: number
+  has_fk: boolean
+}
+export interface Blast {
+  direct: BlastDirect[]
+  cascade: BlastCascade[]
+  constraints: string[]
+  preview_rows: number | null
 }
 
 export interface QueryReview {
   verdict: 'review'
   tier: string
   reason: string
+  reasons?: GateReason[]
   preview_rows: number | null
+  blast?: Blast | null
+  rollback?: { kind: string; backup_sql: string | null; rollback_sql: string; note: string } | null
   needs_confirm: true
   elapsed_ms: number
 }
@@ -90,6 +119,7 @@ export interface QueryBlock {
   verdict: 'block'
   tier: string
   reason: string
+  reasons?: GateReason[]
   suggestions: string[]
   elapsed_ms: number
 }
@@ -115,6 +145,11 @@ export interface AuditEntry {
   sql: string
   elapsed_ms: number
   report_id?: string
+  reasons?: GateReason[]
+  tables?: string[]
+  schema_version?: number
+  manifest?: any
+  source?: string
 }
 
 export interface TagInfo {

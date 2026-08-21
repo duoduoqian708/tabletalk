@@ -46,14 +46,14 @@ Verdicts: `ALLOW` | `REVIEW` | `BLOCK`. One gate for AI + manual SQL.
 
 ## Knowledge (`app/knowledge/`)
 
-- Lazy build once per process; artifact `data_dir/knowledge-{conn_id}.json` reloaded on restart.
+- Lazy build once per process; artifact `data_dir/knowledge-{conn_id}.db` (SQLite, `storage.SqliteStorage`, `TABLETALK_KB_STORAGE=json` 回退) reloaded on restart;旧 `knowledge-{conn_id}.json` 自动迁移。
 - `route_tables` uses **confirmed tags only** — draft tags don't affect routing until confirmed.
 - Default embedder = `HashingEmbedder` (offline, DIM 256); `api` provider → OpenAI-compatible `/embeddings`.
 
 ## Data dir (`TABLETALK_DATA_DIR`, default `~/.tabletalk`)
 
 `connections.json` · `settings.json` · `tabletalk.token` (chmod 600) · `audit.log` (JSONL) ·
-`chat.db` (SQLite sessions) · `knowledge.json` + `knowledge-{conn_id}.json` · `demo.db`.
+`chat.db` (SQLite sessions) · `knowledge-{conn_id}.db` (SQLite, 旧 `knowledge-{conn_id}.json`/`knowledge.json` 自动迁移) · `demo.db`.
 
 ## Tests
 

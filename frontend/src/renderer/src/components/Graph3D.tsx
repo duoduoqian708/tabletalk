@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MIN_R, colorFor, radiusFor, spherePositions, project } from '@renderer/lib/sphere'
+import { useI18n } from '@renderer/store/i18n'
 
 export interface GraphNode {
   name: string
@@ -16,9 +17,7 @@ interface Props {
   tables: GraphNode[]
   foreignKeys: GraphEdge[]
   onSelectNode: (name: string, x: number, y: number) => void
-  /** 受控选中（表名）；父级关弹窗时传 null 即可清除高亮 */
   selectedName?: string | null
-  /** 点击空白处 / 取消选中时回调，用于父级关闭弹窗 */
   onClearSelection?: () => void
 }
 
@@ -26,15 +25,149 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const propsRef = useRef({ tables, foreignKeys, onSelectNode, onClearSelection })
   propsRef.current = { tables, foreignKeys, onSelectNode, onClearSelection }
-  // 选中态提到 ref，供父级通过 selectedName 反向清除（修复弹窗关闭后高亮泄漏）
   const selectedRef = useRef<number | null>(null)
+  const { t } = useI18n()
 
-  // 父级 selectedName 变化时同步内部选中（null = 清除高亮）
+  // D1: search
+  const [q, setQ] = useState('')
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const [searchFlash, setSearchFlash] = useState<string | null>(null)
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    if (!s) return []
+    const match = tables.filter((tb) => tb.name.toLowerCase().includes(s))
+    // 前缀优先排序
+    match.sort((a, b) => {
+      const ap = a.name.toLowerCase().startsWith(s) ? 0 : 1
+      const bp = b.name.toLowerCase().startsWith(s) ? 0 : 1
+      if (ap !== bp) return ap - bp
+      return a.name.localeCompare(b.name)
+    })
+    return match.slice(0, 8)
+  }, [tables, q])
+
+  // D2: pause
+  const [paused, setPaused] = useState(() => {
+    try {
+      return sessionStorage.getItem('tabletalk-graph-paused') === '1'
+    } catch {
+      return false
+    }
+  })
+  // D4: onboarding
+  const [onboardVisible, setOnboardVisible] = useState(() => {
+    try {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false
+      return !localStorage.getItem('tabletalk-graph-onboarded')
+    } catch {
+      return false
+    }
+  })
+
+  // canvas 内部可变状态的 refs（供 UI 与动画循环共享）
+  const yawRef = useRef(0.55)
+  const pitchRef = useRef(0.35)
+  const zoomRef = useRef(1)
+  const pausedRef = useRef(paused)
+  const searchFlashRef = useRef<string | null>(null)
+  const flashUntilRef = useRef(0)
+  // 飞行状态
+  const flyingRef = useRef<{
+    active: boolean
+    start: number
+    dur: number
+    from: { yaw: number; pitch: number; zoom: number }
+    to: { yaw: number; pitch: number; zoom: number }
+  } | null>(null)
+  // 散开进度
+  const scatterRef = useRef(0)
+  const scatterTargetRef = useRef(0)
+  // onboarding 飞行
+  const onboardRef = useRef<{ active: boolean; start: number; fromYaw: number } | null>(null)
+  const onboardSetterRef = useRef(setOnboardVisible)
+  onboardSetterRef.current = setOnboardVisible
+
+  useEffect(() => {
+    pausedRef.current = paused
+    try {
+      sessionStorage.setItem('tabletalk-graph-paused', paused ? '1' : '0')
+    } catch {}
+  }, [paused])
+
+  useEffect(() => {
+    searchFlashRef.current = searchFlash
+    if (searchFlash) {
+      flashUntilRef.current = performance.now() + 1800
+    }
+  }, [searchFlash])
+
   useEffect(() => {
     selectedRef.current = selectedName
       ? propsRef.current.tables.findIndex((t) => t.name === selectedName)
       : null
+    scatterTargetRef.current = selectedName ? 1 : 0
   }, [selectedName])
+
+  // 触发搜索飞行的函数（暴露给事件处理器）
+  const flyTo = (name: string) => {
+    const idx = propsRef.current.tables.findIndex((tt) => tt.name === name)
+    if (idx < 0) return
+    const n = propsRef.current.tables.length
+    if (n === 0) return
+    const POS = spherePositions(n)
+    const [x, y, z] = POS[idx]
+    // 计算目标 yaw/pitch（把该点转到前方中心）
+    const yawTo = Math.atan2(-x, z)
+    const z1 = -x * Math.sin(yawTo) + z * Math.cos(yawTo)
+    const pitchTo = Math.atan2(y, z1)
+    // 最短 yaw 路径
+    let curYaw = yawRef.current
+    let delta = yawTo - curYaw
+    while (delta > Math.PI) delta -= Math.PI * 2
+    while (delta < -Math.PI) delta += Math.PI * 2
+    const yawFinal = curYaw + delta
+    // pitch 直接差值（范围 -1.2~1.2）
+    let curPitch = pitchRef.current
+    curPitch = Math.max(-1.2, Math.min(1.2, curPitch))
+    const pitchFinal = Math.max(-1.2, Math.min(1.2, pitchTo))
+
+    // 若开启 reduced-motion 则瞬切
+    const reduce = (() => {
+      try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
+    })()
+    if (reduce) {
+      yawRef.current = yawFinal
+      pitchRef.current = pitchFinal
+      zoomRef.current = 1.22
+      setSearchFlash(name)
+      propsRef.current.onSelectNode(name, 0, 0)
+      selectedRef.current = idx
+      scatterTargetRef.current = 1
+      return
+    }
+
+    flyingRef.current = {
+      active: true,
+      start: performance.now(),
+      dur: 980,
+      from: { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current },
+      to: { yaw: yawFinal, pitch: pitchFinal, zoom: 1.28 },
+    }
+    setSearchFlash(name)
+    // 关闭下拉，保持输入
+    setDropdownOpen(false)
+  }
+
+  // C5 可追溯：外部通过 tabletalk:do-locate 触发飞向定位（与搜索同链路）
+  useEffect(() => {
+    const h = (e: Event): void => {
+      const tbl = (e as CustomEvent).detail?.table as string | undefined
+      if (tbl) flyTo(tbl)
+    }
+    window.addEventListener('tabletalk:do-locate', h as unknown as EventListener)
+    return () => window.removeEventListener('tabletalk:do-locate', h as unknown as EventListener)
+  }, [])
 
   useEffect(() => {
     const cv = canvasRef.current
@@ -43,7 +176,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     if (!ctx) return
 
     let W = 0, H = 0, D = 0, dpr = 1
-    // 深空背景：离屏缓存（径向渐变 + 星云），只在 resize 时重建
     let bg: HTMLCanvasElement | null = null
     const buildBg = (): void => {
       const b = document.createElement('canvas')
@@ -83,7 +215,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     const ro = new ResizeObserver(resize)
     ro.observe(cv)
 
-    // 星空：球壳布点一次，帧内随视图做 0.35 倍慢速视差旋转 + 闪烁，形成远近层次
     const STARS = Array.from({ length: 130 }, () => {
       const u = Math.random() * 2 - 1
       const th = Math.random() * Math.PI * 2
@@ -97,21 +228,33 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       }
     })
 
-    let yaw = 0.55, pitch = 0.35, zoom = 1
     let dragging: { x: number; y: number } | null = null
     let downPt: { x: number; y: number } | null = null
     let moved = false
     let velY = 0, velP = 0
     let hover: number | null = null
     let popPending = 0
-    // 按下瞬间锁定目标节点；若按下时图谱还在惯性漂移，本次"点击"仅用于止停，不选中节点
     let downHit: number | null = null
     let downMoving = false
-    // 自转恢复：任何交互即停转（保证命中判定准确），静止约 1.2s 后速度平滑回升，保持星图常转的灵动感
     let auto = 1
     let lastAct = performance.now()
 
-    const rotate = (p: [number, number, number]) => project(p, { yaw, pitch, zoom, D, W, H })
+    // onboarding: 首次进入 4s 飞行（仅首次，未标记已看过时）
+    const shouldOnboard = (() => {
+      try {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false
+        return !localStorage.getItem('tabletalk-graph-onboarded')
+      } catch { return false }
+    })()
+    if (shouldOnboard) {
+      onboardRef.current = { active: true, start: performance.now(), fromYaw: yawRef.current }
+    }
+
+    const isReducedMotion = (): boolean => {
+      try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
+    }
+
+    const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current, D, W, H })
 
     const neighborsOf = (idx: number): Set<number> => {
       const set = new Set<number>([idx])
@@ -124,20 +267,82 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       return set
     }
 
-    // 每帧刷新的几何缓存，供 draw / hit 共享（schema 加载后 tables 会变）
     const geom: { POS: [number, number, number][]; RADII: number[]; COLORS: string[] } = {
       POS: [],
       RADII: [],
       COLORS: []
     }
 
+    let raf = 0
     const draw = (t: number): void => {
+      // 飞行插值
+      const now = performance.now()
+      // onboarding 飞行（4s，自转一周 + 缓慢拉近）
+      if (onboardRef.current?.active) {
+        const el = now - onboardRef.current.start
+        const p = Math.min(1, el / 4000)
+        const ease = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2 // easeInOut
+        yawRef.current = onboardRef.current.fromYaw + ease * Math.PI * 2
+        zoomRef.current = 1 + ease * 0.28
+        if (p >= 1) {
+          onboardRef.current.active = false
+          try { localStorage.setItem('tabletalk-graph-onboarded', '1') } catch {}
+          onboardSetterRef.current(false)
+        }
+      }
+      // 搜索飞行
+      if (flyingRef.current?.active) {
+        const f = flyingRef.current
+        const el = now - f.start
+        const p = Math.min(1, el / f.dur)
+        // easeOutCubic
+        const e = 1 - Math.pow(1 - p, 3)
+        yawRef.current = f.from.yaw + (f.to.yaw - f.from.yaw) * e
+        pitchRef.current = f.from.pitch + (f.to.pitch - f.from.pitch) * e
+        zoomRef.current = f.from.zoom + (f.to.zoom - f.from.zoom) * e
+        if (p >= 1) {
+          flyingRef.current.active = false
+          yawRef.current = f.to.yaw
+          pitchRef.current = f.to.pitch
+          zoomRef.current = f.to.zoom
+          // 飞行结束：选中并点亮（但不弹卡，由上层 onSelectNode 控制；此处仅高亮）
+          const name = searchFlashRef.current
+          if (name) {
+            const idx = propsRef.current.tables.findIndex((tt) => tt.name === name)
+            if (idx >= 0) {
+              selectedRef.current = idx
+              const q = rotate(spherePositions(propsRef.current.tables.length)[idx])
+              // 触发选中回调（定位）
+              // 避免频繁弹窗防抖
+              const nowMs = Date.now()
+              if (nowMs - popPending > 300) {
+                propsRef.current.onSelectNode(name, q.x, q.y)
+                popPending = nowMs
+              }
+            }
+          }
+        }
+      }
+
+      // 散开进度插值（可打断，~1s 缓动）
+      const red = isReducedMotion()
+      if (red) {
+        scatterRef.current = scatterTargetRef.current
+      } else {
+        scatterRef.current += (scatterTargetRef.current - scatterRef.current) * 0.07
+        if (Math.abs(scatterRef.current - scatterTargetRef.current) < 0.001) scatterRef.current = scatterTargetRef.current
+      }
+
+      // 搜索闪烁过期清理
+      if (searchFlashRef.current && now > flashUntilRef.current) {
+        // 不自动清 selectedRef，仅清 flash（点亮颜色恢复普通）
+      }
+
       if (bg) ctx.drawImage(bg, 0, 0, W, H)
       else ctx.clearRect(0, 0, W, H)
 
-      // 星空（视差旋转比数据球慢，制造景深）
-      const cy = Math.cos(yaw * 0.35), sy = Math.sin(yaw * 0.35)
-      const cp = Math.cos(pitch * 0.35), sp = Math.sin(pitch * 0.35)
+      const cy = Math.cos(yawRef.current * 0.35), sy = Math.sin(yawRef.current * 0.35)
+      const cp = Math.cos(pitchRef.current * 0.35), sp = Math.sin(pitchRef.current * 0.35)
       const SS = D * 0.62
       for (const st of STARS) {
         const x1 = st.x * cy + st.z * sy, z1 = -st.x * sy + st.z * cy
@@ -152,44 +357,50 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const tbl = propsRef.current.tables
       const fks = propsRef.current.foreignKeys
 
-      // 每帧按当前 tables 重建几何（schema 异步加载后 tables 会变化）
       const counts = tbl.map((tt) => tt.row_count)
       const minC = counts.length ? Math.min(...counts) : 1
       const maxC = counts.length ? Math.max(...counts) : 1
       const n = tbl.length
-      const POS = spherePositions(n)
+      const basePos = spherePositions(n)
       const RADII = tbl.map((tt) => radiusFor(tt.row_count, minC, maxC))
       const COLORS = tbl.map((tt) => colorFor(tt.name))
+
+      // 散开：对选中节点的直接邻居径向外扩 20-30%
+      const focus = selectedRef.current
+      const hlSet = focus != null ? neighborsOf(focus) : null
+      const scatter = scatterRef.current
+      const POS: [number, number, number][] = basePos.map(([x, y, z], i) => {
+        if (focus != null && hlSet && hlSet.has(i) && i !== focus && scatter > 0.001) {
+          const s = 1 + 0.26 * scatter
+          return [x * s, y * s, z * s]
+        }
+        return [x, y, z]
+      })
+
       geom.POS = POS
       geom.RADII = RADII
       geom.COLORS = COLORS
 
-      // 天球赤道环：极淡参照线，给出"天球"轮廓
       const S = D * 0.42
       ctx.strokeStyle = 'rgba(110,150,190,0.09)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.ellipse(W / 2, H / 2, S, S * Math.abs(Math.cos(pitch)), 0, 0, 7)
+      ctx.ellipse(W / 2, H / 2, S, S * Math.abs(Math.cos(pitchRef.current)), 0, 0, 7)
       ctx.stroke()
 
-      // projBy 按节点下标索引（供边端点/弹窗定位取用）；proj 仅按深度排序决定绘制次序。
-      // 两者必须分开：sort 后 proj[a] 是"深度第 a 位"的节点而非节点 a，混用会导致
-      // 边随旋转每帧接到不同节点对上（点亮错乱的历史 bug 根因）。
       const projBy = tbl.map((_, i) => ({ i, p: rotate(POS[i]) }))
       const proj = [...projBy].sort((a, b) => b.p.z - a.p.z)
 
-      // 高亮锁定在"单击选中"的节点（维持态），不跟随 hover；未选中则全部压暗
-      const focus = selectedRef.current
-      const hlSet = focus != null ? neighborsOf(focus) : null
+      // searchFlash 临时高亮（琥珀色）
+      const flashName = searchFlashRef.current && now < flashUntilRef.current ? searchFlashRef.current : null
+      const flashIdx = flashName ? tbl.findIndex((tt) => tt.name === flashName) : -1
 
-      // 连线：默认保留花色但压暗；仅当某端点为焦点（悬停/选中）节点时点亮
       fks.forEach((fk) => {
         const a = tbl.findIndex((t) => t.name === fk.table)
         const b = tbl.findIndex((t) => t.name === fk.ref_table)
         if (a < 0 || b < 0) return
         const A = projBy[a], B = projBy[b]
         const lit = focus != null && (a === focus || b === focus)
-        // 端点收到圆的边缘外留 2px 间隙，避免连线穿透圆圈
         const ra = Math.max(MIN_R, RADII[a] * Math.min(1.5, A.p.scale))
         const rb = Math.max(MIN_R, RADII[b] * Math.min(1.5, B.p.scale))
         const dx = B.p.x - A.p.x, dy = B.p.y - A.p.y
@@ -209,46 +420,49 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         ctx.beginPath(); ctx.arc(qx, qy, lit ? 2.1 : 1.2, 0, 7); ctx.fill()
       })
 
-      // 节点：彩色柔光光环 + 景深明暗；焦点及其直接邻居点亮
       proj.forEach(({ i, p }) => {
+        const isFlash = i === flashIdx
         const lit = focus != null && (i === focus || (hlSet ? hlSet.has(i) : false))
         const isFocus = focus === i
         const r = Math.max(MIN_R, RADII[i] * Math.min(1.5, p.scale))
-        const depth = Math.max(0, Math.min(1, (p.z + 1) / 2)) // 近=1 远=0
-        if (isFocus) {
+        const depth = Math.max(0, Math.min(1, (p.z + 1) / 2))
+        if (isFlash) {
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.8)
+          g.addColorStop(0, 'rgba(255,180,84,.55)'); g.addColorStop(1, '#ffb45400')
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.8, 0, 7); ctx.fill()
+        } else if (isFocus) {
           const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4)
           g.addColorStop(0, 'rgba(255,255,255,.5)'); g.addColorStop(1, COLORS[i] + '00')
           ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4, 0, 7); ctx.fill()
         }
-        const halo = lit ? 0.3 : 0.08 + depth * 0.12
+        const halo = isFlash ? 0.45 : lit ? 0.3 : 0.08 + depth * 0.12
         const hg = ctx.createRadialGradient(p.x, p.y, r * 0.6, p.x, p.y, r * 2.6)
-        hg.addColorStop(0, COLORS[i] + Math.round(halo * 255).toString(16).padStart(2, '0'))
-        hg.addColorStop(1, COLORS[i] + '00')
+        const col = isFlash ? '#ffb454' : COLORS[i]
+        hg.addColorStop(0, col + Math.round(halo * 255).toString(16).padStart(2, '0'))
+        hg.addColorStop(1, col + '00')
         ctx.fillStyle = hg
         ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.6, 0, 7); ctx.fill()
-        ctx.globalAlpha = lit ? 1 : 0.35 + depth * 0.35
-        ctx.fillStyle = COLORS[i]
+        ctx.globalAlpha = lit || isFlash ? 1 : 0.35 + depth * 0.35
+        ctx.fillStyle = isFlash ? '#ffb454' : COLORS[i]
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill()
-        ctx.lineWidth = (lit || isFocus) ? 2 : 1
-        ctx.strokeStyle = isFocus ? 'rgba(255,255,255,.95)' : lit ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.25)'
+        ctx.lineWidth = (lit || isFocus || isFlash) ? 2 : 1
+        ctx.strokeStyle = isFlash ? 'rgba(255,180,84,.95)' : isFocus ? 'rgba(255,255,255,.95)' : lit ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.25)'
         ctx.stroke()
         const fs = isFocus ? 12.5 : Math.min(12, 9.5 + p.scale * 2.2)
         ctx.font = `600 ${fs}px var(--sans, sans-serif)`
         ctx.textAlign = 'center'
-        ctx.globalAlpha = lit ? 1 : 0.45 + depth * 0.4
-        ctx.fillStyle = lit ? '#fff' : 'rgba(190,205,225,.55)'
+        ctx.globalAlpha = lit || isFlash ? 1 : 0.45 + depth * 0.4
+        ctx.fillStyle = lit || isFlash ? '#fff' : 'rgba(190,205,225,.55)'
         ctx.shadowColor = 'rgba(5,7,13,.9)'; ctx.shadowBlur = 5
         ctx.fillText(tbl[i].name, p.x, p.y - r - 7)
         ctx.shadowBlur = 0
         ctx.globalAlpha = 1
       })
-      requestAnimationFrame(draw)
+      raf = requestAnimationFrame(draw)
     }
-    requestAnimationFrame(draw)
+    raf = requestAnimationFrame(draw)
 
     const hit = (px: number, py: number): number | null => {
-      // 与绘制顺序一致（画家算法：近节点后画，盖在远节点上）。
-      // 按深度 近->远 检测，命中即返回最上层可见节点，避免点到被遮挡的背侧节点。
       const order = propsRef.current.tables
         .map((_, i) => ({ i, p: rotate(geom.POS[i]) }))
         .sort((a, b) => a.p.z - b.p.z)
@@ -264,14 +478,27 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       return { x: e.clientX - rect.left, y: e.clientY - rect.top }
     }
 
+    const cancelFlight = (): void => {
+      if (flyingRef.current?.active) flyingRef.current.active = false
+      if (onboardRef.current?.active) {
+        onboardRef.current.active = false
+        try { localStorage.setItem('tabletalk-graph-onboarded', '1') } catch {}
+        onboardSetterRef.current(false)
+      }
+    }
+
     const onDown = (e: PointerEvent): void => {
-      // 记录按下时是否仍在惯性漂移（先取速度再归零）
       downMoving = Math.abs(velY) + Math.abs(velP) > 0.0006
       dragging = pt(e); downPt = pt(e); moved = false
       velY = 0; velP = 0
-      auto = 0; lastAct = performance.now() // 交互即停转（命中判定需要静止画面）
-      downHit = hit(downPt.x, downPt.y) // 按下瞬间锁定目标：旋转已冻结，起按点即目标点
+      auto = 0; lastAct = performance.now()
+      downHit = hit(downPt.x, downPt.y)
       cv.classList.add('drag'); cv.setPointerCapture(e.pointerId)
+      cancelFlight()
+      // onboarding 任意交互立即打断且永不重放
+      if (onboardRef.current?.active) {
+        try { localStorage.setItem('tabletalk-graph-onboarded', '1') } catch {}
+      }
     }
     const onMove = (e: PointerEvent): void => {
       const p = pt(e)
@@ -284,25 +511,27 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const dx = p.x - dragging.x, dy = p.y - dragging.y
       dragging = p
       if (downPt && (p.x - downPt.x) ** 2 + (p.y - downPt.y) ** 2 > 16) moved = true
-      yaw += dx * 0.006; pitch = Math.max(-1.2, Math.min(1.2, pitch + dy * 0.005))
+      yawRef.current += dx * 0.006; pitchRef.current = Math.max(-1.2, Math.min(1.2, pitchRef.current + dy * 0.005))
       velY = dx * 0.006; velP = dy * 0.005
     }
     const onUp = (): void => {
       dragging = null; cv.classList.remove('drag')
-      if (moved) hover = null // 旋转结束：清掉残存 hover，高亮回到选中态，避免乱亮别的节点
+      if (moved) hover = null
     }
     const onLeave = (): void => { dragging = null; cv.classList.remove('drag'); hover = null }
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
       auto = 0; lastAct = performance.now()
-      zoom = Math.max(0.5, Math.min(2.4, zoom * (e.deltaY < 0 ? 1.09 : 1 / 1.09)))
+      zoomRef.current = Math.max(0.5, Math.min(2.4, zoomRef.current * (e.deltaY < 0 ? 1.09 : 1 / 1.09)))
+      cancelFlight()
     }
     const onClick = (e: MouseEvent): void => {
-      if (moved || downMoving) return // 拖拽旋转结束 / 止停漂移的轻点不触发选中
+      if (moved || downMoving) return
       const i = downHit
-      hover = i // 点击后同步 hover 到实际点中的节点，避免残存 hover 覆盖 selected 导致高亮错位
+      hover = i
       if (i != null) {
         selectedRef.current = i
+        scatterTargetRef.current = 1
         const now = Date.now()
         if (now - popPending > 300) {
           const q = rotate(geom.POS[i])
@@ -310,18 +539,23 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           popPending = now
         }
       } else if (propsRef.current.onClearSelection) {
-        // 点击空白处：关闭弹窗并清除高亮
         propsRef.current.onClearSelection()
+        selectedRef.current = null
+        scatterTargetRef.current = 0
       }
     }
     const tick = setInterval(() => {
       if (!dragging) {
-        // 惯性衰减 + 静止 1.2s 后自转速度缓升（0.02/tick 的淡入，避免猛地重启）
         const idle = performance.now() - lastAct > 1200
         const still = Math.abs(velY) + Math.abs(velP) < 0.0005
-        auto += ((idle && still ? 1 : 0) - auto) * 0.02
-        yaw += 0.0016 * auto + velY
-        pitch += velP
+        const shouldSpin = !pausedRef.current && !flyingRef.current?.active && !onboardRef.current?.active
+        const targetAuto = shouldSpin && idle && still ? 1 : 0
+        auto += (targetAuto - auto) * 0.02
+        if (!isReducedMotion()) {
+          yawRef.current += 0.0016 * auto + velY
+          pitchRef.current += velP
+          pitchRef.current = Math.max(-1.2, Math.min(1.2, pitchRef.current))
+        }
         velY *= 0.93; velP *= 0.93
       }
     }, 16)
@@ -334,7 +568,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     cv.addEventListener('click', onClick)
 
     return () => {
-      ro.disconnect(); clearInterval(tick)
+      ro.disconnect(); clearInterval(tick); cancelAnimationFrame(raf)
       cv.removeEventListener('pointerdown', onDown)
       cv.removeEventListener('pointermove', onMove)
       cv.removeEventListener('pointerup', onUp)
@@ -344,5 +578,77 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     }
   }, [])
 
-  return <canvas ref={canvasRef} className="graph3d" />
+  const handleSearchKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      const name = filtered[0]?.name ?? q.trim()
+      if (name && tables.some((tb) => tb.name === name)) {
+        flyTo(name)
+      } else if (filtered.length > 0) {
+        flyTo(filtered[0].name)
+      }
+    } else if (e.key === 'Escape') {
+      setDropdownOpen(false)
+      ;(e.target as HTMLInputElement).blur()
+    }
+  }
+
+  return (
+    <>
+      <canvas ref={canvasRef} className="graph3d" />
+      {/* 搜索 */}
+      <div className="g3d-search">
+        <input
+          className="g3d-search-input"
+          placeholder={t('graph.searchPlaceholder')}
+          value={q}
+          onChange={(e) => { setQ(e.target.value); setDropdownOpen(true) }}
+          onFocus={() => setDropdownOpen(true)}
+          onBlur={() => setTimeout(() => setDropdownOpen(false), 150)}
+          onKeyDown={handleSearchKey}
+        />
+        {dropdownOpen && q.trim() && (
+          <div className="g3d-search-drop">
+            {filtered.length === 0 ? (
+              <div className="g3d-search-empty">{t('graph.searchNoResult')}</div>
+            ) : (
+              filtered.map((tb) => (
+                <button
+                  key={tb.name}
+                  className="g3d-search-item"
+                  onMouseDown={(ev) => { ev.preventDefault(); flyTo(tb.name) }}
+                >
+                  <span className="mono">{tb.name}</span>
+                  <span className="g3d-search-meta">{tb.row_count} 行 · {tb.column_count} 列</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+      {/* 暂停/恢复 */}
+      <button
+        className={`g3d-pause ${paused ? 'is-paused' : ''}`}
+        title={paused ? t('graph.resume') : t('graph.pause')}
+        onClick={() => setPaused((v) => !v)}
+        aria-label={paused ? t('graph.resume') : t('graph.pause')}
+      >
+        {paused ? '▶' : '⏸'}
+      </button>
+      {/* Onboarding */}
+      {onboardVisible && (
+        <div
+          className="g3d-onboard"
+          onClick={() => {
+            try { localStorage.setItem('tabletalk-graph-onboarded', '1') } catch {}
+            setOnboardVisible(false)
+            if (onboardRef.current) onboardRef.current.active = false
+          }}
+        >
+          <span className="g3d-onboard-dot" />
+          <span>{t('graph.onboarding')}</span>
+          <span className="g3d-onboard-dismiss">✕</span>
+        </div>
+      )}
+    </>
+  )
 }

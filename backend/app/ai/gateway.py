@@ -248,8 +248,14 @@ def resolve_provider_cfg(state, req) -> dict[str, Any]:
     """解析生效的 AI provider 配置：model_id 命中 ai_models 优先，支持逐次覆盖与 reasoning。
 
     loop（查询）与 report（报告）共用，保证两模式对「按对话切模型 + 思考强度」行为一致。
+    B4 严格档：强制 mock，可完全离线（销售演示 30 秒）。
     """
     rs = state.runtime.get()
+    try:
+        if getattr(rs, "privacy_mode", "standard") == "strict":
+            return {"provider": "mock", "base_url": "", "api_key": "", "model": "mock", "temperature": 0.2, "timeout": 30, "reasoning": None}
+    except Exception:
+        pass
     mid = getattr(req, "model_id", None)
     if mid:
         target = next((m for m in rs.ai_models if m.id == mid), None)

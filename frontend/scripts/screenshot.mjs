@@ -62,7 +62,7 @@ try {
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
   await buildAndConfirm(page)
-  await page.waitForSelector('.g-node', { timeout: 20000 })
+  await page.waitForSelector('.graph3d, .g-node', { timeout: 20000 })
 
   await page.click('button:has-text("知识库")')
   await page.waitForSelector('.review', { timeout: 20000 })

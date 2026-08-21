@@ -129,3 +129,25 @@ class MySQLAdapter(DialectAdapter):
         if value is None:
             return "NULL"
         return "'" + str(value).replace("'", "''") + "'"
+
+    async def explain(self, conn: Any, sql: str) -> dict[str, Any]:
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(f"EXPLAIN {sql}")
+                rows = await cur.fetchall()
+                # MySQL EXPLAIN: rows_estimate is in column 9 or 10
+                detail = " | ".join(str(r) for r in rows[:2])[:600]
+                # 估算：取 rows 列的最大值
+                est = None
+                for r in rows:
+                    # MySQL's EXPLAIN output has 'rows' as 9th col (index 9)
+                    try:
+                        # try to find a numeric rows estimate
+                        for v in r:
+                            if isinstance(v, int) and v > 0:
+                                est = v if est is None else max(est, v)
+                    except Exception:
+                        pass
+                return {"estimated_rows": est, "is_scan": "ALL" in detail, "detail": detail}
+        except Exception as e:
+            return {"estimated_rows": None, "is_scan": False, "detail": f"explain failed: {e}"}

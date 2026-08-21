@@ -46,6 +46,7 @@ export interface SettingsPublic {
   gate_rules: Record<string, unknown>
   kb_sample_rows: number
   kb_ai_annotation_samples: boolean
+  privacy_mode: string
   query_max_rows: number
   pool_size: number
   runtime?: { data_dir: string; port: number; auth: string }
@@ -80,6 +81,7 @@ export interface SettingsPatch {
   gate_rules?: Record<string, unknown>
   kb_sample_rows?: number
   kb_ai_annotation_samples?: boolean
+  privacy_mode?: string
   query_max_rows?: number
   pool_size?: number
 }

@@ -10,13 +10,42 @@ export interface AiChatMsg {
   tool_call_id?: string | null
 }
 
+export interface GateReason {
+  rule_id: string
+  message: string
+  message_en?: string
+  objects: string[]
+}
+
+export interface Manifest {
+  tables: string[]
+  kb_docs: number
+  history_turns: number
+  include_data: boolean
+  redactions: string[]
+  mode: string
+  ts: string
+  model: string
+  provider: string
+}
+
+export interface Blast {
+  direct: { table: string; estimated_rows: number | null }[]
+  cascade: { table: string; via: string | null; fk: string | null; hops: number; has_fk: boolean }[]
+  constraints: string[]
+  preview_rows: number | null
+}
+
 export interface AiCard {
   tier: string
   verdict: string
   sql: string
   sub?: string
   preview_rows?: number | null
+  blast?: Blast | null
+  rollback?: { kind: string; backup_sql: string | null; rollback_sql: string; note: string } | null
   reason?: string
+  reasons?: GateReason[]
   /** 循环内 run_query 工具的真实执行结果（含 rows，供前端直接渲染、消除双执行） */
   result?: {
     columns: string[]
@@ -68,6 +97,7 @@ export type AiEvent =
   | { type: 'think'; text: string }
   | { type: 'sql_card'; card: AiCard }
   | { type: 'stage'; stage: string; value?: unknown; tables?: string[]; vec_tables?: string[] }
+  | { type: 'manifest'; manifest: Manifest }
   | { type: 'done' }
   | { type: 'error'; message: string; code?: string }
   // 报告模式事件
@@ -192,7 +222,8 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
       session_id: params.session_id ?? null,
       title: params.title ?? null,
       mode: params.mode ?? null,
-      reasoning: params.reasoning ?? null
+      reasoning: params.reasoning ?? null,
+      model_id: params.model_id ?? null
     })
   })
   if (!res.ok || !res.body) {
@@ -203,15 +234,13 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
     } catch {
       /* 非 JSON 错误体 */
     }
-    // TODO: 测试后删除
-    console.log(`[tabletalk][sse] chat 非 200: ${res.status} ${msg}`)
+    if (import.meta.env.DEV) console.log(`[tabletalk][sse] chat 非 200: ${res.status} ${msg}`)
     throw new Error(msg)
   }
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
   let buf = ''
-  // TODO: 测试后删除——SSE 事件计数（另测 done/error/超时）
   let evCount = 0
   for (;;) {
     const { done, value } = await reader.read()
@@ -227,7 +256,7 @@ export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => v
       try {
         const ev = JSON.parse(payload) as AiEvent
         evCount += 1
-        console.log(`[tabletalk][sse] [${evCount}] type=${ev.type}${ev.type === 'sql_card' ? ' verdict=' + (ev.card?.verdict ?? '?') : ''}${ev.type === 'error' ? ' msg=' + (ev as any).message : ''}`)
+        if (import.meta.env.DEV) console.log(`[tabletalk][sse] [${evCount}] type=${ev.type}${ev.type === 'sql_card' ? ' verdict=' + (ev.card?.verdict ?? '?') : ''}${ev.type === 'error' ? ' msg=' + (ev as any).message : ''}`)
         onEvent(ev)
       } catch {
         /* 跳过非 JSON 事件 */

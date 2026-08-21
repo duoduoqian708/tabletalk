@@ -1,5 +1,7 @@
 # tabletalk
 
+![gate](https://img.shields.io/badge/gate-100%25%20blocked-brightgreen) ![e2e](https://img.shields.io/badge/e2e-68%20checks-brightgreen) ![license](https://img.shields.io/badge/license-Apache--2.0-blue)
+
 AI-first 数据库客户端（自托管 Web）。用自然语言对话查询你的数据库，背后是一套**模型无关的本地安全闸门**：AI 可以写，但永远不能危险地写。
 
 > 曾用名：TABLETALK → tabletalk。现正式命名为 **tabletalk**。
@@ -33,3 +35,13 @@ python3 backend/tabletalk.py        # 一键：建 venv → 装依赖 → 构建
 
 - 架构与决策：`CLAUDE.md`、`backend/AGENTS.md`、`frontend/AGENTS.md`
 - 产品与开发蓝图：`docs/product-handbook/`（定位与原则 / 功能需求详规 / 交互与视觉规范 / 技术架构 / 路线图与验收；方向性论述见 `00-product-direction.md`）
+
+## 开源与许可
+
+- **License**: Apache-2.0 (`LICENSE`) — 宽松企业友好；品牌名与 logo 保留商标权（见 `LICENSE` §6）。
+- **Open-core**: `ee/` 为商业闭源占位（Phase 3 团队网关），`backend/`+`frontend/`+`docs/` 保持 Apache-2.0。
+- **安全闸门**: `backend/app/safety/` 已独立为 `tabletalk-gate`（`gate/` 纯函数、零依赖，`pip install -e gate` 可单独使用），攻击测试集 `backend/tests/attack/cases.yaml` 100 条全拦截（`pytest tests/test_gate_attack.py`）。
+
+## 贡献
+
+见 `CONTRIBUTING.md`、`SECURITY.md`。提交前请跑：`cd backend && .venv/bin/python -m pytest -q` 与 `cd frontend && npm run typecheck && npm run build && npm run e2e:graph3d`（星图像素断言回归）。

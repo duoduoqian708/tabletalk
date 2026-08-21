@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tabletalk-gate"
+version = "0.1.0"
+description = "TableTalk safety gate — pure local rule engine, model-independent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+dependencies = ["sqlglot>=26.0"]
+authors = [{name="TableTalk Contributors"}]
+keywords = ["sql", "safety", "gate", "security"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: Apache Software License",
+  "Intended Audience :: Developers",
+  "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/tabletalk/tabletalk-gate"
+Repository = "https://github.com/tabletalk/tabletalk-gate"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tabletalk_gate*"]

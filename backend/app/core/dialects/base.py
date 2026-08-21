@@ -99,3 +99,7 @@ class DialectAdapter(ABC):
     @abstractmethod
     def quote_literal(self, value: Any) -> str:
         ...
+
+    async def explain(self, conn: Any, sql: str) -> dict[str, Any]:
+        """估算查询成本（行数、上界）。默认不实现，返回空，由调用方降级为不做成本检查。"""
+        return {"estimated_rows": None, "is_scan": False, "detail": "not implemented"}

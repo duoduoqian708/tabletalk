@@ -16,6 +16,8 @@ export interface Turn {
   isReport?: boolean
   /** 报告澄清中：渲染澄清输入，答完作为历史重传 */
   clarify?: string[]
+  /** B1 出网清单 */
+  manifest?: import('@renderer/api/ai').Manifest
 }
 
 export interface Conversation {

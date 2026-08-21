@@ -67,4 +67,35 @@ def test_tier_classification():
 def test_reasons_non_empty_on_block():
     agg, _ = assess("UPDATE orders SET status='paid'")
     assert agg["reasons"]
-    assert any("WHERE" in r for r in agg["reasons"])
+    assert any("WHERE" in (r.get("message") or r.get("message_en") or "") for r in agg["reasons"])
+    # 结构化：每条含 rule_id/message/objects
+    for r in agg["reasons"]:
+        assert "rule_id" in r and r["rule_id"]
+        assert "message" in r and r["message"]
+        assert "objects" in r
+
+def test_reasons_structured_per_rule():
+    checks = [
+        ("UPDATE orders SET status='paid'", Origin.MANUAL, "dml-no-where"),
+        ("UPDATE orders SET status='paid' WHERE id=1", Origin.MANUAL, "dml-confirm"),
+        ("DROP TABLE orders", Origin.MANUAL, "ddl-manual"),
+        ("SELECT * FROM WHERE", Origin.MANUAL, "parse-failure"),
+        ("SELECT * FROM orders; DELETE FROM orders WHERE id=1", Origin.MANUAL, "multi-statement"),
+        ("DROP TABLE orders", Origin.AI, "ddl-ai"),
+    ]
+    for sql, origin, expected_rule in checks:
+        agg, _ = assess(sql, origin)
+        assert any(r["rule_id"] == expected_rule for r in agg["reasons"]), f"{sql} missing {expected_rule} got {agg['reasons']}"
+        for r in agg["reasons"]:
+            assert "objects" in r
+
+    # 读（ALLOW）结构化仍为 list
+    agg3, _ = assess("SELECT * FROM orders")
+    assert isinstance(agg3["reasons"], list)
+
+def test_reason_bilingual():
+    agg, _ = assess("UPDATE orders SET status='paid'")
+    r = agg["reasons"][0]
+    assert r.get("message") and r.get("message_en")
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in r["message"])  # 中文
+    assert all(ord(ch) < 128 or ch.isspace() or ch in "—·" for ch in r["message_en"][:1]) or "Failed" in r["message_en"] or "missing" in r["message_en"].lower()

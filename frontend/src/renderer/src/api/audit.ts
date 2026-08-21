@@ -47,3 +47,17 @@ export async function auditSummary(
   const qs = params.toString()
   return request<AuditSummary>(`/api/v1/audit/summary${qs ? `?${qs}` : ''}`)
 }
+
+export async function auditEgress(connId?: string): Promise<{ total: number; by_model: Record<string, number>; by_mode: Record<string, number>; entries: AuditEntry[] }> {
+  const params = new URLSearchParams()
+  if (connId) params.set('connection', connId)
+  const qs = params.toString()
+  return request(`/api/v1/audit/egress${qs ? `?${qs}` : ''}`)
+}
+
+export async function auditWeekly(connId?: string): Promise<{ weekly: Record<string, number>; top_tables: [string, number][]; anomalies: { ts: string; sql: string; verdict: string }[]; total: number }> {
+  const params = new URLSearchParams()
+  if (connId) params.set('connection', connId)
+  const qs = params.toString()
+  return request(`/api/v1/audit/weekly${qs ? `?${qs}` : ''}`)
+}

@@ -106,3 +106,15 @@ class SQLiteAdapter(DialectAdapter):
         if value is None:
             return "NULL"
         return "'" + str(value).replace("'", "''") + "'"
+
+    async def explain(self, conn: aiosqlite.Connection, sql: str) -> dict[str, Any]:
+        # SQLite EXPLAIN QUERY PLAN 没有行数，需用 SCAN/SEARCH 判别 + 已知 row_count 估算
+        try:
+            cur = await conn.execute(f"EXPLAIN QUERY PLAN {sql}")
+            rows = await cur.fetchall()
+            detail = " | ".join(str(r[3]) for r in rows) if rows else ""
+            is_scan = any("SCAN" in str(r[3]).upper() for r in rows)
+            # 估算：若为 SCAN，则上界为表行数（需调用方提供）；此处返回 is_scan 标记，由调用方结合 row_count 估算
+            return {"estimated_rows": None, "is_scan": is_scan, "detail": detail}
+        except Exception as e:
+            return {"estimated_rows": None, "is_scan": False, "detail": f"explain failed: {e}"}

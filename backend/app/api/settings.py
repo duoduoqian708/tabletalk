@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.state import get_state
@@ -44,7 +44,20 @@ async def get_settings() -> dict:
 
 
 @router.put("/settings")
-async def update_settings(body: SettingsUpdate) -> dict:
+async def update_settings(body: SettingsUpdate, request: Request) -> dict:
+    # E3 统一出口：团队模式下仅 admin 可改组织级模型配置
+    try:
+        from app.state import get_state as _gs
+        if _gs().auth.is_team_mode() and body.ai_models is not None:
+            user = getattr(request.state, "user", None) if hasattr(request, "state") else None
+            role = user.get("role") if isinstance(user, dict) else None
+            if role and role != "admin":
+                from fastapi import HTTPException
+                raise HTTPException(status_code=403, detail="team mode: only admin can update ai_models")
+    except Exception as e:
+        if e.__class__.__name__ == "HTTPException":
+            raise
+        pass
     state = get_state()
     runtime = state.runtime.update(body.model_dump(exclude_none=True))
     await state.pools.rebuild()

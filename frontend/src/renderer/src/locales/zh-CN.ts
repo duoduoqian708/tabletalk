@@ -19,6 +19,7 @@ export const zhCN = {
     workspace: '工作台',
     knowledge: '知识库',
     securityAudit: '安全与审计',
+    approvals: '审批流',
     graph: '◧ 图谱',
     table: '▤ 表格',
     graphTitle: '图谱（⌘1）',
@@ -79,7 +80,12 @@ export const zhCN = {
       llm: '大模型接入',
       skills: '技能广场',
       safety: '安全参数',
+      privacy: '隐私模式',
       general: '通用',
+    },
+    privacy: {
+      sub: '三档隐私 · 本地可信层',
+      desc: '严格仅结构（可离线）/ 标准脱敏聚合（默认）/ 开放明文（逐查询授权），一键离线演示 30 秒可用',
     },
     conn: {
       blocked: '屏蔽 {n} 项',
@@ -345,6 +351,12 @@ export const zhCN = {
     remove: '移出',
     linkModePre: '连线模式：点击目标表完成连接（',
     linkModePost: '）',
+    searchPlaceholder: '搜索表名…',
+    searchNoResult: '无匹配表',
+    pause: '暂停自转',
+    resume: '恢复自转',
+    onboarding: '这是你的数据宇宙——点击任意节点查看',
+    highlightTip: '已定位',
   },
   kb: {
     title: '知识库',
@@ -545,6 +557,19 @@ export const zhCN = {
     ruleDdlDesc: 'AI 只生成 draft_ddl 草稿送编辑器，无 DDL 执行工具',
     ruleParseFailRow: '解析失败兜底',
     ruleParseFailDesc: '解析失败默认按「写」处理，绝不 ALLOW',
+    rule: {
+      'parse-failure': '无法可靠解析该语句，按写操作对待，需确认。',
+      'ddl-ai': 'AI 没有 DDL 工具，无法执行 DDL。请将脚本发送到编辑器手动运行。',
+      'ddl-manual': 'DDL 属于高危操作，需手动强确认。',
+      'dml-no-where': 'UPDATE/DELETE 缺少 WHERE 条件——这会是全表写，已拦截。请加 WHERE 或先 SELECT 确认目标。',
+      'dml-confirm': '写操作需确认。已估算影响行数，请核对后执行。',
+      'tcl-confirm': '事务控制语句需确认。',
+      'read-no-limit': '只读放行。未加 LIMIT，若表很大建议加 LIMIT 控制返回量。',
+      'read-allow': '只读语句，直接放行。',
+      'unknown-fallback': '无法识别的语句，需确认。',
+      'multi-statement': '多语句批处理含非只读操作——MVP 禁止批量写，请拆成单条执行。',
+      'read-only': '该连接标记为只读，禁止写操作与结构变更',
+    },
   },
 }
 

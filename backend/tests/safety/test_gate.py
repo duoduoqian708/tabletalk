@@ -23,6 +23,23 @@ def test_assess_sql(sql, dialect, origin, expected):
     a = assess_sql(sql, sqlglot_dialect_for(dialect), origin)
     assert a.verdict == expected
     assert isinstance(a.to_dict()["tier"], str)
+    # A1：BLOCK/REVIEW 必须有非空结构化 reasons
+    if expected != Verdict.ALLOW:
+        d = a.to_dict()
+        assert isinstance(d["reasons"], list) and len(d["reasons"]) > 0
+        for r in d["reasons"]:
+            assert "rule_id" in r and r["rule_id"]
+            assert "message" in r and r["message"]
+            assert "objects" in r
+
+def test_reason_bilingual_and_objects():
+    a = assess_sql("UPDATE orders SET status='paid'", "sqlite", Origin.MANUAL)
+    r = a.to_dict()["reasons"][0]
+    assert r["rule_id"] == "dml-no-where"
+    assert "WHERE" in r["message"] or "WHERE" in r["message_en"]
+    assert "orders" in r["objects"]
+    # 每条规则双语
+    assert r["message"] and r["message_en"]
 
 
 def test_parse_failure_never_allows():

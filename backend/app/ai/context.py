@@ -70,7 +70,22 @@ async def assemble_context_full(
     query: str = "",
 ) -> tuple[str, dict]:
     """组装给模型的上下文文本 + 沿路产出的阶段元数据（意图/候选表），供前端四步展示。"""
-    schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
+    raw_schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
+    # B3 敏感度路由：敏感表代号化（出网无明文，回显还原）
+    schema = raw_schema
+    sensitive_tables: set[str] = set()
+    try:
+        from app.safety.codify import codify_schema, is_sensitive_table
+        # 收集所有表的敏感状态
+        for t in raw_schema.get("tables", []):
+            tbl = t.get("name", "")
+            if is_sensitive_table(state, conn_id, tbl):
+                sensitive_tables.add(tbl)
+        if sensitive_tables:
+            from app.config import get_env
+            schema = codify_schema(get_env().data_dir, conn_id, raw_schema, sensitive_tables)
+    except Exception:
+        pass
     # 知识库懒构建（每进程一次）：双通道路由依赖表级向量与图谱，未构建时先建
     if not state.knowledge.is_built(conn_id):
         from app.core.schema import sample_values
@@ -115,7 +130,30 @@ async def assemble_context_full(
     else:
         parts.append(summarize(schema, table))
     kb = await state.knowledge.to_context(conn_id, query, table)
+    kb_docs = 0
     if kb:
+        # B3：知识库文本中的敏感表名也代号化
+        if sensitive_tables:
+            try:
+                from app.safety.codify import codify_table
+                from app.config import get_env
+                dd = get_env().data_dir
+                for tbl in list(sensitive_tables):
+                    code = codify_table(dd, conn_id, tbl)
+                    kb = kb.replace(tbl, code)
+            except Exception:
+                pass
         parts.append(kb)
-    meta = {"intent": tags or [], "candidate_tables": routed or [], "vec_tables": vec_tables}
+        kb_docs = kb.count("\n- [")
+    # B3：manifest 的 candidate_tables 也需代号化（出网无明文）
+    manifest_tables = routed or []
+    if sensitive_tables and manifest_tables:
+        try:
+            from app.safety.codify import codify_table
+            from app.config import get_env
+            dd = get_env().data_dir
+            manifest_tables = [codify_table(dd, conn_id, t) if t in sensitive_tables else t for t in manifest_tables]
+        except Exception:
+            pass
+    meta = {"intent": tags or [], "candidate_tables": manifest_tables, "vec_tables": vec_tables, "kb_docs": kb_docs, "sensitive_tables": list(sensitive_tables)}
     return "\n".join(parts), meta

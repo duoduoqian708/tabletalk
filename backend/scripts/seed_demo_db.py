@@ -18,6 +18,8 @@ CREATE TABLE customers (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
+  phone TEXT,
+  id_card TEXT,
   region TEXT
 );
 CREATE TABLE addresses (
@@ -127,12 +129,12 @@ def build_demo_db(path: Path) -> Path:
     conn.executescript(SCHEMA)
     cur = conn.cursor()
 
-    customers = [(i, n, f"{n}@example.com", r) for i, (n, r) in enumerate([
+    customers = [(i, n, f"{n}@example.com", f"13800138{100+i:03d}", f"11010119900101{1000+i:04d}", r) for i, (n, r) in enumerate([
         ("陈嘉禾", "华东"), ("林可欣", "华南"), ("王振宇", "华北"), ("赵晓彤", "西南"),
         ("刘安琪", "华东"), ("周子墨", "华中"), ("孙晨曦", "东北"), ("吴雨桐", "华南"),
         ("郑一帆", "华北"), ("黄诗琪", "西南"),
     ], start=1)]
-    cur.executemany("INSERT INTO customers VALUES (?,?,?,?)", customers)
+    cur.executemany("INSERT INTO customers VALUES (?,?,?,?,?,?)", customers)
 
     addresses = [
         (1, 1, "上海", "200040"), (2, 2, "广州", "510600"), (3, 3, "北京", "100020"),

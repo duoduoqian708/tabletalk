@@ -136,3 +136,19 @@ class PostgresAdapter(DialectAdapter):
         if value is None:
             return "NULL"
         return "'" + str(value).replace("'", "''") + "'"
+
+    async def explain(self, conn: Any, sql: str) -> dict[str, Any]:
+        try:
+            import json
+            async with conn.cursor() as cur:
+                await cur.execute(f"EXPLAIN (FORMAT JSON) {sql}")
+                row = await cur.fetchone()
+                data = row[0] if row else ""
+                if isinstance(data, str):
+                    data = json.loads(data)
+                # data is list with one plan
+                plan = data[0]["Plan"] if isinstance(data, list) else data.get("Plan", {})
+                rows = plan.get("Plan Rows", 0)
+                return {"estimated_rows": int(rows), "is_scan": "Seq Scan" in str(data), "detail": str(data)[:600]}
+        except Exception as e:
+            return {"estimated_rows": None, "is_scan": False, "detail": f"explain failed: {e}"}

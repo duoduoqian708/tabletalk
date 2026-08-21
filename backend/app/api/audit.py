@@ -19,15 +19,78 @@ async def audit_log(
     from_ts: str | None = None,
     to_ts: str | None = None,
     report_id: str | None = None,
+    source: str | None = None,
 ) -> dict:
     state = get_state()
     full = state.audit.list(
         connection=connection, origin=origin, tier=tier, verdict=verdict,
-        from_ts=from_ts, to_ts=to_ts, report_id=report_id,
+        from_ts=from_ts, to_ts=to_ts, report_id=report_id, source=source,
     )
     total = len(full)
     window = full[::-1][offset:offset + limit]  # 最新在前
     return {"count": total, "entries": window}
+
+
+@router.get("/audit/egress")
+async def audit_egress(
+    connection: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
+) -> dict:
+    """出网清单报表：按模型/模式聚合，给合规与审计看。"""
+    state = get_state()
+    full = state.audit.list(verdict="egress", connection=connection, from_ts=from_ts, to_ts=to_ts)
+    by_model: dict[str, int] = {}
+    by_mode: dict[str, int] = {}
+    for e in full:
+        m = (e.get("manifest") or {}).get("model") or e.get("manifest", {}).get("provider") or "unknown"
+        by_model[m] = by_model.get(m, 0) + 1
+        mode = (e.get("manifest") or {}).get("mode") or "unknown"
+        by_mode[mode] = by_mode.get(mode, 0) + 1
+    return {"total": len(full), "by_model": by_model, "by_mode": by_mode, "entries": full[::-1][:100]}
+
+
+@router.get("/audit/weekly")
+async def audit_weekly(
+    connection: str | None = None,
+) -> dict:
+    """周报摘要：按周聚合写操作、Top 表、异常提示。"""
+    state = get_state()
+    full = state.audit.list(connection=connection)
+    # 按周分组（ts 前 10 为 YYYY-MM-DD，取周）
+    from collections import Counter, defaultdict
+    import datetime
+    weekly: dict[str, int] = defaultdict(int)
+    top_tables: Counter = Counter()
+    for e in full:
+        ts = e.get("ts", "")[:10]
+        try:
+            dt = datetime.datetime.strptime(ts, "%Y-%m-%d")
+            week = dt.strftime("%Y-W%V")
+            weekly[week] += 1
+        except Exception:
+            weekly["unknown"] += 1
+        for t in e.get("tables") or []:
+            top_tables[t] += 1
+    # 异常模式：深夜批量 UPDATE（22:00-05:00 且 verdict=review/block 且 tier=dml）
+    anomalies: list[dict] = []
+    for e in full:
+        ts = e.get("ts", "")
+        try:
+            hour = int(ts[11:13]) if len(ts) >= 13 else 12
+            if hour >= 22 or hour <= 5:
+                if e.get("tier") == "dml" and e.get("verdict") in ("review", "block"):
+                    anomalies.append({"ts": ts, "sql": e.get("sql", "")[:80], "verdict": e.get("verdict")})
+                    if len(anomalies) >= 5:
+                        break
+        except Exception:
+            pass
+    return {
+        "weekly": dict(weekly),
+        "top_tables": top_tables.most_common(5),
+        "anomalies": anomalies,
+        "total": len(full),
+    }
 
 
 @router.get("/audit/summary")

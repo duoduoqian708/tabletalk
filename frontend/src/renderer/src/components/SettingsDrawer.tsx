@@ -18,6 +18,7 @@ const SECTIONS = [
   { key: 'llm', ic: '◎', labelKey: 'settings.section.llm' },
   { key: 'skills', ic: '✦', labelKey: 'settings.section.skills' },
   { key: 'safety', ic: '▣', labelKey: 'settings.section.safety' },
+  { key: 'privacy', ic: '◈', labelKey: 'settings.section.privacy' },
   { key: 'general', ic: '⚙', labelKey: 'settings.section.general' }
 ] as const
 
@@ -142,8 +143,27 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
   const [settings, setSettings] = useState<SettingsPublic | null>(null)
   const [maxRows, setMaxRows] = useState<number>(1000)
   const [poolSize, setPoolSize] = useState<number>(3)
+  const [privacyMode, setPrivacyMode] = useState<string>('standard')
   const [runtime, setRuntime] = useState<{ data_dir: string; port: number; auth: string } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [alwaysShowSql, setAlwaysShowSql] = useState<boolean>(() => {
+    try { return localStorage.getItem('tabletalk-sql-fold') === '0' } catch { return false }
+  })
+  const toggleAlwaysShowSql = (v: boolean): void => {
+    setAlwaysShowSql(v)
+    try { localStorage.setItem('tabletalk-sql-fold', v ? '0' : '1') } catch {}
+  }
+  const privacyDesc: Record<string, string> = {
+    strict: '严格：仅结构（敏感表代号化），可完全离线，mock 全链路',
+    standard: '标准：结构 + 脱敏聚合（默认，企业日常）',
+    open: '开放：逐查询授权明文，个人/低敏场景',
+  }
+  async function persistPrivacy(mode: string): Promise<void> {
+    try {
+      await updateSettings({ privacy_mode: mode } as unknown as SettingsPatch)
+      setSettings((s) => (s ? { ...(s as SettingsPublic), privacy_mode: mode } as SettingsPublic : s))
+    } catch {}
+  }
 
   // ---- 大模型：列表 + tab ----
   const [mTab, setMTab] = useState<ModelTab>('chat')
@@ -174,6 +194,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
         setDefaultEmb(s.default_embedding_model)
         setMaxRows(s.query_max_rows ?? 1000)
         setPoolSize(s.pool_size ?? 3)
+        setPrivacyMode(s.privacy_mode ?? 'standard')
         setRuntime(s.runtime ?? null)
       })
       .catch(() => undefined)
@@ -610,6 +631,30 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
               </section>
             )}
 
+            {sec === 'privacy' && (
+              <section className="set-sec">
+                <div className="sec-h">{t('settings.section.privacy')}<span className="sec-s mono">{t('settings.privacy.sub')}</span></div>
+                <div className="sec-d">{t('settings.privacy.desc')}</div>
+                <div className="panel">
+                  <div className="p-h">三档隐私<span className="p-s mono">strict / standard / open</span></div>
+                  <div className="p-b">
+                    <div className="set-row">
+                      <label className="sr-l">隐私模式</label>
+                      <select value={privacyMode} onChange={(e) => { setPrivacyMode(e.target.value); void persistPrivacy(e.target.value) }}>
+                        <option value="strict">严格（纯结构，可离线）</option>
+                        <option value="standard">标准（脱敏聚合）</option>
+                        <option value="open">开放（明文，需逐查询授权）</option>
+                      </select>
+                    </div>
+                    <div className="hint" style={{ marginTop: 8 }}>{privacyDesc[privacyMode]}</div>
+                    {privacyMode === 'strict' && (
+                      <div className="hint" style={{ marginTop: 8, color: 'var(--amber)' }}>严格档：一键离线（自动切 mock，禁用云端），销售演示 30 秒离线可用</div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            )}
+
             {sec === 'skills' && (
               <section className="set-sec">
                 <SkillPlaza />
@@ -633,6 +678,18 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                         <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.maxConn')}</span><input type="text" value={String(poolSize)} readOnly /></div>
                       </>
                     )}
+                  </div>
+                </div>
+                <div className="panel" style={{ marginTop: 12 }}>
+                  <div className="p-h">SQL 显示<span className="p-s mono">开发者视角</span></div>
+                  <div className="p-b">
+                    <div className="set-row inline">
+                      <span className="sr-l">始终显示 SQL</span>
+                      <label className="tg" style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={alwaysShowSql} onChange={(e) => toggleAlwaysShowSql(e.target.checked)} style={{ marginRight: 6 }} />
+                        <span>{alwaysShowSql ? '已开启（默认展开）' : '默认折叠为“显示查询”'}</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               </section>

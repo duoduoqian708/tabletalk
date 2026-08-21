@@ -87,7 +87,7 @@ def suggest_safe(sql: str, sqlglot_dialect: str, origin: Origin) -> list[str]:
             suggests.append("拆成单条语句逐条执行。")
         elif r.rule == "parse-failure":
             suggests.append("检查 SQL 语法，或拆成单条语句。")
-    return suggests or assessment.reasons[:1]
+    return suggests or [r.get("message", "") for r in assessment.reasons[:1]]
 
 
 def sqlglot_dialect_for(dialect: str) -> str:

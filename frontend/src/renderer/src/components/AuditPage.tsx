@@ -5,7 +5,7 @@ import type { AuditEntry } from '@renderer/api/types'
 import { VerdictBadge } from './VerdictBadge'
 import { useI18n } from '@renderer/store/i18n'
 
-type View = 'exception' | 'all' | 'report'
+type View = 'exception' | 'all' | 'report' | 'egress' | 'weekly'
 type Range = 'today' | '7d' | '30d' | 'all'
 type ExFilter = '' | 'block' | 'review' | 'ai_ddl'
 
@@ -64,6 +64,8 @@ export function AuditPage(): React.JSX.Element {
   const [view, setView] = useState<View>('exception')
   const [range, setRange] = useState<Range>('all')
   const [summary, setSummary] = useState<AuditSummary | null>(null)
+  const [egress, setEgress] = useState<{ total: number; by_model: Record<string, number>; by_mode: Record<string, number>; entries: AuditEntry[] } | null>(null)
+  const [weekly, setWeekly] = useState<{ weekly: Record<string, number>; top_tables: [string, number][]; anomalies: { ts: string; sql: string; verdict: string }[]; total: number } | null>(null)
   const [entries, setEntries] = useState<AuditEntry[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -86,6 +88,16 @@ export function AuditPage(): React.JSX.Element {
       .catch(() => undefined)
     return () => { alive = false }
   }, [currentId, connName, range])
+
+  // 出网/周报：视图切换时加载
+  useEffect(() => {
+    if (!currentId) return
+    if (view === 'egress') {
+      void import('@renderer/api/audit').then(({ auditEgress }) => auditEgress(connName).then((r) => setEgress(r as any)).catch(()=>{}))
+    } else if (view === 'weekly') {
+      void import('@renderer/api/audit').then(({ auditWeekly }) => auditWeekly(connName).then((r) => setWeekly(r as any)).catch(()=>{}))
+    }
+  }, [currentId, connName, view])
 
   // 流水：视图 / 过滤 / 范围 / 翻页变化时载入
   useEffect(() => {
@@ -251,6 +263,8 @@ export function AuditPage(): React.JSX.Element {
           <button className={`seg-b${view === 'exception' ? ' on' : ''}`} onClick={() => { setView('exception'); resetPage() }}>{t('audit.viewException')}</button>
           <button className={`seg-b${view === 'all' ? ' on' : ''}`} onClick={() => { setView('all'); resetPage() }}>{t('audit.viewAll')}</button>
           <button className={`seg-b${view === 'report' ? ' on' : ''}`} onClick={() => { setView('report'); resetPage() }}>{t('audit.viewReport')}</button>
+          <button className={`seg-b${view === 'egress' ? ' on' : ''}`} onClick={() => { setView('egress'); resetPage() }}>出网</button>
+          <button className={`seg-b${view === 'weekly' ? ' on' : ''}`} onClick={() => { setView('weekly'); resetPage() }}>周报</button>
         </div>
         <div className="spacer" />
         <select className="rs-input" value={range} onChange={(e) => { setRange(e.target.value as Range); resetPage() }}>
@@ -310,7 +324,37 @@ export function AuditPage(): React.JSX.Element {
         </div>
       )}
 
-      {!loading && !error && view !== 'report' && (
+      {!loading && !error && view === 'egress' && (
+        <div className="panel">
+          <div className="egress-head mono">出网总计 {egress?.total ?? 0} · 按模型 {Object.entries(egress?.by_model ?? {}).map(([k,v])=>`${k}:${v}`).join(' ')} · 按模式 {Object.entries(egress?.by_mode ?? {}).map(([k,v])=>`${k}:${v}`).join(' ')}</div>
+          {egress?.entries?.slice(0,20).map((e, idx)=> (
+            <div key={idx} className="egress-row mono" style={{padding:'6px 0', borderTop:'1px solid var(--line)'}}>
+              <span>{e.ts}</span> <span style={{marginLeft:8}}>{e.manifest?.model || e.manifest?.provider || '—'}</span> <span style={{marginLeft:8}}>{(e.manifest?.tables || []).join(', ')}</span>
+            </div>
+          ))}
+          {(!egress || egress.total===0) && <div className="mpage-empty">暂无出网记录</div>}
+        </div>
+      )}
+
+      {!loading && !error && view === 'weekly' && (
+        <div className="panel">
+          <div className="weekly-head mono">周报 · 总计 {weekly?.total ?? 0} 条</div>
+          <div className="weekly-sec">
+            <div className="weekly-label mono">按周</div>
+            <div>{Object.entries(weekly?.weekly ?? {}).map(([w,c])=> <span key={w} className="weekly-chip mono">{w}:{c} </span>)}</div>
+          </div>
+          <div className="weekly-sec">
+            <div className="weekly-label mono">Top 表</div>
+            <div>{(weekly?.top_tables ?? []).map(([tbl,c])=> <span key={tbl} className="weekly-chip mono">{tbl}:{c} </span>)}</div>
+          </div>
+          <div className="weekly-sec">
+            <div className="weekly-label mono">异常（深夜批量）</div>
+            {weekly?.anomalies?.length ? weekly.anomalies.map((a,i)=> <div key={i} className="weekly-anomaly mono">{a.ts} · {a.sql}</div>) : <span className="weekly-empty mono">无异常</span>}
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && view !== 'report' && view !== 'egress' && view !== 'weekly' && (
         <div className="panel">
           {pageItems.length === 0 && <div className="mpage-empty">{view === 'exception' ? `${t('audit.empty')} 🎉` : t('audit.noRecords')}</div>}
           <table className="audit-table">
@@ -338,6 +382,24 @@ export function AuditPage(): React.JSX.Element {
                               {t('audit.metaTier')} {r.tier} · {t('audit.metaOrigin')} {r.origin} · {t('audit.metaStatus')} {r.status}
                               {r.report_id ? ` · ${t('audit.reportLabel')} ${r.report_id}` : ''}
                             </div>
+                            {r.reasons && r.reasons.length > 0 && (
+                              <div className="exp-reasons">
+                                {r.reasons.map((rr, idx) => {
+                                  const key = `gate.rule.${rr.rule_id}`
+                                  const tr = t(key)
+                                  const msg = tr !== key ? tr : rr.message
+                                  return (
+                                    <div key={idx} className="exp-reason">
+                                      <span className="exp-rule mono">{rr.rule_id}</span>
+                                      <span className="exp-msg">{msg}</span>
+                                      {rr.objects && rr.objects.length > 0 && (
+                                        <span className="exp-objs mono">· {rr.objects.join(', ')}</span>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
                             <div className="exp-note">{t('audit.metaNote')}</div>
                           </div>
                         </td>

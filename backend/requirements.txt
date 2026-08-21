@@ -9,3 +9,5 @@ httpx==0.28.1
 python-dotenv==1.0.1
 numpy==2.5.2
 sqlite-vec==0.1.9
+# local gate package (F2 独立开源)
+../gate

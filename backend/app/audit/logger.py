@@ -1,4 +1,4 @@
-"""审计日志：每条执行语句 JSONL 追加记录。未来企业版可同步到团队审计服务器。"""
+"""审计日志：每条执行语句 JSONL 追加记录（A1 可解释：reasons 结构化）。"""
 from __future__ import annotations
 
 import json
@@ -6,6 +6,9 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+
+
+SCHEMA_VERSION = 1
 
 
 class AuditLogger:
@@ -25,9 +28,13 @@ class AuditLogger:
         elapsed_ms: float | None = None,
         report_id: str | None = None,
         source: str | None = None,
+        reasons: list[dict[str, Any]] | None = None,
+        tables: list[str] | None = None,
+        manifest: dict[str, Any] | None = None,
     ) -> None:
         first_line = " ".join((sql or "").strip().splitlines()[:1])[:200]
         entry: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "connection": connection,
             "origin": origin,
@@ -42,6 +49,17 @@ class AuditLogger:
             entry["report_id"] = report_id
         if source is not None:
             entry["source"] = source
+        if reasons is not None:
+            if verdict in ("block", "review") and len(reasons) == 0:
+                entry["reasons"] = [{"rule_id": "unknown", "message": status or verdict, "message_en": status or verdict, "objects": []}]
+            else:
+                entry["reasons"] = reasons
+        elif verdict in ("block", "review"):
+            entry["reasons"] = [{"rule_id": "unknown", "message": status or verdict, "message_en": status or verdict, "objects": []}]
+        if tables is not None:
+            entry["tables"] = tables
+        if manifest is not None:
+            entry["manifest"] = manifest
         line = json.dumps(entry, ensure_ascii=False)
         with self._lock:
             try:

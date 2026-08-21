@@ -22,8 +22,10 @@ from app.ai import gateway as gw
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.context import (
     assemble_context,
+    assemble_context_full,
     report_system_prompt,
 )
+from app.ai.manifest import build_manifest
 from app.ai.intent import classify_tags
 from app.ai.dto import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS_READONLY, execute_tool
@@ -200,9 +202,10 @@ async def _run_report_query(
     if assessment.verdict != Verdict.ALLOW:
         state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier=assessment.tier.value,
                         verdict="block", status="报告查询拦截", sql=sql, report_id=report_id,
-                        source="report")
+                        source="report", reasons=assessment.reasons, tables=assessment.tables)
         return {"ok": False, "result_id": result_id, "sql": sql,
-                "reason": "; ".join(assessment.reasons)}
+                "reason": "; ".join(r.get("message", "") for r in assessment.reasons),
+                "reasons": assessment.reasons}
     from app.core.query import execute as run_query
 
     res = await run_query(state, conn_id, sql, max_rows=200)   # 报告聚合，200 行足够
@@ -223,10 +226,6 @@ async def _run_report_query(
 
 async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
     """报告流 generator。前端持有中间态；后端无状态，靠 messages 历史 replay。"""
-    # TODO: 测试后删除
-    from app.debuglog import dbg
-    dbg("[report] start conn=", req.connection_id, "model_id=", req.model_id,
-        "reasoning=", req.reasoning)
     provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"
@@ -241,10 +240,42 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
             pass
 
     user_text = _last_user_text(_normalize_messages(req.messages))
-    context = await assemble_context(state, conn_id, req.table, user_text)
+    context, meta = await assemble_context_full(state, conn_id, req.table, user_text)
 
+    # B1 出网清单（报告模式：强制 include_data=true，聚合结果）
+    try:
+        provider_cfg_for_manifest = resolve_provider_cfg(state, req)
+        # 报告的 messages 包含历史 + 当前上下文
+        _msgs_for_manifest = [
+            {"role": "system", "content": report_system_prompt()},
+            {"role": "system", "content": context},
+            *_normalize_messages(req.messages),
+        ]
+        manifest = build_manifest(state, conn_id, meta, _msgs_for_manifest, True, provider_cfg_for_manifest, context)
+        # 审计（经 logger 加锁，不带 report_id 避免与章节计数混淆）
+        try:
+            conn_name = state.connections.get(conn_id).name
+        except Exception:
+            conn_name = conn_id
+        try:
+            state.audit.log(
+                connection=conn_name,
+                origin="ai",
+                tier="read",
+                verdict="egress",
+                status="egress",
+                sql=f"[manifest] {user_text[:60]}",
+                source="egress",
+                tables=manifest.get("tables"),
+                manifest=manifest,
+            )
+        except Exception:
+            pass
+    except Exception:
+        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": "standard", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "", "provider": "mock"}
     yield {"type": "report_start", "connection": conn_id,
            "report_id": report_id, "snapshot_ts": snapshot_ts}
+    yield {"type": "manifest", "manifest": manifest}
 
     # ---- 1) 澄清：若历史里没有澄清问答且问题欠定义 → yield clarify 后结束本轮 ----
     answered = _extract_clarify_answers(_normalize_messages(req.messages))

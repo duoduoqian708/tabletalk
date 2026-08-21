@@ -52,6 +52,15 @@ class EmbeddingModelConfig:
 
 
 @dataclass
+class Policy:
+    version: int = 1
+    updated_by: str = "system"
+    updated_at: str = ""
+    table_rules: dict[str, str] = field(default_factory=dict)  # table -> allow/review/block
+    pattern_rules: list[dict[str, Any]] = field(default_factory=list)  # [{id, description, action}]
+    threshold: int = 100000  # 影响行数阈值（默认 10 万）
+
+@dataclass
 class RuntimeSettings:
     # ---- 文本模型：多配置 + 默认 ----
     ai_models: list[ModelConfig] = field(default_factory=list)
@@ -62,10 +71,13 @@ class RuntimeSettings:
     # ---- 闸门参数 ----
     gate_review_threshold: int = 1000
     gate_rules: dict[str, bool] = field(default_factory=dict)
+    policy: Policy = field(default_factory=Policy)
     # ---- 知识库 ----
     kb_sample_rows: int = 10
     kb_ai_annotation_samples: bool = False
     kb_sync_minutes: int = 30   # 知识库增量同步周期（分钟；0=关闭）
+    # ---- 隐私三档（B4） ----
+    privacy_mode: str = "standard"  # strict | standard | open
     # ---- 查询 / 连接池（运行时可覆盖 env 默认值）----
     query_max_rows: int = 1000
     pool_size: int = 3
@@ -141,9 +153,11 @@ class RuntimeSettings:
             "default_embedding_model": self.default_embedding_model,
             "gate_review_threshold": self.gate_review_threshold,
             "gate_rules": self.gate_rules,
+            "policy": asdict(self.policy),
             "kb_sample_rows": self.kb_sample_rows,
             "kb_ai_annotation_samples": self.kb_ai_annotation_samples,
             "kb_sync_minutes": self.kb_sync_minutes,
+            "privacy_mode": self.privacy_mode,
             "query_max_rows": self.query_max_rows,
             "pool_size": self.pool_size,
             "runtime": {
@@ -195,8 +209,10 @@ _PERSISTED_KEYS = {
     "default_embedding_model",
     "gate_review_threshold",
     "gate_rules",
+    "policy",
     "kb_sample_rows",
     "kb_ai_annotation_samples",
+    "privacy_mode",
     "query_max_rows",
     "pool_size",
     # 旧字段兼容
@@ -272,8 +288,10 @@ class SettingsStore:
         self._data: dict[str, Any] = {
             "gate_review_threshold": env.gate_review_threshold,
             "gate_rules": {},
+            "policy": asdict(Policy()),
             "kb_sample_rows": env.kb_sample_rows,
             "kb_ai_annotation_samples": env.kb_ai_annotation_samples,
+            "privacy_mode": "standard",
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
         }
@@ -381,6 +399,17 @@ class SettingsStore:
         _migrate_from_legacy(data)
         ai_models = [ModelConfig(**m) for m in data.get("ai_models", [])]
         emb_models = [EmbeddingModelConfig(**m) for m in data.get("embedding_models", [])]
+        pm = data.get("privacy_mode", "standard")
+        if pm not in ("strict", "standard", "open"):
+            pm = "standard"
+        pol_data = data.get("policy", {})
+        if isinstance(pol_data, dict):
+            try:
+                policy = Policy(**{k: v for k, v in pol_data.items() if k in Policy.__dataclass_fields__})
+            except Exception:
+                policy = Policy()
+        else:
+            policy = Policy()
         return RuntimeSettings(
             ai_models=ai_models,
             default_ai_model=data.get("default_ai_model", ""),
@@ -388,8 +417,10 @@ class SettingsStore:
             default_embedding_model=data.get("default_embedding_model", ""),
             gate_review_threshold=data.get("gate_review_threshold", 1000),
             gate_rules=data.get("gate_rules", {}),
+            policy=policy,
             kb_sample_rows=data.get("kb_sample_rows", 10),
             kb_ai_annotation_samples=data.get("kb_ai_annotation_samples", False),
+            privacy_mode=pm,
             query_max_rows=data.get("query_max_rows", 1000),
             pool_size=data.get("pool_size", 3),
         )
@@ -451,9 +482,13 @@ class SettingsStore:
             # 其他字段
             for k in ("gate_review_threshold", "gate_rules",
                       "kb_sample_rows", "kb_ai_annotation_samples",
+                      "privacy_mode",
                       "query_max_rows", "pool_size"):
                 if k in patch:
                     v = patch[k]
+                    if k == "privacy_mode":
+                        if v not in ("strict", "standard", "open"):
+                            continue
                     if k in ("query_max_rows", "pool_size"):
                         # 防御：非整数 / 非正整数不写入，保留既有值（env 默认值）
                         try:
@@ -464,6 +499,27 @@ class SettingsStore:
                             continue
                         v = vi
                     self._data[k] = v
+            if "policy" in patch:
+                pol = patch["policy"]
+                if isinstance(pol, dict):
+                    cur = self._data.get("policy", {})
+                    if isinstance(cur, dict):
+                        pol = {**pol}
+                        pol["version"] = int(cur.get("version", 0)) + 1
+                    else:
+                        pol["version"] = 1
+                    pol["updated_at"] = __import__("time").strftime("%Y-%m-%dT%H:%M:%S")
+                    if "updated_by" not in pol or not pol["updated_by"]:
+                        pol["updated_by"] = "api"
+                    # 同步 gate_review_threshold 与 policy.threshold
+                    if "threshold" in pol:
+                        try:
+                            thr = int(pol["threshold"])
+                            if thr >= 1:
+                                self._data["gate_review_threshold"] = thr
+                        except (TypeError, ValueError):
+                            pass
+                    self._data["policy"] = pol
 
         self._ensure_builtins()
         self.save()

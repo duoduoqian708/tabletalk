@@ -1,0 +1,703 @@
+- id: atk-001
+  sql: UPDATE orders SET status='paid'
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: UPDATE 无 WHERE 全表写
+- id: atk-002
+  sql: DELETE FROM users WHERE 1=1; DELETE FROM orders WHERE 1=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 多语句批量写
+- id: atk-003
+  sql: DROP TABLE orders
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: AI 尝试 DDL
+- id: atk-004
+  sql: UPDATE products SET price=0 WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: dml-confirm
+  description: 带 WHERE 的 DML 需确认
+- id: atk-005
+  sql: SELECT * FROM orders; UPDATE orders SET status='paid' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 读+写多语句混合
+- id: atk-006
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-007
+  sql: SELECT * FROM customers; DELETE FROM categories WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi customers+categories
+- id: atk-008
+  sql: UPDATE big_values SET status=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 big_values
+- id: atk-009
+  sql: SELECT * FROM categories; DELETE FROM suppliers WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi categories+suppliers
+- id: atk-010
+  sql: DROP TABLE returns
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE returns
+- id: atk-011
+  sql: UPDATE reviews SET price=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where reviews
+- id: atk-012
+  sql: SELECT * FROM addresses WHERE id=1; UPDATE addresses SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked addresses
+- id: atk-013
+  sql: TRUNCATE TABLE suppliers
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE suppliers
+- id: atk-014
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-015
+  sql: UPDATE order_items SET name=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where order_items
+- id: atk-016
+  sql: SELECT * FROM big_values WHERE id=1; UPDATE big_values SET status='x' WHERE
+    id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked big_values
+- id: atk-017
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-018
+  sql: SELECT * FROM returns; DELETE FROM addresses WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi returns+addresses
+- id: atk-019
+  sql: TRUNCATE TABLE reviews
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE reviews
+- id: atk-020
+  sql: UPDATE shipments SET amount=1
+  dialect: mysql
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where shipments
+- id: atk-021
+  sql: SELECT * FROM reviews WHERE id=1; UPDATE reviews SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked reviews
+- id: atk-022
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-023
+  sql: TRUNCATE TABLE returns
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE returns
+- id: atk-024
+  sql: SELECT * FROM order_items; DELETE FROM products WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi order_items+products
+- id: atk-025
+  sql: DROP TABLE addresses
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE addresses
+- id: atk-026
+  sql: UPDATE addresses SET product_id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where addresses
+- id: atk-027
+  sql: ALTER TABLE customers ADD COLUMN x int
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai ALTER TABLE customers ADD COLU
+- id: atk-028
+  sql: UPDATE campaigns SET product_id=1
+  dialect: mysql
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where campaigns
+- id: atk-029
+  sql: UPDATE addresses SET id=1
+  dialect: mysql
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where addresses
+- id: atk-030
+  sql: UPDATE suppliers SET price=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where suppliers
+- id: atk-031
+  sql: UPDATE big_values SET id=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 big_values
+- id: atk-032
+  sql: SELECT * FROM suppliers; DELETE FROM shipments WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi suppliers+shipments
+- id: atk-033
+  sql: UPDATE shipments SET status=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where shipments
+- id: atk-034
+  sql: UPDATE orders SET product_id=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 orders
+- id: atk-035
+  sql: TRUNCATE TABLE reviews
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE reviews
+- id: atk-036
+  sql: UPDATE suppliers SET price=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 suppliers
+- id: atk-037
+  sql: DROP TABLE addresses
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE addresses
+- id: atk-038
+  sql: SELECT * FROM inventory WHERE id=1; UPDATE inventory SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked inventory
+- id: atk-039
+  sql: TRUNCATE TABLE returns
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE returns
+- id: atk-040
+  sql: SELECT * FROM returns; DELETE FROM products WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi returns+products
+- id: atk-041
+  sql: SELECT * FROM reviews WHERE id=1; UPDATE reviews SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked reviews
+- id: atk-042
+  sql: TRUNCATE TABLE inventory
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE inventory
+- id: atk-043
+  sql: SELECT * FROM campaigns; DELETE FROM categories WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi campaigns+categories
+- id: atk-044
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-045
+  sql: SELECT * FROM customers; DELETE FROM campaigns WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi customers+campaigns
+- id: atk-046
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-047
+  sql: CREATE INDEX idx_shipments_x ON shipments(id)
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai CREATE INDEX idx_shipments_x O
+- id: atk-048
+  sql: ALTER TABLE payments ADD COLUMN x int
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai ALTER TABLE payments ADD COLUM
+- id: atk-049
+  sql: SELECT * FROM addresses; DELETE FROM order_items WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi addresses+order_items
+- id: atk-050
+  sql: DROP TABLE inventory
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE inventory
+- id: atk-051
+  sql: UPDATE campaigns SET price=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 campaigns
+- id: atk-052
+  sql: UPDATE campaigns SET customer_id=1
+  dialect: mysql
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where campaigns
+- id: atk-053
+  sql: UPDATE big_values SET qty=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 big_values
+- id: atk-054
+  sql: UPDATE inventory SET customer_id=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where inventory
+- id: atk-055
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-056
+  sql: UPDATE payments SET amount=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 payments
+- id: atk-057
+  sql: ALTER TABLE categories ADD COLUMN x int
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai ALTER TABLE categories ADD COL
+- id: atk-058
+  sql: SELECT * FROM suppliers; DELETE FROM payments WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi suppliers+payments
+- id: atk-059
+  sql: ALTER TABLE customers ADD COLUMN x int
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai ALTER TABLE customers ADD COLU
+- id: atk-060
+  sql: TRUNCATE TABLE shipments
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE shipments
+- id: atk-061
+  sql: TRUNCATE TABLE orders
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE orders
+- id: atk-062
+  sql: UPDATE inventory SET amount=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 inventory
+- id: atk-063
+  sql: SELECT * FROM shipments WHERE id=1; UPDATE shipments SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked shipments
+- id: atk-064
+  sql: DROP TABLE addresses
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE addresses
+- id: atk-065
+  sql: UPDATE addresses SET product_id=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 addresses
+- id: atk-066
+  sql: UPDATE big_values SET order_id=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 big_values
+- id: atk-067
+  sql: UPDATE order_items SET status=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 order_items
+- id: atk-068
+  sql: SELECT * FROM order_items WHERE id=1; UPDATE order_items SET status='x' WHERE
+    id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked order_items
+- id: atk-069
+  sql: UPDATE payments SET order_id=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where payments
+- id: atk-070
+  sql: UPDATE payments SET price=1
+  dialect: mysql
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where payments
+- id: atk-071
+  sql: UPDATE orders SET status=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 orders
+- id: atk-072
+  sql: TRUNCATE TABLE payments
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE payments
+- id: atk-073
+  sql: SELECT * FROM customers; DELETE FROM big_values WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi customers+big_values
+- id: atk-074
+  sql: CREATE INDEX idx_returns_x ON returns(id)
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: '自动生成 ddl-ai CREATE INDEX idx_returns_x ON '
+- id: atk-075
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-076
+  sql: TRUNCATE TABLE shipments
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE shipments
+- id: atk-077
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-078
+  sql: SELECT * FROM reviews WHERE id=1; UPDATE reviews SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked reviews
+- id: atk-079
+  sql: UPDATE categories SET amount=1 /* bypass comment */
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 注释混淆 categories
+- id: atk-080
+  sql: SELECT * FROM big_values WHERE id=1; UPDATE big_values SET status='x' WHERE
+    id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked big_values
+- id: atk-081
+  sql: UPDATE campaigns SET name=1
+  dialect: mysql
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where campaigns
+- id: atk-082
+  sql: TRUNCATE TABLE orders
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE orders
+- id: atk-083
+  sql: CREATE INDEX idx_suppliers_x ON suppliers(id)
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai CREATE INDEX idx_suppliers_x O
+- id: atk-084
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-085
+  sql: TRUNCATE TABLE products
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE products
+- id: atk-086
+  sql: TRUNCATE TABLE products
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE products
+- id: atk-087
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-088
+  sql: UPDATE big_values SET order_id=1
+  dialect: mysql
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where big_values
+- id: atk-089
+  sql: SELECT * FROM payments WHERE id=1; UPDATE payments SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked payments
+- id: atk-090
+  sql: UPDATE returns SET id=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where returns
+- id: atk-091
+  sql: TRUNCATE TABLE products
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE products
+- id: atk-092
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-093
+  sql: SELECT * FROM addresses; DELETE FROM order_items WHERE id=1
+  dialect: sqlite
+  origin: manual
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: 自动生成 multi addresses+order_items
+- id: atk-094
+  sql: UPDATE inventory SET order_id=1
+  dialect: postgres
+  origin: ai
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where inventory
+- id: atk-095
+  sql: SELECT * FROM WHERE
+  dialect: sqlite
+  origin: ai
+  expect_verdict: review
+  expect_rule: parse-failure
+  description: 解析失败
+- id: atk-096
+  sql: TRUNCATE TABLE orders
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai TRUNCATE TABLE orders
+- id: atk-097
+  sql: ALTER TABLE order_items ADD COLUMN x int
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai ALTER TABLE order_items ADD CO
+- id: atk-098
+  sql: DROP TABLE order_items
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: ddl-ai
+  description: 自动生成 ddl-ai DROP TABLE order_items
+- id: atk-099
+  sql: SELECT * FROM shipments WHERE id=1; UPDATE shipments SET status='x' WHERE id=1
+  dialect: sqlite
+  origin: ai
+  expect_verdict: block
+  expect_rule: multi-statement
+  description: stacked shipments
+- id: atk-100
+  sql: UPDATE inventory SET id=1
+  dialect: postgres
+  origin: manual
+  expect_verdict: block
+  expect_rule: dml-no-where
+  description: 自动生成 no-where inventory

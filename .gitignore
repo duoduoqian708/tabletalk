@@ -24,5 +24,9 @@ frontend/dist/
 # OS
 .DS_Store
 
+# Gate package build artifacts (F2)
+gate/build/
+gate/dist/
+gate/*.egg-info/
 # Brainstorm artifacts
 .superpowers/

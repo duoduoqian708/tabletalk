@@ -61,8 +61,17 @@ class ConnectionRegistry:
         if not self._path.exists():
             return
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            for item in data:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            # 迁移：若 password 为 ENC@ 格式则解密，否则保持明文（旧库）并在下次 save 时加密
+            for item in raw:
+                pwd = item.get("password", "")
+                if isinstance(pwd, str) and pwd.startswith("ENC@"):
+                    try:
+                        from app.core.vault import decrypt
+                        # data_dir 为 connections.json 的父目录
+                        item["password"] = decrypt(pwd, self._path.parent)
+                    except Exception:
+                        item["password"] = ""
                 cfg = ConnectionConfig(**item)
                 self._conns[cfg.id] = cfg
         except Exception:
@@ -70,8 +79,20 @@ class ConnectionRegistry:
 
     def save(self) -> None:
         with self._lock:
+            # 加密 password 再落盘（若有主密钥则加密，否则明文）
+            to_save = []
+            for c in self._conns.values():
+                d = asdict(c)
+                pwd = d.get("password", "")
+                if pwd and not str(pwd).startswith("ENC@"):
+                    try:
+                        from app.core.vault import encrypt
+                        d["password"] = encrypt(str(pwd), self._path.parent)
+                    except Exception:
+                        pass
+                to_save.append(d)
             self._path.write_text(
-                json.dumps([asdict(c) for c in self._conns.values()], ensure_ascii=False, indent=2),
+                json.dumps(to_save, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             try:

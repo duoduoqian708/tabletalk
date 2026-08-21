@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { Suspense, useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { useSchema } from '@renderer/store/schema'
 import { useResults } from '@renderer/store/results'
@@ -11,6 +11,7 @@ import {
   setSessionTitle,
   type AiCard,
   type AiEvent,
+  type Manifest,
   type ReportSectionResult,
   type ReasoningEffort
 } from '@renderer/api/ai'
@@ -19,6 +20,8 @@ import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
 import { useI18n } from '@renderer/store/i18n'
+import { getRuntime } from '@renderer/api/client'
+const CmEditor = React.lazy(() => import('./CmEditor').then((m) => ({ default: m.CmEditor })))
 
 /* ---------- 推理步骤状态机 ---------- */
 type StepStatus = string
@@ -120,6 +123,139 @@ function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
   )
 }
 
+/* ---------- 出网清单（B1） ---------- */
+function ManifestView({ manifest }: { manifest: Manifest }): React.JSX.Element {
+  const { locale } = useI18n()
+  const [open, setOpen] = useState(false)
+  const human = (() => {
+    const nTables = manifest.tables.length
+    const kb = manifest.kb_docs
+    const hist = manifest.history_turns
+    const rows = manifest.include_data ? (locale.startsWith('zh') ? '含聚合行数据' : 'with rows') : (locale.startsWith('zh') ? '无行数据' : 'no rows')
+    const modeMap: Record<string, string> = locale.startsWith('zh') ? { strict: '严格', standard: '标准', open: '开放' } : { strict: 'strict', standard: 'standard', open: 'open' }
+    const mode = modeMap[manifest.mode] ?? manifest.mode
+    if (locale.startsWith('zh')) {
+      return `${nTables} 张表结构 · ${kb} 条知识库注释 · ${hist} 轮历史 · ${rows} · ${mode}模式`
+    }
+    return `${nTables} tables · ${kb} KB docs · ${hist} turns · ${rows} · ${mode}`
+  })()
+  return (
+    <div className={`manifest ${open ? 'open' : ''}`}>
+      <div className="manifest-head" onClick={() => setOpen((o) => !o)}>
+        <span className="manifest-ic">◈</span>
+        <span className="manifest-title">{locale.startsWith('zh') ? '出网清单' : 'Egress Manifest'}</span>
+        <span className="manifest-human mono">{human}</span>
+        <span className="spacer" />
+        <span className="manifest-arrow">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div className="manifest-body mono">
+          <div className="manifest-row"><span>tables</span><span>{manifest.tables.length ? manifest.tables.join(', ') : '—'}</span></div>
+          <div className="manifest-row"><span>kb_docs</span><span>{manifest.kb_docs}</span></div>
+          <div className="manifest-row"><span>history</span><span>{manifest.history_turns}</span></div>
+          <div className="manifest-row"><span>include_data</span><span>{String(manifest.include_data)}</span></div>
+          <div className="manifest-row"><span>mode</span><span>{manifest.mode}</span></div>
+          <div className="manifest-row"><span>model</span><span>{manifest.model || '—'} ({manifest.provider})</span></div>
+          <div className="manifest-row"><span>ts</span><span>{manifest.ts}</span></div>
+          {manifest.redactions.length > 0 && <div className="manifest-row"><span>redactions</span><span>{manifest.redactions.join(', ')}</span></div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ---------- 爆炸半径（A3） ---------- */
+function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): React.JSX.Element {
+  const { locale } = useI18n()
+  const [open, setOpen] = useState(true)
+  if (!blast) return <></>
+  const hasCascade = blast.cascade.length > 0
+  return (
+    <div className={`blast ${open ? 'open' : ''}`}>
+      <div className="blast-head" onClick={() => setOpen((o) => !o)}>
+        <span className="blast-ic">◎</span>
+        <span className="blast-title">{locale.startsWith('zh') ? '爆炸半径' : 'Blast Radius'}</span>
+        <span className="blast-human mono">
+          {blast.direct.map((d) => `${d.table}${d.estimated_rows != null ? `≈${d.estimated_rows}行` : ''}`).join(', ')}
+          {hasCascade ? ` → ${blast.cascade.map((c) => c.table).join(', ')}` : locale.startsWith('zh') ? ' · 无级联' : ' · no cascade'}
+        </span>
+        <span className="spacer" />
+        <span className="blast-arrow">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div className="blast-body">
+          <div className="blast-sec">
+            <div className="blast-label mono">direct</div>
+            <div className="blast-chips">
+              {blast.direct.map((d) => (
+                <span key={d.table} className="blast-chip mono">
+                  {d.table}
+                  {d.estimated_rows != null && <span className="blast-est">≈{d.estimated_rows}</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+          {hasCascade ? (
+            <div className="blast-sec">
+              <div className="blast-label mono">cascade · FK 2跳</div>
+              <div className="blast-path">
+                {blast.cascade.map((c, idx) => (
+                  <span key={c.table} className="blast-hop">
+                    {idx > 0 && <span className="blast-arrow2">→</span>}
+                    <span className={`blast-chip small ${c.has_fk ? 'fk' : 'no-fk'}`}>{c.table}</span>
+                    {c.fk && <span className="blast-fk mono">{c.fk}</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="blast-sec"><span className="blast-empty mono">{locale.startsWith('zh') ? '无 FK 级联' : 'no FK cascade'}</span></div>
+          )}
+          {blast.constraints.length > 0 && (
+            <div className="blast-sec">
+              <div className="blast-label mono">constraints</div>
+              <div className="blast-constraints mono">{blast.constraints.join(' · ')}</div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RollbackView({ rollback }: { rollback: any }): React.JSX.Element {
+  const { locale } = useI18n()
+  const [open, setOpen] = useState(true)
+  if (!rollback) return <></>
+  return (
+    <div className={`rollback ${open ? 'open' : ''}`}>
+      <div className="rollback-head" onClick={() => setOpen((o) => !o)}>
+        <span className="rollback-ic">↩</span>
+        <span className="rollback-title">{locale.startsWith('zh') ? '回滚剧本' : 'Rollback'}</span>
+        <span className="rollback-note mono">{rollback.note}</span>
+        <span className="spacer" />
+        <span className="rollback-arrow">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div className="rollback-body mono">
+          {rollback.backup_sql && (
+            <div className="rollback-sec">
+              <div className="rollback-label">备份导出</div>
+              <pre className="rollback-code">{rollback.backup_sql}</pre>
+              <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.backup_sql)}>复制</button>
+            </div>
+          )}
+          <div className="rollback-sec">
+            <div className="rollback-label">回滚语句</div>
+            <pre className="rollback-code">{rollback.rollback_sql}</pre>
+            <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.rollback_sql)}>复制</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ---------- SQL 高亮 ---------- */
 function highlightSql(sql: string): string {
   const esc = (s: string): string =>
@@ -185,15 +321,18 @@ function SqlEditor({ value, onChange, highlighted }: {
     </div>
   )
 }
+void highlightSql
+void SqlEditor
 
 /* ---------- SQL 卡片（常驻可编辑编辑器） ---------- */
-function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onAnalyze }: {
+function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, onConfirm, onAnalyze }: {
   card: AiCard
   question: string
   busy: boolean
   /** 安全评估尚未完成：徽标显示"评估中"，按钮禁用 */
   pending: boolean
   dialect: string
+  connectionId: string | null
   onRun: (sql: string) => void
   onConfirm: (sql: string) => void
   onAnalyze: (kind: 'explain' | 'optimize' | 'risk', sql: string) => void
@@ -234,9 +373,52 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
     { key: 'optimize', label: 'ws.analyzeOptimize' },
     { key: 'risk', label: 'ws.analyzeRisk' }
   ]
+  // C4 SQL 折叠（默认折叠，记忆在 localStorage）
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('tabletalk-sql-fold') !== '0' } catch { return true }
+  })
+  const toggleFold = (): void => {
+    const v = !collapsed
+    setCollapsed(v)
+    try { localStorage.setItem('tabletalk-sql-fold', v ? '1' : '0') } catch {}
+  }
+  // C5 可追溯：表引用（优先 card 显式 tables，其次 blast，其次 sql 解析）
+  const traceTables: string[] = (() => {
+    const fromCard = (card as unknown as { tables?: string[] }).tables
+    if (Array.isArray(fromCard) && fromCard.length) return fromCard
+    if (card.blast?.direct?.length) return card.blast.direct.map((d) => d.table)
+    // 回退：从 sql 粗提取 FROM/JOIN 后的表名
+    const m = draft.match(/\b(?:FROM|JOIN)\s+["'`]?(\w+)["'`]?/gi)
+    if (m) return m.map((s) => s.split(/\s+/).pop()?.replace(/["'`]/g, "") ?? "").filter(Boolean).slice(0, 4)
+    return []
+  })()
+  // C6 保存为常用问题
+  const [saved, setSaved] = useState(false)
+  const handleSave = async (): Promise<void> => {
+    if (!connectionId) return
+    const rt = getRuntime()
+    if (!rt?.token) return
+    try {
+      const r = await fetch(`/api/v1/questions/${connectionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token },
+        body: JSON.stringify({ question, sql: draft, tables: traceTables }),
+      })
+      if (r.ok) setSaved(true)
+    } catch {}
+  }
+  // C3 追问链（本地规则生成 2-3 个）
+  const followUps: string[] = (() => {
+    const tbl = traceTables[0] || ''
+    const arr: string[] = []
+    if (tbl) arr.push(`按周统计${tbl}呢？`)
+    arr.push('只看最近7天的呢？')
+    arr.push('加个同比对比呢？')
+    return arr.slice(0, 3)
+  })()
 
   return (
-    <div className={`sql ${cls}${pending ? ' pending' : ''}`}>
+    <div className={`sql ${cls}${pending ? ' pending' : ''} ${collapsed ? 'folded' : ''}`}>
       {flash && <span className="gate-flash" />}
       <div className="c-h">
         {pending ? <span className="fst eval">{t('ws.evaluating')}</span> : <CardBadge card={card} />}
@@ -247,27 +429,97 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
           ))}
         </span>
         <span className="st">{card.sub ?? ''}</span>
+        <button className="fold-toggle mono" onClick={toggleFold} title={collapsed ? '展开 SQL' : '折叠 SQL'}>
+          {collapsed ? '显示查询' : '收起'}
+        </button>
       </div>
 
-      <SqlEditor
-        value={draft}
-        onChange={setDraft}
-        highlighted={highlightSql(draft)}
-      />
+      {!collapsed && (
+        <Suspense fallback={<div className="cm-loading mono">加载编辑器…</div>}>
+          <CmEditor
+            value={draft}
+            onChange={setDraft}
+            connectionId={connectionId}
+            dialect={dialect}
+          />
+        </Suspense>
+      )}
+      {collapsed && (
+        <div className="sql-folded mono" onClick={toggleFold} title="点击展开 SQL">
+          显示查询 · {draft.split('\n')[0].slice(0, 42)}…
+        </div>
+      )}
+      {/* C5 可追溯 */}
+      {traceTables.length > 0 && (
+        <div className="trace-row">
+          <span className="trace-label mono">引用表</span>
+          <span className="trace-chips">
+            {traceTables.map((tbl) => (
+              <button key={tbl} className="trace-chip mono" title="跳至星图定位" onClick={() => {
+                // 触发星图定位：通过全局事件或直接操作？简化：派发自定义事件
+                window.dispatchEvent(new CustomEvent('tabletalk:locate', { detail: { table: tbl } }))
+              }}>{tbl}</button>
+            ))}
+          </span>
+        </div>
+      )}
 
       <div className="c-f">
         {card.verdict === 'review' && !card.executed && (
           <div className="risk-panel">
             <div className="rp-title">{t('ws.riskTitle')}</div>
             <div className="rp-line mono">{t('ws.riskScope', { n: card.preview_rows ?? '?' })}</div>
-            {card.reason && <div className="rp-line">{card.reason}</div>}
+            {card.blast && <BlastView blast={card.blast as unknown as import('@renderer/api/ai').Blast} />}
+            {(card as unknown as { rollback: any }).rollback && <RollbackView rollback={(card as unknown as { rollback: any }).rollback} />}
+            {(card.reasons && card.reasons.length > 0 ? card.reasons : card.reason ? [{ rule_id: 'legacy', message: card.reason, message_en: card.reason, objects: [] }] : []).map((r, idx) => {
+              const { locale } = useI18n.getState()
+              const tr = t(`gate.rule.${(r as any).rule_id}`)
+              const msg = tr !== `gate.rule.${(r as any).rule_id}` ? tr : (locale === 'en-US' && (r as any).message_en ? (r as any).message_en : (r as any).message)
+              const objs = (r as any).objects as string[] | undefined
+              return (
+                <div key={idx} className="rp-line rp-reason">
+                  <span className="rp-rule mono">{(r as any).rule_id}</span>
+                  <span className="rp-msg">{msg}</span>
+                  {objs && objs.length > 0 && <span className="rp-objs mono">· {objs.join(', ')}</span>}
+                </div>
+              )
+            })}
+            <div className="rp-line">
+              <button className="mini-btn" onClick={async () => {
+                const rt = getRuntime()
+                if (!rt?.token || !connectionId) return
+                const r = await fetch(`/api/v1/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token }, body: JSON.stringify({ connection_id: connectionId, sql: draft }) })
+                if (r.ok) alert('已转审批')
+                else {
+                  const j = await r.json().catch(()=>({detail:'failed'}))
+                  alert(j.detail || '转审批失败（仅团队模式）')
+                }
+              }}>转审批</button>
+            </div>
             <div className="rp-line dim">{t('ws.riskNote')}</div>
           </div>
         )}
         {card.executed && (
           <div className="exec-stamp mono">{t('ws.execStamp', { n: card.affected ?? 0 })}</div>
         )}
-        {blocked && <span className="c-p warn">{t('ws.blocked')}</span>}
+        {blocked && (
+          <div className="risk-panel block">
+            <div className="rp-title">{t('ws.blocked')}</div>
+            {(card.reasons && card.reasons.length > 0 ? card.reasons : card.reason ? [{ rule_id: 'legacy', message: card.reason, message_en: card.reason, objects: [] }] : []).map((r, idx) => {
+              const { locale } = useI18n.getState()
+              const tr = t(`gate.rule.${(r as any).rule_id}`)
+              const msg = tr !== `gate.rule.${(r as any).rule_id}` ? tr : (locale === 'en-US' && (r as any).message_en ? (r as any).message_en : (r as any).message)
+              const objs = (r as any).objects as string[] | undefined
+              return (
+                <div key={idx} className="rp-line rp-reason">
+                  <span className="rp-rule mono">{(r as any).rule_id}</span>
+                  <span className="rp-msg">{msg}</span>
+                  {objs && objs.length > 0 && <span className="rp-objs mono">· {objs.join(', ')}</span>}
+                </div>
+              )
+            })}
+          </div>
+        )}
         <span className="spacer" />
         {!pending && !card.executed && (
           <button className="btn gho" disabled={formatting} onClick={() => void handleFormat()}>
@@ -287,6 +539,17 @@ function SqlCard({ card, question, busy, pending, dialect, onRun, onConfirm, onA
         ) : (
           <span className="c-r">{t('ws.draftManual')}</span>
         )}
+      </div>
+      {/* C3 追问链 + C6 保存 */}
+      <div className="card-foot">
+        <div className="follow-ups">
+          {followUps.map((q, idx) => (
+            <button key={idx} className="follow-chip" onClick={() => window.dispatchEvent(new CustomEvent('tabletalk:followup', { detail: { question: q } }))}>{q}</button>
+          ))}
+        </div>
+        <button className={`save-chip ${saved ? 'saved' : ''}`} onClick={() => void handleSave()} disabled={saved}>
+          {saved ? '✓ 已保存' : '☆ 保存为常用问题'}
+        </button>
       </div>
     </div>
   )
@@ -337,8 +600,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     return () => { alive = false }
   }, [])
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
-  // 按对话选模型：null=跟随默认模型（模型在接入侧统一配置）
-  const [modelId] = useState<string | null>(null)
+  // 按对话选模型：跟随默认模型（可通过设置切换）
+  const modelId = settings?.default_ai_model ?? null
   // 图谱"问 AI 这张表"→ 预填输入并聚焦
   const askDraft = useUi((s) => s.askDraft)
   const setAskDraft = useUi((s) => s.setAskDraft)
@@ -349,6 +612,49 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [askDraft, setAskDraft])
+  // C2 猜你想问：基于已确认领域标签本地生成 3-5 个（零模型调用）
+  const [dynamicSugs, setDynamicSugs] = useState<string[] | null>(null)
+  useEffect(() => {
+    if (!currentId) { setDynamicSugs(null); return }
+    let alive = true
+    void (async () => {
+      try {
+        const rt = getRuntime()
+        if (!rt?.token) return
+        const r = await fetch(`/api/v1/knowledge/${currentId}/tags`, { headers: { 'X-TableTalk-Token': rt.token } })
+        if (!r.ok) return
+        const j = await r.json() as { library: { name: string; status: string }[]; tables: Record<string, string[]> }
+        const confirmed = j.library.filter((t) => t.status === 'confirmed').map((t) => t.name)
+        if (confirmed.length === 0 || !alive) { setDynamicSugs(null); return }
+        // 为每个标签找一张代表表
+        const tableForTag: Record<string, string> = {}
+        for (const [tbl, tags] of Object.entries(j.tables)) {
+          for (const tg of tags as string[]) {
+            if (confirmed.includes(tg) && !tableForTag[tg]) tableForTag[tg] = tbl
+          }
+        }
+        const locale = useI18n.getState().locale
+        const isZh = locale.startsWith('zh')
+        const sugs: string[] = []
+        for (const tg of confirmed.slice(0, 5)) {
+          const tbl = tableForTag[tg] || ''
+          if (isZh) {
+            if (tbl) sugs.push(`按月统计${tg}的${tbl}数量`)
+            else sugs.push(`查询${tg}相关的数据`)
+          } else {
+            if (tbl) sugs.push(`Monthly count of ${tbl} for ${tg}`)
+            else sugs.push(`Query ${tg} data`)
+          }
+        }
+        // 补齐到 3 条
+        while (sugs.length < 3) {
+          sugs.push(isZh ? `统计${confirmed[0]}的趋势` : `Trend of ${confirmed[0]}`)
+        }
+        if (alive) setDynamicSugs(sugs.slice(0, 5))
+      } catch {}
+    })()
+    return () => { alive = false }
+  }, [currentId])
   // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
   const effectiveModel = settings?.ai_models.find(
     (m) => m.id === (modelId ?? settings.default_ai_model),
@@ -563,6 +869,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     setSugs([])
     if (inputRef.current) inputRef.current.style.height = 'auto'
     setBusy(true)
+    setPanelOpen(true)
     const isFirstQ = userCountRef.current === 0
     userCountRef.current += 1
     if (isFirstQ) firstQRef.current = q
@@ -602,6 +909,16 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
           model_id: modelId ?? undefined,
         },
         (ev: AiEvent) => {
+          if ((ev as unknown as { type: string }).type === 'manifest') {
+            const m = (ev as unknown as { manifest: Manifest }).manifest
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last?.role === 'ai') (last as unknown as { manifest: Manifest }).manifest = m
+              return n
+            })
+            return
+          }
           // ---- 报告模式事件分流 ----
           if (ev.type === 'report_start') {
             setReport({
@@ -782,6 +1099,16 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     }
   }
 
+  // C3 追问链：卡片内的 followup 事件直接续问（不重建会话）
+  useEffect(() => {
+    const h = (e: Event): void => {
+      const q = (e as CustomEvent).detail?.question as string | undefined
+      if (q) void send(q)
+    }
+    window.addEventListener('tabletalk:followup', h as unknown as EventListener)
+    return () => window.removeEventListener('tabletalk:followup', h as unknown as EventListener)
+  }, [currentId, selectedTable])
+
   /** 澄清回答：把澄清问答作为 system(clarify)+user 消息重传，resume 报告流。 */
   async function answerClarify(): Promise<void> {
     const pending = clarifyPending
@@ -815,6 +1142,16 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
           mode: 'report'
         },
         (ev: AiEvent) => {
+          if ((ev as unknown as { type: string }).type === 'manifest') {
+            const m = (ev as unknown as { manifest: Manifest }).manifest
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last?.role === 'ai') (last as unknown as { manifest: Manifest }).manifest = m
+              return n
+            })
+            return
+          }
           // 复用 send 的报告事件处理：内联一份精简版（避免回调耦合）
           if (ev.type === 'report_start') {
             setReport({
@@ -1027,10 +1364,10 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                 </div>
                 <div className="ah-sub">{t('ws.heroSub')}</div>
                 <div className="ah-sugs">
-                  {SUGGESTIONS.map((q) => (
-                    <button key={q} className="ah-sug" disabled={busy} onClick={() => void send(t(q))}>
+                  {(dynamicSugs ?? SUGGESTIONS.map((k) => t(k))).map((q) => (
+                    <button key={q} className="ah-sug" disabled={busy} onClick={() => void send(q as string)}>
                       <span className="as-ic mono">▸</span>
-                      <span className="as-t">{t(q)}</span>
+                      <span className="as-t">{q as string}</span>
                     </button>
                   ))}
                 </div>
@@ -1067,6 +1404,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                     </div>
                   )}
                   {turn.steps && <ThinkPanel steps={turn.steps} />}
+                  {turn.manifest && <ManifestView manifest={turn.manifest} />}
                   {turn.text && !turn.isReport && <div className="ai-txt">{turn.text}</div>}
                   {turn.text && turn.isReport && turn.clarify && null}
                   {turn.cards && turn.cards.map((c, ci) => (
@@ -1077,6 +1415,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                       busy={busy}
                       pending={!!turn.pending}
                       dialect={connDialect}
+                      connectionId={currentId}
                       onRun={(sql) => void exec(sql, false, turn.question)}
                       onConfirm={(sql) => void exec(sql, true, turn.question)}
                       onAnalyze={(kind, sql) => void analyze(kind, sql)}
@@ -1146,7 +1485,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             placeholder={t('ws.composePlaceholder')}
             onChange={(e) => { setInput(e.target.value); autoGrow() }}
             onInput={autoGrow}
-            onFocus={() => {}}
+            onFocus={() => setPanelOpen(true)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()

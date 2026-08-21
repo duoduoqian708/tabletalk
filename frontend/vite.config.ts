@@ -16,6 +16,13 @@ export default defineConfig({
   },
   build: {
     outDir: '../../dist',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          codemirror: ['@codemirror/view', '@codemirror/state', '@codemirror/lang-sql', '@codemirror/lint', '@codemirror/autocomplete', '@codemirror/commands'],
+        },
+      },
+    },
   }
 })

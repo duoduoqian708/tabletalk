@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-**Backend implemented & fully tested (2026-08, 116 pytest + 8 docker-gated integration). Frontend is a Web SPA (React + Vite, served by the backend at `/`) — all milestones M2–M4 done & verified: connections/schema tree/results table, M3 AI chat rail (SSE) + report mode, M4 audit page / settings drawer / knowledge graph; M5 packaging/polish is the remaining loose end.** Product & architecture decisions below were locked during brainstorming and the backend implements them. Verified 2026-08 against the actual source.
+**Backend implemented & fully tested (2026-08, 243 pytest + 8 docker-gated integration). Frontend is a Web SPA (React + Vite, served by the backend at `/`) — all milestones M2–M4 done & verified: connections/schema tree/results table, M3 AI chat rail (SSE) + report mode, M4 audit page / settings drawer / knowledge graph; M5 packaging/polish is the remaining loose end.** Product & architecture decisions below were locked during brainstorming and the backend implements them. Verified 2026-08 against the actual source.
 
 ## Product
 
@@ -24,7 +24,7 @@ cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python scripts/seed_demo_db.py     # 生成 ~/.tabletalk/demo.db 演示库
 .venv/bin/python -m uvicorn app.main:app --reload --port 8777   # 启动 sidecar
-.venv/bin/python -m pytest -q                # 全量测试（116 个，SQLite）
+.venv/bin/python -m pytest -q                # 全量测试（243 个，SQLite）
 docker compose -f docker-compose.integration.yml up -d && TABLETALK_INTEGRATION=1 .venv/bin/python -m pytest tests/integration -v   # PG/MySQL 集成测试（Docker 门控）
 ```
 
@@ -77,7 +77,7 @@ backend/app/
     intent.py        意图→领域标签分类 (LLM 判定 / mock 关键词回退)
     tools.py         5 tools: get_schema/describe_table/run_query/run_dml + draft_ddl(draft-only); all DB ops pass the gate
     loop.py          function-calling chat loop, SSE events (think/sql_card/text/done)
-  knowledge/         KnowledgeBase v4: 结构+向量(哈希/API)+图谱(FK+值重叠)+注释草案+确认+**领域标签(每库一套,draft→确认)+标签驱动路由(意图→标签→表+FK2步→候选子图)**；persist 到 knowledge-{conn_id}.json
+  knowledge/         KnowledgeBase v4: 结构+向量(哈希/API)+图谱(FK+值重叠)+注释草案+确认+**领域标签(每库一套,draft→确认)+标签驱动路由(意图→标签→表+FK2步→候选子图)**；persist 到 knowledge-{conn_id}.db (SQLite: docs/edges/tags/table_tags/embeddings/table_embeddings/meta + vec0 虚表，旧 JSON 自动迁移，TABLETALK_KB_STORAGE=json 可回退)
   audit/logger.py    JSONL audit log per executed statement
 ```
 
@@ -115,7 +115,7 @@ These were confirmed by reading `app/` source in 2026-08 and differ from plausib
 - **`cloud` provider with no `api_key` silently degrades to `mock`.** `gateway.is_effective_mock` treats `cloud`+missing-key as mock, so a misconfigured cloud URL "works" via deterministic mock and hides the error. `POST /ai/test` deliberately disables this fallback to surface real connectivity issues.
 - **`SELECT` without `LIMIT` gets `LIMIT (max_rows+1)` injected at the SQL layer** (`query._auto_cap`, `TABLETALK_QUERY_MAX_ROWS` default 1000) so the *database* does less work, not just the transfer. `truncated` is inferred from the +1 row.
 - **Large integers stringified to JSON** (`serialize_value`, `JS_SAFE_INT_MAX`) to avoid JS `Number` precision loss — relevant to the `big_values` seed table.
-- **Knowledge base builds lazily once per process** and reloads from `knowledge-{conn_id}.json` artifact on restart. Schema discovery has a 30s cache (`core/schema.py`); structural changes need `?refresh=true` or cache invalidation.
+- **Knowledge base builds lazily once per process** and reloads from `knowledge-{conn_id}.db` (SQLite, `storage.SqliteStorage`, `TABLETALK_KB_STORAGE=json` 回退旧 JSON) artifact on restart. Schema discovery has a 30s cache (`core/schema.py`); structural changes need `?refresh=true` or cache invalidation.
 - **Tag routing uses only *confirmed* tags** (`store.route_tables`); a freshly AI-proposed draft tag does not affect routing until a human confirms it.
 - **Report mode forces `include_data=true`** (aggregated `GROUP BY` rows only) so the model can write numerically-traceable narration; chat mode defaults to `include_data=false` (columns+rowcount only). Both honor the "structure, not raw rows" red line.
 - **Chat sessions ≠ audit.** AI `run_query` tool calls do *not* write audit (only manual `POST /query` and report queries do). Chat history lives in `data_dir/chat.db`; clicking "run SQL" writes JSONL to `data_dir/audit.log`. Viewing a session does not bump `updated_at`.

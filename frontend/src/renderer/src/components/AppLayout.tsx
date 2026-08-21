@@ -18,6 +18,7 @@ import { ReportCard } from './ReportCard'
 import { AiRail } from './AiRail'
 import { KnowledgeReview } from './KnowledgeReview'
 import { AuditPage } from './ModulePages'
+import { ApprovalPage } from './ApprovalPage'
 import { SettingsDrawer } from './SettingsDrawer'
 interface Props {
   health: HealthStatus | null
@@ -26,7 +27,8 @@ interface Props {
 const TABS: { key: View; labelKey: string }[] = [
   { key: 'workspace', labelKey: 'nav.workspace' },
   { key: 'knowledge', labelKey: 'nav.knowledge' },
-  { key: 'audit', labelKey: 'nav.securityAudit' }
+  { key: 'audit', labelKey: 'nav.securityAudit' },
+  { key: 'approvals', labelKey: 'nav.approvals' }
 ]
 
 /** 表格视图顶部：关联表快速跳转（替代旧 40px 左缘微条，水平化融入工具栏）。 */
@@ -149,6 +151,23 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         return t ? { rowCount: t.row_count, columnCount: t.column_count, fkCount: fk } : null
       })()
     : null
+  const [pendingApprovals, setPendingApprovals] = useState(0)
+  useEffect(() => {
+    if (!rt?.token) return
+    let alive = true
+    const load = async (): Promise<void> => {
+      try {
+        const r = await fetch('/api/v1/approvals?status=pending', { headers: { 'X-TableTalk-Token': rt.token } })
+        if (r.ok && alive) {
+          const j = await r.json()
+          setPendingApprovals((j.items || []).length)
+        }
+      } catch {}
+    }
+    void load()
+    const id = window.setInterval(() => void load(), 15000)
+    return () => { alive = false; window.clearInterval(id) }
+  }, [rt?.token, view])
 
   // 新标签到达（AI 查询 / 预览 / 报告）→ 自动切到表格视图；标签清空 → 回图谱
   useEffect(() => {
@@ -173,6 +192,21 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [setMainView])
+
+  // C5 可追溯：表 chip 跳转星图定位（与 D1 搜索定位同链路）
+  useEffect(() => {
+    const h = (e: Event): void => {
+      const tbl = (e as CustomEvent).detail?.table as string | undefined
+      if (!tbl) return
+      setView('workspace')
+      setMainView('graph')
+      setNodeSel(tbl)
+      // 触发 Graph3D 内部 flyTo（通过 do-locate 事件）
+      window.dispatchEvent(new CustomEvent('tabletalk:do-locate', { detail: { table: tbl } }))
+    }
+    window.addEventListener('tabletalk:locate', h as EventListener)
+    return () => window.removeEventListener('tabletalk:locate', h as EventListener)
+  }, [setView, setMainView])
 
   // 当前展示的表名（顶栏上下文指示）
   const subject = active ? active.title.replace(new RegExp('^' + t('ws.titleAsk').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '').replace(/^schema · /, '') : selectedTable ?? '—'
@@ -209,6 +243,9 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               onClick={() => setView(tab.key)}
             >
               {t(tab.labelKey)}
+              {tab.key === 'approvals' && pendingApprovals > 0 && (
+                <span className="tab-badge mono" style={{ marginLeft: 6, background: 'var(--amber-dim)', color: 'var(--amber)', padding: '1px 6px', borderRadius: 'var(--r-full)', fontSize: 10 }}>{pendingApprovals}</span>
+              )}
             </button>
           ))}
         </nav>
@@ -228,7 +265,9 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       </header>
 
       <main className="stage" key={view}>
-        {view === 'workspace' ? (
+        {view === 'approvals' ? (
+          <ApprovalPage />
+        ) : view === 'workspace' ? (
           <>
             <section
               className="workspace"

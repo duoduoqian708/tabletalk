@@ -13,9 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, audit, connections, health, knowledge, query, schema, settings, skills
+from app.api import ai, approvals, audit, auth, connections, health, knowledge, query, questions, schema, settings, skills, usage
 from app.config import get_env, get_token
-from app.debuglog import dbg  # TODO: 测试后删除
 from app.state import get_state
 
 # 导入方言模块以完成注册（新增数据库：写适配器 + 在此导入）
@@ -69,32 +68,53 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def sidecar_token_guard(request: Request, call_next):
-        """本机鉴权：仅守 /api/*；health 与 bootstrap 免鉴权，静态资源/SPA 放行。"""
+        """本机鉴权：仅守 /api/*；health 免鉴权，bootstrap 在单机免鉴权、团队模式需本地或已鉴权。"""
         path = request.url.path
-        # TODO: 测试后删除——全请求进入/完成日志
-        dbg("[http] IN ", request.method, path)
         if request.method == "OPTIONS":
-            resp = await call_next(request)
-            dbg("[http] OUT", request.method, path, resp.status_code)
-            return resp
+            return await call_next(request)
         if not path.startswith("/api/"):
-            resp = await call_next(request)
-            dbg("[http] OUT", request.method, path, resp.status_code)
-            return resp
-        if path in ("/api/v1/health", "/api/v1/bootstrap"):
-            resp = await call_next(request)
-            dbg("[http] OUT", request.method, path, resp.status_code)
-            return resp
-        supplied = request.headers.get("X-TableTalk-Token", "")
-        if not hmac.compare_digest(supplied, get_token()):
-            dbg("[http] 401", path)
-            return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
-        resp = await call_next(request)
-        dbg("[http] OUT", request.method, path, resp.status_code)
-        return resp
+            return await call_next(request)
+        # health 始终免鉴权
+        if path == "/api/v1/health":
+            return await call_next(request)
+        # auth 的 login/register 免鉴权（登录即为获取 token 的入口）
+        if path in ("/api/v1/auth/login", "/api/v1/auth/register"):
+            return await call_next(request)
+        # bootstrap：单机免鉴权，团队模式仅本机 127.0.0.1 可免鉴权（防 LAN 窃取）
+        if path == "/api/v1/bootstrap":
+            try:
+                from app.state import get_state as _gs
+                is_team = _gs().auth.is_team_mode()
+            except Exception:
+                is_team = False
+            if not is_team:
+                return await call_next(request)
+            # 团队模式：仅本机回环可免鉴权
+            host = request.client.host if request.client else ""
+            if host in ("127.0.0.1", "::1", "localhost"):
+                return await call_next(request)
+            # 否则走正常鉴权（需已登录）
+        # 兼容：X-TableTalk-Token 单共享密钥（单机） + Bearer JWT（团队）
+        supplied = request.headers.get("X-TableTalk-Token", "") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        # 单机 token
+        if supplied and hmac.compare_digest(supplied, get_token()):
+            request.state.user = None
+            request.state.user_id = None
+            return await call_next(request)
+        # 团队 JWT
+        try:
+            from app.state import get_state as _gs2
+            payload = _gs2().auth.verify_token(supplied) if supplied else None
+            if payload:
+                request.state.user = payload
+                request.state.user_id = payload.get("sub")
+                return await call_next(request)
+        except Exception:
+            pass
+        return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
 
     for r in (health.router, connections.router, schema.router, query.router,
-              audit.router, settings.router, ai.router, knowledge.router, skills.router):
+              audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）

@@ -8,6 +8,9 @@ from app.config import Settings, reset_env
 from app.core.chat_store import ChatStore
 from app.core.connections import ConnectionRegistry
 from app.core.pool import PoolManager
+from app.core.approvals import ApprovalStore
+from app.core.auth import AuthStore
+from app.core.questions import QuestionStore
 from app.core.settings import SettingsStore
 from app.knowledge.jobs import BuildJobManager, SyncLoop
 from app.knowledge.store import KnowledgeBase
@@ -22,6 +25,9 @@ class AppState:
     audit: AuditLogger
     knowledge: KnowledgeBase
     chats: ChatStore
+    questions: QuestionStore
+    auth: AuthStore
+    approvals: ApprovalStore
     build_jobs: "BuildJobManager"
     sync_loop: "SyncLoop"
 
@@ -45,6 +51,9 @@ def _build_state(data_dir=None) -> AppState:
         audit=AuditLogger(env.data_dir),
         knowledge=knowledge,
         chats=ChatStore(env.data_dir),
+        questions=QuestionStore(env.data_dir),
+        auth=AuthStore(env.data_dir),
+        approvals=ApprovalStore(env.data_dir),
         build_jobs=BuildJobManager(),
         sync_loop=SyncLoop(),
     )

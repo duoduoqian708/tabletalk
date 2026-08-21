@@ -274,9 +274,6 @@ class KnowledgeBase:
         on_progress: Any | None = None,
     ) -> dict[str, Any]:
         """构建知识库。on_progress(stage, percent) 可选进度回调（任务化构建用）。"""
-        # TODO: 测试后删除
-        from app.debuglog import dbg
-        dbg("[kb.build] conn=", conn_id, "tables=", len(schema.get("tables", [])))
         # 全量重建也遵守历史墓碑（用户删过的 overlap 边不复活）
         if conn_id not in self._edge_tombstones:
             try:
@@ -1101,9 +1098,6 @@ class KnowledgeBase:
         """
         confirmed = set(self.confirmed_tags(conn_id))
         tag_set = {t for t in tag_names if t in confirmed}
-        # TODO: 测试后删除
-        from app.debuglog import dbg
-        dbg("[kb.route] conn=", conn_id, "req_tags=", tag_names, "confirmed_hit=", sorted(tag_set))
         if not tag_set:
             return {"tables": [], "edges": [], "seeded": 0}
         picks: set[str] = set()
