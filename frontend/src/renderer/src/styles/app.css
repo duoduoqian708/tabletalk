@@ -1547,7 +1547,7 @@ body.resizing {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   align-items: center;
-  padding: 22px 26px;
+  padding: 10px 24px;
   border: 1px solid var(--line); border-radius: 14px;
   background: var(--panel); cursor: pointer;
   transition: all 0.18s cubic-bezier(.16,1,.3,1);
@@ -1570,9 +1570,14 @@ body.resizing {
 }
 .conn-tags { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .conn-tags .conn-dialect { font-size: 11px; color: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 9px; padding: 3px 10px; background: var(--accent-dim); flex: none; text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
-.conn-tags .ro-tag { font-size: 11px; color: var(--teal); background: var(--teal-dim); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
-.conn-tags .ok-tag { font-size: 11px; color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
-.conn-tags .fail-tag { font-size: 11px; color: var(--red); background: var(--red-dim); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
+/* 标签常驻、酌情点亮：只读/测试通过 在条件成立时点亮，否则灰色未点亮 */
+.conn-tags .ro-tag,
+.conn-tags .ok-tag {
+  font-size: 11px; color: var(--ink-faint); background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 9px; padding: 3px 10px; flex: none;
+}
+.conn-tags .ro-tag.on { color: var(--teal); background: var(--teal-dim); border-color: transparent; font-weight: 600; }
+.conn-tags .ok-tag.on { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); border-color: transparent; font-weight: 600; }
 .conn-target {
   display: flex;
   align-items: flex-start;

@@ -85,9 +85,11 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
         </div>
         <div className="conn-tags">
           <span className="conn-dialect mono">{conn.dialect}</span>
-          {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
-          {test && test.ok && <span className="ok-tag mono">{t('settings.conn.testOkTag')}</span>}
-          {test && !test.ok && <span className="fail-tag mono" title={test.error ?? ''}>{t('settings.conn.testFailTag')}</span>}
+          <span className={`ro-tag mono${conn.read_only ? ' on' : ''}`}>{t('conn.readOnly')}</span>
+          <span
+            className={`ok-tag mono${test && test.ok ? ' on' : ''}`}
+            title={test && !test.ok ? test.error ?? '' : (test?.ok ? `${test.latency_ms ?? ''}ms` : '')}
+          >{t('settings.conn.testOkTag')}</span>
         </div>
         <div className="conn-target mono" title={targetTitle}>
           <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>

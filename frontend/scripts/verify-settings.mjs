@@ -95,12 +95,14 @@ try {
   const line1Kids = await card1.$$eval('.conn-line1 > *', (els) => els.map((e) => e.className))
   check('卡1 名称独占一行（仅名称）', line1Kids.length === 1 && line1Kids[0] === 'conn-name', JSON.stringify(line1Kids))
   const tags = await card1.$$eval('.conn-tags > *', (els) => els.map((e) => e.className))
-  check('卡1 标签栏 = 方言 chip + 只读', tags[0].startsWith('conn-dialect') && tags[1].startsWith('ro-tag'), JSON.stringify(tags))
+  check('标签栏三标签常驻（方言/只读/测试通过）', tags.length === 3 && tags[0].startsWith('conn-dialect') && tags[1].startsWith('ro-tag') && tags[2].startsWith('ok-tag'), JSON.stringify(tags))
+  check('卡1 只读点亮（.on）', tags[1].includes(' on'), JSON.stringify(tags))
+  check('卡1 测试通过常驻但未点亮（未测）', tags[2].startsWith('ok-tag') && !tags[2].includes(' on'), JSON.stringify(tags))
   const diaBg = await card1.$eval('.conn-dialect', (el) => getComputedStyle(el).backgroundColor)
   check('方言标签点亮（有色底）', diaBg !== 'rgba(0, 0, 0, 0)', diaBg)
   check('深黑条 save-bar 已删除', (await page.$('.save-bar')) === null)
   const box = await card1.boundingBox()
-  check('卡片高度适中（145~200px，按钮不撑高）', (box?.height ?? 0) >= 145 && (box?.height ?? 0) <= 200, `h=${box?.height}`)
+  check('卡片高度贴按钮（125~175px）', (box?.height ?? 0) >= 125 && (box?.height ?? 0) <= 175, `h=${box?.height}`)
   check('卡1 无黄色默认标签（默认在按钮上表达）', (await card1.$('.def-tag')) === null)
   // 删除按钮常显红框背景（不依赖 hover）
   const delStyle = await rows[0].$eval('.mini-btn.dang', (b) => {
@@ -114,6 +116,8 @@ try {
   check('卡2 非当前', !(await card2.getAttribute('class')).includes('cur'))
   const sensText = await card2.$eval('.conn-sens .sens-list', (e) => e.textContent)
   check('卡2 敏感名单行展示', (sensText || '').includes('payroll_*'), String(sensText))
+  const tags2 = await card2.$$eval('.conn-tags > *', (els) => els.map((e) => e.className))
+  check('卡2 只读标签常驻但未点亮（非只读）', tags2.some((c) => c.startsWith('ro-tag')) && !tags2.some((c) => c.startsWith('ro-tag') && c.includes(' on')), JSON.stringify(tags2))
   check('卡2 目标行', ((await card2.$eval('.conn-target .ct-line', (e) => e.textContent)) || '').includes('demo.db'))
   // 卡1 无敏感配置 → 敏感行应隐藏
   check('卡1 无敏感 → 行隐藏', (await card1.$('.conn-sens')) === null)
@@ -205,8 +209,8 @@ try {
   // 点卡1（sqlite 可读）测试 → 「测试通过」标签点亮
   await rowsB[0].$$eval('.conn-actions .mini-btn', (bs) => bs[2].click())
   await page.waitForTimeout(900)
-  check('测试通过标签点亮', (await rowsB[0].$('.ok-tag')) !== null)
-  const okTagText = await rowsB[0].$eval('.ok-tag', (e) => e.textContent.trim()).catch(() => '')
+  check('测试通过标签点亮（.on）', (await rowsB[0].$('.ok-tag.on')) !== null)
+  const okTagText = await rowsB[0].$eval('.ok-tag', (e) => e.textContent.trim())
   check('测试通过标签无 ✓ 符号', okTagText === '测试通过', okTagText)
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
