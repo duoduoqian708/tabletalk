@@ -25,6 +25,11 @@ class ConnectionCreate(BaseModel):
     sensitive: list[str] = Field(default_factory=list)  # 敏感表/列 glob 名单（不进模型上下文与知识库）
 
 
+class TestDraftBody(ConnectionCreate):
+    """编辑模式测试：密码留空 + saved_conn_id → 用已存密码填充（旧密码永不出网，前端只见 *** 占位）。"""
+    saved_conn_id: str | None = None
+
+
 class ConnectionUpdate(BaseModel):
     name: str | None = None
     dialect: str | None = None
@@ -83,13 +88,20 @@ async def delete_connection(conn_id: str) -> dict:
 
 
 @router.post("/test-draft")
-async def test_draft_connection(body: ConnectionCreate) -> dict:
+async def test_draft_connection(body: TestDraftBody) -> dict:
     """接入流程前置：测试连接配置（不落盘）。通过后才允许 POST /connections 保存。
 
-    SQLite 无"库"概念 → 文件可读 + 能列出表即通过；其余方言真实连库。
+    编辑模式（saved_conn_id 且密码留空）→ 用已存密码填充后测试；
+    未知 saved_conn_id 按无密码测（不泄露存在性）。SQLite 无"库"概念 → 文件可读即可。
     """
     state = get_state()
-    return await state.pools.test_draft(body.model_dump())
+    data = body.model_dump(exclude={"saved_conn_id"})
+    if not data.get("password") and body.saved_conn_id:
+        try:
+            data["password"] = state.connections.get(body.saved_conn_id).password
+        except KeyError:
+            pass
+    return await state.pools.test_draft(data)
 
 
 @router.post("/{conn_id}/test")

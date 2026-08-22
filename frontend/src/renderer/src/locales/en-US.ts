@@ -59,6 +59,7 @@ export const enUS: Messages = {
       credentials: 'Credentials',
       databaseName: 'Database name',
       readOnly: 'Read-only connection',
+      pwdSaved: 'Saved password · leave empty to test with it',
       sensitive: 'Sensitive list (table/column glob, comma-separated; blocked items excluded from AI context and knowledge base)',
       formChanged: 'Form changed, please retest',
       testing: 'Testing…',

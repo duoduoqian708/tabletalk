@@ -52,7 +52,7 @@ try {
   const h = { 'Content-Type': 'application/json', 'X-TableTalk-Token': token }
   await fetch(`${baseUrl}/api/v1/connections`, {
     method: 'POST', headers: h,
-    body: JSON.stringify({ name: '订单库', dialect: 'sqlite', file: demoFile, read_only: true }),
+    body: JSON.stringify({ name: '订单库', dialect: 'sqlite', file: demoFile, read_only: true, password: 'hunter2' }),
   })
   await fetch(`${baseUrl}/api/v1/connections`, {
     method: 'POST', headers: h,
@@ -60,7 +60,7 @@ try {
   })
   await fetch(`${baseUrl}/api/v1/connections`, {
     method: 'POST', headers: h,
-    body: JSON.stringify({ name: '订单PG', dialect: 'postgres', host: '127.0.0.1', port: 5432, database: 'orders', user: 'postgres', read_only: false }),
+    body: JSON.stringify({ name: '订单PG', dialect: 'postgres', host: '127.0.0.1', port: 5432, database: 'orders', user: 'postgres', password: 'pg-secret', read_only: false }),
   })
 
   const page = await browser.newPage({ viewport: { width: 1480, height: 940 } })
@@ -88,9 +88,13 @@ try {
   const btns1 = await card1.$$eval('.conn-actions .mini-btn', (bs) => bs.map((b) => b.textContent.trim()))
   check('卡1 动作 2×2 四按钮', btns1.length === 4, JSON.stringify(btns1))
   check('卡1 无「当前使用」标签（绿框已表意）', (await card1.$('.cur-tag')) === null)
-  // 名称行结构：名称 + 类型标签在最上面，链接/库名在下面
-  const line1 = await card1.$$eval('.conn-line1 > *', (els) => els.map((e) => e.className))
-  check('卡1 名称行 = 名称 + 方言 chip + 只读标签', line1[0] === 'conn-name' && line1[1].startsWith('conn-dialect') && line1[2].startsWith('ro-tag'), JSON.stringify(line1))
+  // 名称独占一行、完整展示；下面才是标签栏
+  const line1Kids = await card1.$$eval('.conn-line1 > *', (els) => els.map((e) => e.className))
+  check('卡1 名称独占一行（仅名称）', line1Kids.length === 1 && line1Kids[0] === 'conn-name', JSON.stringify(line1Kids))
+  const tags = await card1.$$eval('.conn-tags > *', (els) => els.map((e) => e.className))
+  check('卡1 标签栏 = 方言 chip + 只读', tags[0].startsWith('conn-dialect') && tags[1].startsWith('ro-tag'), JSON.stringify(tags))
+  const box = await card1.boundingBox()
+  check('卡片高度加大（≥160px）', (box?.height ?? 0) >= 160, `h=${box?.height}`)
   check('卡1 无黄色默认标签（默认在按钮上表达）', (await card1.$('.def-tag')) === null)
   // 删除按钮常显红框背景（不依赖 hover）
   const delStyle = await rows[0].$eval('.mini-btn.dang', (b) => {
@@ -132,6 +136,24 @@ try {
   check('卡1 设默认后仍无黄色默认标签', (await rows[0].$('.def-tag')) === null)
   const stored = await page.evaluate(() => localStorage.getItem('tabletalk-default-conn'))
   check('默认已持久化到 localStorage', !!stored)
+
+  console.log('== 编辑弹窗：密码占位 ==')
+  // 点卡3（PG，已存密码）「编辑」→ 弹窗打开（sqlite 无密码框，须用 PG 卡）
+  const rowsNow = await page.$$('.conn-row')
+  await rowsNow[2].$$eval('.conn-actions .mini-btn', (bs) => bs[2].click())
+  await page.waitForSelector('.modal input[type=password]', { timeout: 10000 })
+  await page.waitForTimeout(400)
+  const pwdInput = await page.$('.modal input[type=password]')
+  const pwdVal = pwdInput ? await pwdInput.inputValue() : null
+  check('编辑弹窗密码框为 *** 占位（真值不出网）', pwdVal === '••••••••', `got ${JSON.stringify(pwdVal)}`)
+  if (pwdInput) {
+    await pwdInput.focus()
+    await page.waitForTimeout(200)
+    const after = await pwdInput.inputValue()
+    check('聚焦后占位清空（可直接输入新密码）', after === '')
+  }
+  await page.click('.modal .close')
+  await page.waitForTimeout(300)
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
   process.exitCode = failures === 0 ? 0 : 1

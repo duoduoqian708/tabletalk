@@ -57,6 +57,7 @@ export const zhCN = {
       credentials: '凭据',
       databaseName: '数据库名',
       readOnly: '只读连接',
+      pwdSaved: '已保存密码 · 留空用已存密码测试',
       sensitive: '敏感名单（表/列 glob，逗号分隔；屏蔽项不进 AI 上下文与知识库）',
       formChanged: '表单已改动，需重新测试',
       testing: '测试中…',

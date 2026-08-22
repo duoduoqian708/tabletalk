@@ -12,6 +12,8 @@ interface Props {
 
 const DIALECTS = ['sqlite', 'postgres', 'mysql']
 const DRAFT_KEY = 'tabletalk-conn-drafts-v1'
+/** 编辑模式密码占位：表示"已保存"，真值永不出网；留空=沿用已存密码测试/保存 */
+const PWD_PLACEHOLDER = '••••••••'
 
 interface Draft {
   name: string
@@ -64,7 +66,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       host: c.host ?? '',
       port: c.port != null ? String(c.port) : '',
       user: c.user ?? '',
-      password: '',
+      password: c.password ? PWD_PLACEHOLDER : '',  // 有已存密码 → *** 占位，真值不出网
       database: c.database ?? '',
       file: c.file ?? '',
       ssl: c.ssl ?? false,
@@ -83,7 +85,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     host: isSqlite ? '' : form.host,
     port: isSqlite ? null : Number(form.port) || undefined,
     user: isSqlite ? '' : form.user,
-    password: isSqlite ? '' : form.password,
+    password: isSqlite ? '' : (editId && form.password === PWD_PLACEHOLDER ? '' : form.password),  // 占位 → 空：沿用已存
     database: isSqlite ? '' : form.database,
     file: isSqlite ? form.file : '',
     ssl: form.ssl,
@@ -112,7 +114,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     setTesting(true)
     setTestMsg(null)
     try {
-      const r = await testDraftConnection(input)
+      const r = await testDraftConnection(input, { savedConnId: editId })
       setTestedAt(r.ok ? JSON.stringify(input) : null)
       setTestMsg({
         ok: r.ok,
@@ -198,7 +200,13 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
                 <label>{t('conn.modal.credentials')}</label>
                 <div className="row">
                   <input value={form.user} onChange={(e) => set('user', e.target.value)} placeholder="user" />
-                  <input value={form.password} onChange={(e) => set('password', e.target.value)} type="password" placeholder="password" />
+                  <input
+                    value={form.password}
+                    onChange={(e) => set('password', e.target.value)}
+                    onFocus={(e) => { if (form.password === PWD_PLACEHOLDER) set('password', '') }}
+                    type="password"
+                    placeholder={form.password === PWD_PLACEHOLDER ? t('conn.modal.pwdSaved') : 'password'}
+                  />
                 </div>
               </div>
               <div className="fld">

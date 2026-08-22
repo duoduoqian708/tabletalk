@@ -96,6 +96,8 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
       <div className="conn-main">
         <div className="conn-line1">
           <span className="conn-name">{conn.name}</span>
+        </div>
+        <div className="conn-tags">
           <span className="conn-dialect mono">{conn.dialect}</span>
           {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
         </div>
