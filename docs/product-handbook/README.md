@@ -87,6 +87,7 @@ cd frontend && npm run screenshot                    # Playwright 截图验证
 | [05 技术架构与选型](05-architecture-and-tech.md) | 现有架构、演进设计（gate 拆库 / 脱敏管道 / 多用户）、选型原则与禁令 | 改后端结构、加依赖之前 |
 | [06 路线图与验收](06-roadmap-and-acceptance.md) | Phase 0-3 任务表、验收标准、埋点清单、开源发布 checklist | 排期、立项、结项时 |
 | [07 知识库架构](07-knowledge-architecture.md) | 向量库（Embedder/VectorStore）+ 图谱（FK/值重叠）+ 混合检索与标签路由的实现事实与演进守则 | 动知识库 / 检索逻辑之前 |
+| [08 AI 规划与执行](08-ai-planning-execution.md) | AI 如何做规划与执行：意图两平面与 preflight、技能/工具注册表（14 tool / 10 skill）、会话记忆与结果工件、DML 确认协议、检索封顶与纠错、出网不变式（05/07 的战术展开） | 动 AI 编排/意图/上下文/会话之前 |
 
 ## 使用约定（对所有读者的三条）
 
