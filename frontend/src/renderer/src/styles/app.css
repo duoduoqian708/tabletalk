@@ -1569,7 +1569,7 @@ body.resizing {
   white-space: normal; word-break: break-word;
 }
 .conn-tags { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.conn-tags .conn-dialect { font-size: 11px; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 9px; padding: 3px 10px; background: var(--bg-2); flex: none; text-transform: uppercase; letter-spacing: .03em; }
+.conn-tags .conn-dialect { font-size: 11px; color: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 9px; padding: 3px 10px; background: var(--accent-dim); flex: none; text-transform: uppercase; letter-spacing: .03em; font-weight: 600; }
 .conn-tags .ro-tag { font-size: 11px; color: var(--teal); background: var(--teal-dim); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
 .conn-tags .ok-tag { font-size: 11px; color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
 .conn-tags .fail-tag { font-size: 11px; color: var(--red); background: var(--red-dim); border-radius: 9px; padding: 3px 10px; font-weight: 600; flex: none; }
@@ -1603,12 +1603,12 @@ body.resizing {
   flex: none;
 }
 .conn-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 7px;
 }
 .conn-actions .mini-btn {
-  min-width: 74px;
+  min-width: 88px;
   justify-content: center;
   text-align: center;
   padding: 7px 10px;
@@ -1635,13 +1635,6 @@ body.resizing {
 }
 .conn-add:hover { border-color: var(--teal); color: var(--teal); background: var(--teal-dim); transform: translateY(-1px); box-shadow: 0 4px 12px color-mix(in srgb, var(--teal) 10%, transparent); }
 .conn-add:active { transform: scale(0.98); }
-
-.save-bar {
-  position: sticky; bottom: 0; display: flex; align-items: center; gap: 12px;
-  padding: 16px 0 4px; border-top: 1px solid var(--line); background: var(--bg);
-  margin-top: 4px;
-}
-.save-bar .sv-t { font-size: 12px; color: var(--ink-faint); }
 
 /* ============ 知识审查 subbar ============ */
 .review-subbar {

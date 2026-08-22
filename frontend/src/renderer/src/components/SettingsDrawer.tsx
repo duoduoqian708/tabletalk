@@ -106,14 +106,6 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
       <div className="conn-side">
         <div className="conn-actions" onClick={(e) => e.stopPropagation()}>
           <button
-            className="mini-btn test"
-            disabled={testing}
-            onClick={() => void handleTest()}
-            title={test ? (test.ok ? `${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}
-          >
-            {testLabel}
-          </button>
-          <button
             className={`mini-btn${isDefault ? ' set' : ''}`}
             onClick={onSetDefault}
             title={isDefault ? t('settings.conn.isDefaultTitle') : t('settings.conn.setDefaultTitle')}
@@ -121,6 +113,14 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
             {isDefault ? t('settings.conn.isDefault') : t('settings.conn.setDefault')}
           </button>
           <button className="mini-btn" onClick={onEdit}>{t('settings.conn.edit')}</button>
+          <button
+            className="mini-btn test"
+            disabled={testing}
+            onClick={() => void handleTest()}
+            title={test ? (test.ok ? `${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}
+          >
+            {testLabel}
+          </button>
           <button className="mini-btn dang" onClick={onRemove}>{t('common.delete')}</button>
         </div>
       </div>
@@ -185,8 +185,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
     }, 280)
   }
   useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current) }, [])
-  const [savedMsg, setSavedMsg] = useState('')
-  const [saveOk, setSaveOk] = useState(true)  // 保存结果状态（样式判定，不再靠文案符号）
   const { locale, setLocale, t } = useI18n()
 
   // 主题：亮色（默认）/ 深色，localStorage 记忆
@@ -418,12 +416,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
       if (settings && settings.pool_size !== poolSize) patch.pool_size = poolSize
       await updateSettings(patch)
       setSettings((s) => (s ? { ...(s as SettingsPublic), ...(patch as SettingsPublic) } : s))
-      setSavedMsg(t('settings.saveSuccess'))
-      setSaveOk(true)
       return true
     } catch (e) {
-      setSavedMsg(t('settings.saveFail', { msg: (e as Error).message }))
-      setSaveOk(false)
       return false
     }
   }
@@ -772,10 +766,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                 </div>
               </section>
             )}
-
-            <div className="save-bar">
-              {savedMsg && <span className={`test-result${saveOk ? ' ok' : ' bad'}`}>{savedMsg}</span>}
-            </div>
           </div>
         </div>
       </aside>
