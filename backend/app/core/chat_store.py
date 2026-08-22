@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS artifacts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id);
+-- WS4 T4.1：每会话一份待确认 DML（token 一次性/10 分钟过期/绑 SQL 哈希）。瞬态状态，非历史。
+CREATE TABLE IF NOT EXISTS pending_dmls (
+  session_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
 
 
@@ -170,6 +176,30 @@ class ChatStore:
         with self._conn() as c:
             row = c.execute("SELECT connection_id FROM conversations WHERE id=?", (session_id,)).fetchone()
             return row["connection_id"] if row else None
+
+    def set_pending_dml(self, session_id: str, data: dict) -> None:
+        """WS4 T4.1：落一份待确认 DML（按会话一份，覆盖）。data 含 token/sql_hash/preview/rollback/expires_at/consumed。"""
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO pending_dmls (session_id, data, updated_at) VALUES (?,?,?)",
+                (session_id, json.dumps(data, ensure_ascii=False), _now()),
+            )
+
+    def get_pending_dml(self, session_id: str) -> dict | None:
+        """WS4 T4.1：读待确认 DML；无则 None。"""
+        with self._conn() as c:
+            row = c.execute("SELECT data FROM pending_dmls WHERE session_id=?", (session_id,)).fetchone()
+            if row is None:
+                return None
+            try:
+                return json.loads(row["data"])
+            except Exception:
+                return None
+
+    def clear_pending_dml(self, session_id: str) -> None:
+        """WS4 T4.1：清除待确认 DML（消费后 / 用户取消 / 过期）。"""
+        with self._conn() as c:
+            c.execute("DELETE FROM pending_dmls WHERE session_id=?", (session_id,))
 
     def get(self, session_id: str) -> dict | None:
         """只读详情：会话 + 全部消息。"""
