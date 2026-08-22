@@ -282,11 +282,20 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 ---
 
+> **进度快照（2026-08-22 收盘）**：WS6 ✅ → WS1 ✅ → WS5 ✅ → WS2 ✅ → WS3 ✅ → WS4 **T4.1~T4.4 ✅**（gate 352 全绿，HEAD 8d451e8）。**下一步：T4.5（WS4 收尾）→ WS7（T7.1→T7.4）→ WS8 前端随落（T8.2 确认卡可先做，后端协议已就绪）**。
+
 ### WS4 · DML 确认协议（依赖 WS3 的 session 存储）
 
 **必读**：02 G3 · 08 §6 · 03 §6 · 纪要 D11
 
-> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅（a3f5b85）· T4.4 ✅。下一步 T4.5 顺修 E2 审批绕闸（高优）。完成后 WS4 收尾 → WS7。
+> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅（a3f5b85）· T4.4 ✅（8d451e8）。
+
+**T4.5 续接指引（2026-08-22 已勘察，代码未动）**：
+`api/approvals.py` 批准路径已有 `assess_sql(Origin.AI)` 复查（BLOCK→403）与 read_only 检查，**尚余三个缺口**：
+① 创建审批时 assess 结果被丢弃（`pass`），审计 verdict 硬编码 `"review"`，未记录真实闸门判定与 reasons；
+② 批准路径的连接查找包在 `except Exception: pass` 内——连接缺失时闸门复查被静默跳过（fail-open），会继续走执行；
+③ 全仓无任何 approval 测试，验收用例"批准的无 WHERE UPDATE 被闸门拦"缺回归保护。
+测试环境备忘：approve 需团队模式 + admin 角色——`TABLETALK_AUTH_MODE=team` 可 monkeypatch（运行时读取）；admin 经 JWT 注入 `request.state.user`，单测建议直调 handler 配 fake Request（scope 带 state）或 mock `auth.verify_token`。另：create 的审计 `connection=` 目前传的是 id，应统一为 `cfg.name`。
 
 **T4.1 confirm_token 状态机** ✅ 2026-08-22 (safety/confirm.py, gate 340)
 - 做什么：token 生成与校验工具（可放 `safety/confirm.py`）。
@@ -305,7 +314,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - 做什么：取消/过期后，向 session 追加一条系统可见消息（如 kind=system, "用户取消了该写操作"），下轮模型上下文可见；同时清除 pending_dml。
 - 验收：单测——取消后下轮 messages 含取消信号。
 
-**T4.5 顺修 E2 审批绕闸** ☐
+**T4.5 顺修 E2 审批绕闸** ☐（已勘察未动码，缺口与测试环境备忘见上方"续接指引"）
 - 做什么：`api/approvals.py` 批准执行路径补 `assess_sql(Origin.AI)` + read_only 检查 + confirm 语义（仅 ALLOW/已确认 REVIEW 可执行）；创建审批时也先过闸门记录 verdict。
 - 验收：单测——批准的无 WHERE UPDATE 被闸门拦（这条是审计 2026-08-21 的高优 bug 修复）。
 
@@ -340,7 +349,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 **T8.1 真 4 步** ☐（随 WS1）
 - `AiRail.tsx`：移除 `playSteps` 及 1500ms 定时器；ThinkPanel 默认展开；4 段由 stage/manifest/think/sql_card/gate 真事件驱动；intent/retrieval 的 detail 绑定 `context_meta`。拒答轮不渲染 4 步。
 
-**T8.2 确认卡** ☐（随 WS4/WS5）
+**T8.2 确认卡** ☐（随 WS4/WS5；后端协议已就绪：卡带 `confirm_token`/`expires_in`/`needs_confirm`，执行走 `POST /query` 同传 token+session_id，取消走 `POST /ai/dml/cancel`）
 - DML 确认卡三态：执行（文案带预览行数，"确认更新 238 行"）/取消/过期提示；问题库命中卡（T5.4）。文案全部先入 i18n 词典。
 
 **T8.3 技能开关 UI** ☐（随 WS7）
