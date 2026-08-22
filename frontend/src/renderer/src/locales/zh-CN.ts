@@ -96,7 +96,6 @@ export const zhCN = {
       setCurrent: '设为当前',
       setDefault: '设为默认',
       isDefault: '默认',
-      current: '当前使用',
       selectTitle: '点击切换到该数据源',
       setDefaultTitle: '设为默认数据源（设为默认即点亮为当前使用，启动时自动选中）',
       isDefaultTitle: '当前默认数据源',

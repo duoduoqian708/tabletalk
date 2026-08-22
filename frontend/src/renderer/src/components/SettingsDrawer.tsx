@@ -111,7 +111,6 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
         )}
       </div>
       <div className="conn-side">
-        {isCurrent && <span className="cur-tag">{t('settings.conn.current')}</span>}
         <div className="conn-actions" onClick={(e) => e.stopPropagation()}>
           <button
             className={`mini-btn test${testCls}`}

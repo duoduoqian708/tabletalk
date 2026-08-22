@@ -1576,11 +1576,6 @@ body.resizing {
   gap: 10px;
   flex: none;
 }
-.conn-side .cur-tag {
-  font-size: 11px; font-weight: 700; letter-spacing: .05em;
-  color: var(--teal); background: var(--teal-dim);
-  border-radius: 9px; padding: 3px 10px;
-}
 .conn-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1615,8 +1610,8 @@ body.resizing {
 .mini-btn:active { transform: scale(0.96); }
 .mini-btn.set { color: var(--teal); border-color: color-mix(in srgb, var(--teal) 28%, transparent); background: var(--teal-dim); box-shadow: 0 2px 8px color-mix(in srgb, var(--teal) 12%, transparent); }
 .mini-btn.set:hover { border-color: var(--teal); transform: translateY(-1px) scale(1.02); box-shadow: 0 6px 14px color-mix(in srgb, var(--teal) 16%, transparent); }
-.mini-btn.dang { color: var(--red); border-color: transparent; background: transparent; }
-.mini-btn.dang:hover { border-color: color-mix(in srgb, var(--red) 14%, transparent); background: var(--red-dim); transform: translateY(-1px); }
+.mini-btn.dang { color: var(--red); border-color: color-mix(in srgb, var(--red) 32%, transparent); background: var(--red-dim); }
+.mini-btn.dang:hover { border-color: var(--red); background: var(--red-dim); transform: translateY(-1px); box-shadow: 0 4px 10px color-mix(in srgb, var(--red) 14%, transparent); }
 .conn-add {
   margin-top: 4px; padding: 12px 16px; border: 1px dashed var(--line-strong);
   border-radius: 12px; background: transparent; color: var(--ink-faint);

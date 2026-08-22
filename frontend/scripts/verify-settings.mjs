@@ -83,8 +83,14 @@ try {
   check('卡1 无旧状态点 .st', (await card1.$('.st')) === null)
   const btns1 = await card1.$$eval('.conn-actions .mini-btn', (bs) => bs.map((b) => b.textContent.trim()))
   check('卡1 动作 2×2 四按钮', btns1.length === 4, JSON.stringify(btns1))
-  check('卡1 当前 tag', (await card1.$eval('.cur-tag', (e) => e.textContent)) === '当前使用')
+  check('卡1 无「当前使用」标签（绿框已表意）', (await card1.$('.cur-tag')) === null)
   check('卡1 初始无默认 tag（defaultId 未设置）', (await card1.$('.def-tag')) === null)
+  // 删除按钮常显红框背景（不依赖 hover）
+  const delStyle = await rows[0].$eval('.mini-btn.dang', (b) => {
+    const s = getComputedStyle(b)
+    return { border: s.borderColor, bg: s.backgroundColor }
+  })
+  check('删除按钮常显红框背景', delStyle.border !== 'rgba(0, 0, 0, 0)' && delStyle.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(delStyle))
 
   // 卡2：敏感名单展示 + 非当前
   const card2 = rows[1]

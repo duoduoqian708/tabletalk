@@ -98,7 +98,6 @@ export const enUS: Messages = {
       setCurrent: 'Set as current',
       setDefault: 'Set default',
       isDefault: 'Default',
-      current: 'Active',
       selectTitle: 'Click to switch to this data source',
       setDefaultTitle: 'Set as default data source (also becomes active now; auto-selected on startup)',
       isDefaultTitle: 'Current default data source',
