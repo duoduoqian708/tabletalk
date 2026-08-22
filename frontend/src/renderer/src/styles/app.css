@@ -1545,9 +1545,9 @@ body.resizing {
 .conn-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 20px;
+  gap: 18px;
   align-items: center;
-  padding: 36px 28px;
+  padding: 22px 26px;
   border: 1px solid var(--line); border-radius: 14px;
   background: var(--panel); cursor: pointer;
   transition: all 0.18s cubic-bezier(.16,1,.3,1);
@@ -1605,15 +1605,15 @@ body.resizing {
 .conn-actions {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
 }
 .conn-actions .mini-btn {
-  min-width: 88px;
+  min-width: 80px;
   justify-content: center;
   text-align: center;
-  padding: 7px 10px;
+  padding: 5px 8px;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 .mini-btn {
   font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500;

@@ -100,7 +100,7 @@ try {
   check('方言标签点亮（有色底）', diaBg !== 'rgba(0, 0, 0, 0)', diaBg)
   check('深黑条 save-bar 已删除', (await page.$('.save-bar')) === null)
   const box = await card1.boundingBox()
-  check('卡片高度加大（≥160px）', (box?.height ?? 0) >= 160, `h=${box?.height}`)
+  check('卡片高度适中（145~200px，按钮不撑高）', (box?.height ?? 0) >= 145 && (box?.height ?? 0) <= 200, `h=${box?.height}`)
   check('卡1 无黄色默认标签（默认在按钮上表达）', (await card1.$('.def-tag')) === null)
   // 删除按钮常显红框背景（不依赖 hover）
   const delStyle = await rows[0].$eval('.mini-btn.dang', (b) => {
