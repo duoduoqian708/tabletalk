@@ -1548,7 +1548,6 @@ body.resizing {
 .conn-line1 .conn-name { font-size: 17px; font-weight: 700; letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .conn-line1 .conn-dialect { font-size: 11px; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 9px; padding: 2px 9px; background: var(--bg-2); flex: none; text-transform: uppercase; letter-spacing: .03em; }
 .conn-line1 .ro-tag { font-size: 11px; color: var(--teal); background: var(--teal-dim); border-radius: 9px; padding: 2px 9px; font-weight: 600; flex: none; }
-.conn-line1 .def-tag { font-size: 11px; color: var(--amber); background: var(--amber-dim); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: 9px; padding: 2px 9px; font-weight: 600; flex: none; }
 .conn-target {
   display: flex;
   align-items: flex-start;

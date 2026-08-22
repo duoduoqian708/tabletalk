@@ -98,7 +98,6 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
           <span className="conn-name">{conn.name}</span>
           <span className="conn-dialect mono">{conn.dialect}</span>
           {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
-          {isDefault && <span className="def-tag mono">★ {t('settings.conn.isDefault')}</span>}
         </div>
         <div className="conn-target mono" title={targetTitle}>
           <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>

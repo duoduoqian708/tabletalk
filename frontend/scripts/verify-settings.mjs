@@ -88,7 +88,10 @@ try {
   const btns1 = await card1.$$eval('.conn-actions .mini-btn', (bs) => bs.map((b) => b.textContent.trim()))
   check('卡1 动作 2×2 四按钮', btns1.length === 4, JSON.stringify(btns1))
   check('卡1 无「当前使用」标签（绿框已表意）', (await card1.$('.cur-tag')) === null)
-  check('卡1 初始无默认 tag（defaultId 未设置）', (await card1.$('.def-tag')) === null)
+  // 名称行结构：名称 + 类型标签在最上面，链接/库名在下面
+  const line1 = await card1.$$eval('.conn-line1 > *', (els) => els.map((e) => e.className))
+  check('卡1 名称行 = 名称 + 方言 chip + 只读标签', line1[0] === 'conn-name' && line1[1].startsWith('conn-dialect') && line1[2].startsWith('ro-tag'), JSON.stringify(line1))
+  check('卡1 无黄色默认标签（默认在按钮上表达）', (await card1.$('.def-tag')) === null)
   // 删除按钮常显红框背景（不依赖 hover）
   const delStyle = await rows[0].$eval('.mini-btn.dang', (b) => {
     const s = getComputedStyle(b)
@@ -124,7 +127,9 @@ try {
   await page.waitForTimeout(400)
   const cls1 = await rows[0].getAttribute('class')
   check('卡1 设默认后点亮为当前', cls1.includes('cur'))
-  check('卡1 设默认后 ★ 默认 tag 出现', ((await rows[0].$eval('.def-tag', (e) => e.textContent)) || '').includes('★'))
+  const defBtnCls = await rows[0].$$eval('.conn-actions .mini-btn', (bs) => bs[1].className)
+  check('卡1 设默认后按钮呈 set 样式（默认标识在按钮上）', defBtnCls.includes('set'), defBtnCls)
+  check('卡1 设默认后仍无黄色默认标签', (await rows[0].$('.def-tag')) === null)
   const stored = await page.evaluate(() => localStorage.getItem('tabletalk-default-conn'))
   check('默认已持久化到 localStorage', !!stored)
 
