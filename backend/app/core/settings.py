@@ -1,4 +1,4 @@
-"""运行时可编辑配置（AI 网关 + 闸门参数），JSON 持久化。
+"""运行时可编辑配置（AI 网关 + 闸门参数），SQLite 持久化（tabletalk.db: system_kv）。
 
 进程级 env 配置（端口/数据目录/默认值）见 app.config；这里是从 env 默认值出发、
 可被 PUT /settings 覆盖的运行时配置。
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_env
+from app.core.system_db import get_conn, init_system_db
 
 
 @dataclass
@@ -30,11 +31,8 @@ class ModelConfig:
     model: str = ""
     temperature: float = 0.2
     timeout: float = 120.0
-    # 是否支持推理思考（None=未探测；测试连接时自动标定，可手动覆盖）
     reasoning: bool | None = None
-    # 系统内置模型（开机自带，用户不可删除）
     builtin: bool = False
-    # 探测结果（上次测试，可选）
     last_test: dict[str, Any] = field(default_factory=dict)
 
 
@@ -56,33 +54,27 @@ class Policy:
     version: int = 1
     updated_by: str = "system"
     updated_at: str = ""
-    table_rules: dict[str, str] = field(default_factory=dict)  # table -> allow/review/block
-    pattern_rules: list[dict[str, Any]] = field(default_factory=list)  # [{id, description, action}]
-    threshold: int = 100000  # 影响行数阈值（默认 10 万）
+    table_rules: dict[str, str] = field(default_factory=dict)
+    pattern_rules: list[dict[str, Any]] = field(default_factory=list)
+    threshold: int = 100000
+
 
 @dataclass
 class RuntimeSettings:
-    # ---- 文本模型：多配置 + 默认 ----
     ai_models: list[ModelConfig] = field(default_factory=list)
     default_ai_model: str = ""
-    # ---- 嵌入模型：多配置 + 默认 ----
     embedding_models: list[EmbeddingModelConfig] = field(default_factory=list)
     default_embedding_model: str = ""
-    # ---- 闸门参数 ----
     gate_review_threshold: int = 1000
     gate_rules: dict[str, bool] = field(default_factory=dict)
     policy: Policy = field(default_factory=Policy)
-    # ---- 知识库 ----
     kb_sample_rows: int = 10
     kb_ai_annotation_samples: bool = False
-    kb_sync_minutes: int = 30   # 知识库增量同步周期（分钟；0=关闭）
-    # ---- 隐私三档（B4） ----
-    privacy_mode: str = "standard"  # strict | standard | open
-    # ---- 查询 / 连接池（运行时可覆盖 env 默认值）----
+    kb_sync_minutes: int = 30
+    privacy_mode: str = "standard"
     query_max_rows: int = 1000
     pool_size: int = 3
 
-    # ---- 兼容层：旧单组字段的 property ----
     @property
     def ai_provider(self) -> str:
         return self._default_ai().provider
@@ -165,7 +157,6 @@ class RuntimeSettings:
                 "port": get_env().port,
                 "auth": "X-TableTalk-Token · 本机",
             },
-            # 兼容字段（旧前端 / 旧脚本仍能读）
             "ai_provider": self.ai_provider,
             "ai_base_url": self.ai_base_url,
             "ai_api_key": _mask_key(self.ai_api_key),
@@ -215,7 +206,6 @@ _PERSISTED_KEYS = {
     "privacy_mode",
     "query_max_rows",
     "pool_size",
-    # 旧字段兼容
     "ai_provider", "ai_base_url", "ai_api_key", "ai_model",
     "ai_temperature", "ai_timeout",
     "embedding_provider", "embedding_base_url", "embedding_api_key", "embedding_model",
@@ -227,8 +217,6 @@ def _new_id(prefix: str) -> str:
 
 
 def _migrate_from_legacy(data: dict[str, Any]) -> None:
-    """如果有旧单组字段但完全没有 ai_models 键，自动迁移为列表第一条。不注入任何内置模型。
-    注意：ai_models=[] 表示"已配置、暂无模型"（用户清空），不算缺失，不触发迁移。"""
     if "ai_models" not in data or data.get("ai_models") is None:
         m = ModelConfig(
             id=_new_id("llm"),
@@ -257,7 +245,6 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
 
 
 def _mask_key(key: str | None) -> str:
-    """API key 脱敏展示：保留开头 / 结尾各 3 位，中间以 ••• 代替，可辨识但不可还原。"""
     if not key:
         return ""
     if len(key) <= 8:
@@ -270,7 +257,6 @@ def _is_masked(val: Any) -> bool:
 
 
 def _restore_masked_keys(cur: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """前端读到的 api_key 是掩码（含 •••）；全量写回时把掩码还原为旧真值，避免覆盖 key。"""
     real_by_id = {m.get("id"): m.get("api_key", "") for m in cur}
     out = []
     for m in incoming:
@@ -283,7 +269,8 @@ def _restore_masked_keys(cur: list[dict[str, Any]], incoming: list[dict[str, Any
 
 class SettingsStore:
     def __init__(self, data_dir: Path) -> None:
-        self._path = data_dir / "settings.json"
+        self._data_dir = Path(data_dir)
+        self._path = self._data_dir / "settings.json"  # 旧文件，仅迁移
         env = get_env()
         self._data: dict[str, Any] = {
             "gate_review_threshold": env.gate_review_threshold,
@@ -295,7 +282,6 @@ class SettingsStore:
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
         }
-        # 从 env 初始化默认模型（有 env 配置才有首条；否则空列表，等用户自己配）
         if env.ai_provider != "mock" and env.ai_model:
             env_ai = ModelConfig(
                 id=_new_id("llm"),
@@ -326,14 +312,32 @@ class SettingsStore:
             self._data["embedding_models"] = [asdict(env_emb)]
             self._data["default_embedding_model"] = env_emb.id
         else:
-            # 离线兜底由知识库内部 HashingEmbedder 提供，UI 不再暴露 Hash 向量模型
             self._data["embedding_models"] = []
             self._data["default_embedding_model"] = ""
 
         self._lock = threading.Lock()
+        init_system_db(self._data_dir)
         self._load()
 
     def _load(self) -> None:
+        # 优先从 DB 读
+        try:
+            con = get_conn(self._data_dir)
+            cur = con.execute("SELECT v FROM system_kv WHERE k='settings'")
+            row = cur.fetchone()
+            con.close()
+            if row:
+                data = json.loads(row[0])
+                _migrate_from_legacy(data)
+                for k in _PERSISTED_KEYS:
+                    if k in data:
+                        self._data[k] = data[k]
+                if self._ensure_builtins():
+                    self.save()
+                return
+        except Exception:
+            pass
+        # 回退：旧 JSON 迁移
         if not self._path.exists():
             self._ensure_builtins()
             return
@@ -346,53 +350,56 @@ class SettingsStore:
         except Exception:
             pass
         if self._ensure_builtins():
-            # 加载时剔除了遗留内置模型 → 顺手落盘，把 settings.json 也清干净
+            self.save()
+        else:
+            # 首次从 JSON 迁移后落库
             self.save()
 
     def _ensure_builtins(self) -> bool:
-        """不再内置任何模型。这里只做收尾：
-        ① 剔除历史遗留的 builtin 标记模型（如旧的 llm_deepseek / llm_mock，用不起来）；
-        ② 剔除离线 Hash 向量模型（知识库内部仍有 HashingEmbedder 兜底，UI 不再暴露）；
-        ③ default_ai_model / default_embedding_model 指向不存在 / 空时回退到列表第一条（空则留空）。
-        返回是否有剔除发生（调用方可据此落盘）。"""
         removed = False
         models = self._data["ai_models"]
-        # ① 剔除遗留内置项
         kept = [m for m in models if not m.get("builtin")]
         if len(kept) != len(models):
             removed = True
         self._data["ai_models"] = kept
-
-        # ② 剔除离线 Hash 向量模型
         emb = self._data.get("embedding_models", [])
         emb_kept = [m for m in emb if m.get("provider") != "hash"]
         if len(emb_kept) != len(emb):
             removed = True
         self._data["embedding_models"] = emb_kept
-
-        # ③ 默认模型校正（文本）
         cur = self._data["ai_models"]
         cur_ids = {m.get("id") for m in cur}
         default = self._data.get("default_ai_model", "")
         if not default or default not in cur_ids:
             self._data["default_ai_model"] = cur[0]["id"] if cur else ""
-
-        # ③ 默认模型校正（向量）
         emb_ids = {m.get("id") for m in emb_kept}
         emb_def = self._data.get("default_embedding_model", "")
         if not emb_def or emb_def not in emb_ids:
             self._data["default_embedding_model"] = emb_kept[0]["id"] if emb_kept else ""
-
         return removed
 
     def save(self) -> None:
         with self._lock:
             out = {k: v for k, v in self._data.items() if k in _PERSISTED_KEYS}
-            self._path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 写 DB
             try:
-                self._path.chmod(0o600)
-            except OSError:
+                con = get_conn(self._data_dir)
+                con.execute(
+                    "INSERT OR REPLACE INTO system_kv (k, v) VALUES (?, ?)",
+                    ("settings", json.dumps(out, ensure_ascii=False)),
+                )
+                con.commit()
+                con.close()
+            except Exception:
                 pass
+            # 兼容：旧文件归档（若存在则重命名）
+            if self._path.exists():
+                try:
+                    bak = self._path.with_suffix(".json.bak")
+                    if not bak.exists():
+                        self._path.rename(bak)
+                except OSError:
+                    pass
 
     def get(self) -> RuntimeSettings:
         data = dict(self._data)
@@ -426,18 +433,11 @@ class SettingsStore:
         )
 
     def update(self, patch: dict[str, Any]) -> RuntimeSettings:
-        """部分更新。支持两种格式：
-        - 新格式：传 ai_models / default_ai_model / embedding_models / default_embedding_model
-        - 旧格式：传 ai_provider / ai_base_url / ...（更新默认模型的对应字段）
-        """
         with self._lock:
-            # 先确保有列表结构（key 缺失才迁移；空列表 = 用户清空，不算缺失）
             if "ai_models" not in self._data or self._data.get("ai_models") is None:
                 _migrate_from_legacy(self._data)
             if "embedding_models" not in self._data or self._data.get("embedding_models") is None:
                 _migrate_from_legacy(self._data)
-
-            # 新格式：直接替换列表（api_key 掩码 "•••" 不回写，保留旧值）
             if "ai_models" in patch:
                 self._data["ai_models"] = _restore_masked_keys(self._data["ai_models"], patch["ai_models"])
             if "default_ai_model" in patch:
@@ -446,8 +446,6 @@ class SettingsStore:
                 self._data["embedding_models"] = _restore_masked_keys(self._data["embedding_models"], patch["embedding_models"])
             if "default_embedding_model" in patch:
                 self._data["default_embedding_model"] = patch["default_embedding_model"]
-
-            # 旧格式兼容：更新默认模型
             ai_legacy_fields = {"ai_provider": "provider", "ai_base_url": "base_url",
                                 "ai_api_key": "api_key", "ai_model": "model",
                                 "ai_temperature": "temperature", "ai_timeout": "timeout"}
@@ -463,7 +461,6 @@ class SettingsStore:
                 for legacy_k, model_k in ai_legacy_fields.items():
                     if legacy_k in patch:
                         target[model_k] = patch[legacy_k]
-
             emb_legacy_fields = {"embedding_provider": "provider", "embedding_base_url": "base_url",
                                  "embedding_api_key": "api_key", "embedding_model": "model"}
             if any(k in patch for k in emb_legacy_fields):
@@ -478,8 +475,6 @@ class SettingsStore:
                 for legacy_k, model_k in emb_legacy_fields.items():
                     if legacy_k in patch:
                         target[model_k] = patch[legacy_k]
-
-            # 其他字段
             for k in ("gate_review_threshold", "gate_rules",
                       "kb_sample_rows", "kb_ai_annotation_samples",
                       "privacy_mode",
@@ -490,7 +485,6 @@ class SettingsStore:
                         if v not in ("strict", "standard", "open"):
                             continue
                     if k in ("query_max_rows", "pool_size"):
-                        # 防御：非整数 / 非正整数不写入，保留既有值（env 默认值）
                         try:
                             vi = int(v)
                         except (TypeError, ValueError):
@@ -511,7 +505,6 @@ class SettingsStore:
                     pol["updated_at"] = __import__("time").strftime("%Y-%m-%dT%H:%M:%S")
                     if "updated_by" not in pol or not pol["updated_by"]:
                         pol["updated_by"] = "api"
-                    # 同步 gate_review_threshold 与 policy.threshold
                     if "threshold" in pol:
                         try:
                             thr = int(pol["threshold"])
@@ -520,7 +513,6 @@ class SettingsStore:
                         except (TypeError, ValueError):
                             pass
                     self._data["policy"] = pol
-
         self._ensure_builtins()
         self.save()
         return self.get()

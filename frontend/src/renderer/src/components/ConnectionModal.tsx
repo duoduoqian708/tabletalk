@@ -49,24 +49,7 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
-  // 草稿：表单内容实时进浏览器缓存（未测/失败也保留，防止切换页面丢失）
-  useEffect(() => {
-    if (!open) return
-    try {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(form))
-    } catch {
-      /* ignore */
-    }
-  }, [form, open])
-
-  if (!open) return null
-
   const isSqlite = form.dialect === 'sqlite'
-
-  const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => {
-    setForm((f) => ({ ...f, [k]: v }))
-    setTestedAt(null) // 任何字段改动 → 测试结果失效，需重新测试
-  }
 
   const input = useMemo(() => ({
     name: form.name || '未命名连接',
@@ -81,6 +64,23 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
     read_only: form.readOnly,
     sensitive: form.sensitive.split(',').map((s) => s.trim()).filter(Boolean),
   }), [form, isSqlite])
+
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => {
+    setForm((f) => ({ ...f, [k]: v }))
+    setTestedAt(null) // 任何字段改动 → 测试结果失效，需重新测试
+  }
+
+  // 草稿：表单内容实时进浏览器缓存（未测/失败也保留，防止切换页面丢失）
+  useEffect(() => {
+    if (!open) return
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(form))
+    } catch {
+      /* ignore */
+    }
+  }, [form, open])
+
+  if (!open) return null
 
   async function handleTest(): Promise<void> {
     setTesting(true)

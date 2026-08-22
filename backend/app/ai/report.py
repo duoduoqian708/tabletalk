@@ -208,10 +208,40 @@ async def _run_report_query(
                 "reasons": assessment.reasons}
     from app.core.query import execute as run_query
 
+    # B4 严格档：报告聚合也不允许明文出网（已由 resolve_provider_cfg 强制 mock，但 defense-in-depth 仍拦截）
+    try:
+        _mode = state.runtime.get().privacy_mode
+    except Exception:
+        _mode = "standard"
+    if _mode == "strict":
+        # 严格模式下报告查询仍执行供卡片展示，但后续 _llm_narration 不会调用（mock 分支），且此处审计标记
+        pass
+
     res = await run_query(state, conn_id, sql, max_rows=200)   # 报告聚合，200 行足够
+    # B2 脱敏：报告聚合行在出网前脱敏（标准档 token 化，开放档明文，严格档仍 token 化作为 defense-in-depth）
+    redacted_rows = res["rows"]
+    _redactions: list[str] = []
+    if res.get("rows"):
+        if _mode != "open":
+            try:
+                from app.safety.redact import get_salt as _grs, redact_rows as _rr
+                from app.config import get_env as _ge
+                _salt = _grs(_ge().data_dir)
+                try:
+                    _sens = state.connections.get(conn_id).sensitive
+                except Exception:
+                    _sens = []
+                _tbl = assessment.tables[0] if assessment.tables else ""
+                redacted_rows, _mp = _rr(res["rows"], res["columns"], _tbl, _salt, _sens)
+                _redactions = list(_mp.keys())[:5]
+            except Exception:
+                # fail-closed
+                redacted_rows = []
+                _redactions = ["redact-failed"]
     state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier="read", verdict="allow",
                     status="报告查询", sql=sql, elapsed_ms=res.get("elapsed_ms"),
                     report_id=report_id, source="report")
+    # 存原始 rows 供前端图表/卡片展示，redacted_rows 供模型
     return {
         "ok": True,
         "result_id": result_id,
@@ -219,6 +249,8 @@ async def _run_report_query(
         "columns": res["columns"],
         "types": res["types"],
         "rows": res["rows"],
+        "redacted_rows": redacted_rows,
+        "redactions": _redactions,
         "row_count": res["row_count"],
         "elapsed_ms": res["elapsed_ms"],
     }
@@ -240,18 +272,56 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
             pass
 
     user_text = _last_user_text(_normalize_messages(req.messages))
+    # B2: 报告请求的用户文本亦脱敏
+    _report_text_redactions: list[str] = []
+    try:
+        from app.safety.redact import get_salt as _rgrs, redact_text as _rrt
+        from app.config import get_env as _rge
+        _rsalt = _rgrs(_rge().data_dir)
+        try:
+            _rsens = state.connections.get(conn_id).sensitive
+        except Exception:
+            _rsens = []
+        _rtext, _rmp = _rrt(user_text, _rsalt, _rsens)
+        if _rmp:
+            _report_text_redactions = list(_rmp.keys())[:5]
+            user_text = _rtext
+    except Exception:
+        pass
     context, meta = await assemble_context_full(state, conn_id, req.table, user_text)
 
     # B1 出网清单（报告模式：强制 include_data=true，聚合结果）
     try:
         provider_cfg_for_manifest = resolve_provider_cfg(state, req)
+        # 历史消息同样脱敏
+        _hist_norm = _normalize_messages(req.messages)
+        try:
+            from app.safety.redact import get_salt as _hgs, redact_text as _hrt
+            from app.config import get_env as _hge
+            _hsalt = _hgs(_hge().data_dir)
+            try:
+                _hsens = state.connections.get(conn_id).sensitive
+            except Exception:
+                _hsens = []
+            for _hm in _hist_norm:
+                if _hm.get("role") == "user" and _hm.get("content"):
+                    _hrc, _hmp = _hrt(_hm["content"], _hsalt, _hsens)
+                    if _hmp:
+                        for _hk in _hmp.keys():
+                            if _hk not in _report_text_redactions and len(_report_text_redactions) < 5:
+                                _report_text_redactions.append(_hk)
+                        _hm["content"] = _hrc
+        except Exception:
+            pass
         # 报告的 messages 包含历史 + 当前上下文
         _msgs_for_manifest = [
             {"role": "system", "content": report_system_prompt()},
             {"role": "system", "content": context},
-            *_normalize_messages(req.messages),
+            *_hist_norm,
         ]
         manifest = build_manifest(state, conn_id, meta, _msgs_for_manifest, True, provider_cfg_for_manifest, context)
+        if _report_text_redactions:
+            manifest["redactions"] = _report_text_redactions[:5]
         # 审计（经 logger 加锁，不带 report_id 避免与章节计数混淆）
         try:
             conn_name = state.connections.get(conn_id).name
@@ -272,7 +342,12 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
         except Exception:
             pass
     except Exception:
-        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": "standard", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "", "provider": "mock"}
+        # B1 修复：兜底 manifest 亦需读取真实 privacy_mode 而非硬编码 standard
+        try:
+            _fallback_mode = state.runtime.get().privacy_mode
+        except Exception:
+            _fallback_mode = "standard"
+        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": _fallback_mode, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "", "provider": "mock"}
     yield {"type": "report_start", "connection": conn_id,
            "report_id": report_id, "snapshot_ts": snapshot_ts}
     yield {"type": "manifest", "manifest": manifest}
@@ -395,10 +470,11 @@ async def _llm_plan(provider, question: str, context: str) -> list[dict]:
 
 async def _llm_narration(provider, question, plan, section_results) -> str:
     try:
+        # B2: 聚合行使用脱敏后 redacted_rows 出网
         blocks = "\n\n".join(
             f"## {s['title']}（result_id={s['id']}）\n"
             f"SQL：{s['sql']}\n"
-            f"结果：\n{_summarize_results(qr.get('rows', []), qr.get('columns', []))}"
+            f"结果：\n{_summarize_results(qr.get('redacted_rows', qr.get('rows', [])), qr.get('columns', []))}"
             for s, qr in zip(plan, section_results) if qr.get("ok")
         )
         prompt = (

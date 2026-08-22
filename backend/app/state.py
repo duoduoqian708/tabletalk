@@ -40,6 +40,21 @@ def _build_state(data_dir=None) -> AppState:
     from app.ai.skills.registry import load_custom
     load_custom(env.data_dir)  # 恢复自定义技能（技能广场持久化）
     connections = ConnectionRegistry(env.data_dir)
+    # 性能/污染修复：启动时清理指向已消失临时文件的僵尸连接（pytest 污染，102 条变 3 条的根因）
+    try:
+        from pathlib import Path as _P
+        for c in list(connections.list()):
+            f = (c.file or "").strip()
+            if not f:
+                continue
+            # 仅清理明显的临时/pytest 路径且文件已不存在的连接
+            if ("/pytest" in f or f.startswith("/private/var/folders/") or f.startswith("/tmp/")) and not _P(f).exists():
+                try:
+                    connections.delete(c.id)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     runtime = SettingsStore(env.data_dir)
     knowledge = KnowledgeBase(env.data_dir, runtime=runtime)
     _migrate_kb_status(knowledge, connections)  # 老连接：artifact 已存在 → 视为已就绪

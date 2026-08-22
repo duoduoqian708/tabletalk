@@ -77,17 +77,6 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
     const rotate = (p: [number, number, number] | undefined): { x: number; y: number; z: number; scale: number } =>
       project(p ?? [0, 0, 0], { yaw, pitch, zoom, D, W, H })
 
-    const neighborsOf = (idx: number): Set<number> => {
-      const set = new Set<number>([idx])
-      idxRef.current.redges.forEach((e) => {
-        const a = idxRef.current.nameToIdx.get(e.from)
-        const b = idxRef.current.nameToIdx.get(e.to)
-        if (a === idx && b != null) set.add(b)
-        if (b === idx && a != null) set.add(a)
-      })
-      return set
-    }
-
     const geom: { POS: [number, number, number][]; RADII: number[]; COLORS: string[] } = {
       POS: [], RADII: [], COLORS: []
     }
@@ -105,16 +94,52 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
     }
     rebuildGeom()
 
+    // 几何只随表集重建（rtables 引用变化才重算）；此前每帧重算布点/半径/取色纯属浪费
+    let geomSrc: unknown = null
+    const rebuildGeomIfNeeded = (): void => {
+      const src = idxRef.current.rtables
+      if (src !== geomSrc) {
+        rebuildGeom()
+        geomSrc = src
+      }
+    }
+
+    // 每帧投影缓存（供绘制与 hitNode/hitEdge 复用，鼠标移动时不再全量重投影）
+    let projLast: { i: number; p: ReturnType<typeof rotate> }[] = []
+
+    // 邻居集合缓存：选中期间每帧重建 Set + 遍历全部边不必要
+    let hlCache: { focus: number; eLen: number; set: Set<number> } | null = null
+    const neighborsOf = (idx: number): Set<number> => {
+      const es = idxRef.current.redges
+      if (hlCache && hlCache.focus === idx && hlCache.eLen === es.length) return hlCache.set
+      const set = new Set<number>([idx])
+      es.forEach((e) => {
+        const a = idxRef.current.nameToIdx.get(e.from)
+        const b = idxRef.current.nameToIdx.get(e.to)
+        if (a === idx && b != null) set.add(b)
+        if (b === idx && a != null) set.add(a)
+      })
+      hlCache = { focus: idx, eLen: es.length, set }
+      return set
+    }
+
+    let raf = 0
     const draw = (t: number): void => {
       ctx.clearRect(0, 0, W, H)
-      rebuildGeom()
+      rebuildGeomIfNeeded()
       const tbl = idxRef.current.rtables
       const es = idxRef.current.redges
 
-      // projBy 按节点下标索引（边端点/工具栏定位取用）；proj 仅按深度排序决定绘制次序。
-      // sort 后 proj[a] 是"深度第 a 位"的节点而非节点 a，两者不可混用。
-      const projBy = tbl.map((_, i) => ({ i, p: rotate(geom.POS[i]) }))
-      const proj = [...projBy].sort((a, b) => b.p.z - a.p.z)
+      // projBy 按节点下标索引（边端点/工具栏定位取用）；绘制序按下标数组排序。
+      // sort 后 projBy[a] 必须仍是节点 a（历史高亮错乱 bug 的教训），深度序只进 orderIdx。
+      const projBy: { i: number; p: ReturnType<typeof rotate> }[] = []
+      const orderIdx: number[] = []
+      for (let i = 0; i < tbl.length; i++) {
+        projBy.push({ i, p: rotate(geom.POS[i]) })
+        orderIdx.push(i)
+      }
+      orderIdx.sort((a, b) => projBy[a].p.z - projBy[b].p.z)
+      projLast = projBy
 
       const focus = selRef.current
       const hlSet = focus != null ? neighborsOf(focus) : null
@@ -152,7 +177,9 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
       })
 
       // 节点：默认保留各自花色（低透明度）；仅焦点节点及其直接邻居点亮
-      proj.forEach(({ i, p }) => {
+      for (let oi = 0; oi < orderIdx.length; oi++) {
+        const i = orderIdx[oi]
+        const p = projBy[i].p
         const lit = focus != null && (i === focus || (hlSet ? hlSet.has(i) : false))
         const isFocus = focus === i
         const isLinkSrc = linkRef.current === tbl[i].name
@@ -172,11 +199,12 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
         const fs = (isFocus || isLinkSrc) ? 12.5 : Math.min(12, 9.5 + p.scale * 2.2)
         ctx.font = `600 ${fs}px var(--sans, sans-serif)`
         ctx.textAlign = 'center'
+        // 深色底衬替代 shadowBlur（阴影走软件渲染路径，逐帧文字绘制的性能悬崖）
+        ctx.fillStyle = 'rgba(5,7,13,.9)'
+        ctx.fillText(tbl[i].name, p.x + 1, p.y - r - 6)
         ctx.fillStyle = (isFocus || isLinkSrc) ? '#fff' : lit ? '#fff' : 'rgba(190,205,225,.55)'
-        ctx.shadowColor = 'rgba(5,7,13,.9)'; ctx.shadowBlur = 5
         ctx.fillText(tbl[i].name, p.x, p.y - r - 7)
-        ctx.shadowBlur = 0
-      })
+      }
 
       // 选中节点跟随定位工具栏
       const tb = toolbarRef.current
@@ -186,15 +214,17 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
         tb.style.left = `${q.x}px`
         tb.style.top = `${q.y - r - 14}px`
       }
-      requestAnimationFrame(draw)
+      raf = requestAnimationFrame(draw)
     }
-    requestAnimationFrame(draw)
+    raf = requestAnimationFrame(draw)
 
     const hitNode = (px: number, py: number): number | null => {
       const tbl = idxRef.current.rtables
       let best: number | null = null, bd = 1e9
+      // 复用绘制帧投影（最多滞后一帧），免去每次 pointermove 全量重投影
       tbl.forEach((_, i) => {
-        const q = rotate(geom.POS[i])
+        const q = projLast[i]?.p
+        if (!q) return
         const r = Math.max(MIN_R, geom.RADII[i] * q.scale) + 6
         const d = (px - q.x) ** 2 + (py - q.y) ** 2
         if (d < bd && d < r * r) { bd = d; best = i }
@@ -207,7 +237,8 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
       idxRef.current.redges.forEach((e) => {
         const a = idxRef.current.nameToIdx.get(e.from), b = idxRef.current.nameToIdx.get(e.to)
         if (a == null || b == null) return
-        const A = rotate(geom.POS[a]), B = rotate(geom.POS[b])
+        const A = projLast[a]?.p, B = projLast[b]?.p
+        if (!A || !B) return
         const dx = B.x - A.x, dy = B.y - A.y
         const l2 = dx * dx + dy * dy || 1
         let tt = ((px - A.x) * dx + (py - A.y) * dy) / l2
@@ -219,9 +250,9 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
       return best
     }
 
+    // offsetX/offsetY 由浏览器直接给出（相对目标元素），免去每次事件 getBoundingClientRect 的布局查询
     const pt = (e: PointerEvent | MouseEvent) => {
-      const rect = cv.getBoundingClientRect()
-      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      return { x: e.offsetX, y: e.offsetY }
     }
 
     const clearSelection = (): void => {
@@ -303,7 +334,7 @@ export function GraphEditor({ tables, edges, excluded, onAddEdge, onDeleteEdge, 
     window.addEventListener('keydown', onKey)
 
     return () => {
-      ro.disconnect(); clearInterval(tick)
+      ro.disconnect(); clearInterval(tick); cancelAnimationFrame(raf)
       cv.removeEventListener('pointerdown', onDown)
       cv.removeEventListener('pointermove', onMove)
       cv.removeEventListener('pointerup', onUp)

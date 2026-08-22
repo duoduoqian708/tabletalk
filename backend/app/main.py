@@ -68,32 +68,22 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def sidecar_token_guard(request: Request, call_next):
-        """本机鉴权：仅守 /api/*；health 免鉴权，bootstrap 在单机免鉴权、团队模式需本地或已鉴权。"""
+        """全接口强鉴权：除 health 与 POST /auth/login 外均需登录（为企业版预留 per-user 钩子）。"""
         path = request.url.path
         if request.method == "OPTIONS":
             return await call_next(request)
         if not path.startswith("/api/"):
             return await call_next(request)
-        # health 始终免鉴权
         if path == "/api/v1/health":
             return await call_next(request)
-        # auth 的 login/register 免鉴权（登录即为获取 token 的入口）
-        if path in ("/api/v1/auth/login", "/api/v1/auth/register"):
+        if path == "/api/v1/auth/login":
             return await call_next(request)
-        # bootstrap：单机免鉴权，团队模式仅本机 127.0.0.1 可免鉴权（防 LAN 窃取）
+        # 个人版：bootstrap 首次用于取 token 以便 login，允许免鉴权（后续所有业务接口均需 JWT）
         if path == "/api/v1/bootstrap":
-            try:
-                from app.state import get_state as _gs
-                is_team = _gs().auth.is_team_mode()
-            except Exception:
-                is_team = False
-            if not is_team:
-                return await call_next(request)
-            # 团队模式：仅本机回环可免鉴权
-            host = request.client.host if request.client else ""
-            if host in ("127.0.0.1", "::1", "localhost"):
-                return await call_next(request)
-            # 否则走正常鉴权（需已登录）
+            return await call_next(request)
+        # 兼容：auth/register/change-password 免鉴权（首个用户/改密）
+        if path in ("/api/v1/auth/register", "/api/v1/auth/change-password"):
+            return await call_next(request)
         # 兼容：X-TableTalk-Token 单共享密钥（单机） + Bearer JWT（团队）
         supplied = request.headers.get("X-TableTalk-Token", "") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         # 单机 token

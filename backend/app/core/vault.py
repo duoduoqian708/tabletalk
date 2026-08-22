@@ -1,8 +1,9 @@
-"""凭证保险库 — E1 AES-GCM 风格加密（主密钥来自 TABLETALK_MASTER_KEY 或 data_dir/master.key）。
+"""凭证保险库 — E1 HMAC-XOR 流加密（主密钥来自 TABLETALK_MASTER_KEY 或 data_dir/master.key）。
 
+- 主密钥：优先环境变量 TABLETALK_MASTER_KEY；否则 data_dir/master.key（首次使用自动生成 32B 随机，chmod 600）
 - 明文迁移：旧 connections.json 明文自动迁移为加密存储
 - 前端永不下发明文密码（public() 脱敏）
-- 无 cryptography 依赖时回退为 HMAC-XOR 流加密（本地可逆，离线可跑）
+- 算法：HMAC-SHA256 计数器流 + 16B 截断 HMAC 校验（无 cryptography 依赖，离线可跑；非 AES-GCM）
 """
 from __future__ import annotations
 
@@ -16,6 +17,24 @@ from pathlib import Path
 from typing import Any
 
 
+def _ensure_master_key_file(data_dir: Path) -> bytes | None:
+    """首次使用自动生成 master.key（32B 随机，chmod 600），E1 修复：默认不再明文落盘。"""
+    p = Path(data_dir) / "master.key"
+    if p.exists():
+        return None  # 已有不处理，由 _master_key 读取
+    try:
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
+        raw = secrets.token_bytes(32)
+        # 存 hex 便于审计，读取时兼容 raw/hex（读取侧对 hex 返回 raw）
+        p.write_bytes(raw.hex().encode())
+        try:
+            p.chmod(0o600)
+        except OSError:
+            pass
+        return raw  # 与读取路径保持一致（hex→raw）
+    except OSError:
+        return None
+
 def _master_key(data_dir: Path) -> bytes | None:
     # 优先环境变量，其次 data_dir/master.key 文件
     env = os.environ.get("TABLETALK_MASTER_KEY", "").strip()
@@ -27,6 +46,21 @@ def _master_key(data_dir: Path) -> bytes | None:
             raw = p.read_bytes().strip()
             if len(raw) >= 16:
                 # 若文件已是 32 字节 hex 或 raw，直接用
+                if len(raw) == 64 and all(c in b"0123456789abcdefABCDEF" for c in raw):
+                    return bytes.fromhex(raw.decode())
+                return hashlib.sha256(raw).digest()
+        except OSError:
+            pass
+        return None
+    # 无密钥时自动生成（E1 修复：默认加密而非明文）
+    gen = _ensure_master_key_file(data_dir)
+    if gen is not None:
+        return gen
+    # 再次尝试读取刚生成的文件
+    if p.exists():
+        try:
+            raw = p.read_bytes().strip()
+            if len(raw) >= 16:
                 if len(raw) == 64 and all(c in b"0123456789abcdefABCDEF" for c in raw):
                     return bytes.fromhex(raw.decode())
                 return hashlib.sha256(raw).digest()
@@ -46,11 +80,16 @@ def _xor_stream(data: bytes, key: bytes, nonce: bytes) -> bytes:
         counter += 1
     return bytes(out)
 
+_EPHEMERAL_KEY: bytes | None = None
+
 def encrypt(plaintext: str, data_dir: Path) -> str:
     key = _master_key(data_dir)
     if key is None:
-        # 无主密钥时回退为 base64 明文（兼容旧行为，但标记为 ENC@fallback）
-        return "ENC@plain:" + base64.b64encode(plaintext.encode()).decode()
+        # E1 fail-closed：无主密钥且文件生成失败时使用进程内临时密钥加密（宁重启后需重配，勿明文落盘）
+        global _EPHEMERAL_KEY
+        if _EPHEMERAL_KEY is None:
+            _EPHEMERAL_KEY = hashlib.sha256(secrets.token_bytes(32)).digest()
+        key = _EPHEMERAL_KEY
     nonce = secrets.token_bytes(12)
     pt = plaintext.encode()
     # 追加 HMAC 校验（16 字节截断）
@@ -70,7 +109,12 @@ def decrypt(ciphertext: str, data_dir: Path) -> str:
     if ciphertext.startswith("ENC@xor:"):
         key = _master_key(data_dir)
         if key is None:
-            return ""
+            # E1：若加密时用了临时密钥，解密也尝试临时密钥（进程内）
+            global _EPHEMERAL_KEY
+            if _EPHEMERAL_KEY is not None:
+                key = _EPHEMERAL_KEY
+            else:
+                return ""
         try:
             raw = base64.b64decode(ciphertext[len("ENC@xor:"):].encode())
             nonce, ct = raw[:12], raw[12:]

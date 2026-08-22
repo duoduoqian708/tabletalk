@@ -11,17 +11,18 @@ router = APIRouter(prefix="/api/v1", tags=["usage"])
 @router.get("/usage")
 async def usage():
     state = get_state()
-    # 统计审计中的 egress 按用户（若有 user_id，否则按 origin）
     entries = state.audit.list()
     by_user: Counter = Counter()
     by_model: Counter = Counter()
+    total_tokens = 0
     for e in entries:
         if e.get("verdict") == "egress":
-            # 优先用 manifest 中的 model/provider，若无则用 sql 前缀
             m = e.get("manifest", {})
             model = m.get("model") or m.get("provider") or "unknown"
             by_model[model] += 1
-            # user_id 若有则按 user，否则按 connection
             user = e.get("user_id") or e.get("origin") or "unknown"
             by_user[user] += 1
-    return {"by_user": dict(by_user), "by_model": dict(by_model), "total_egress": sum(by_model.values())}
+            # token 计数（若 audit 中有 prompt_tokens）
+            total_tokens += int(e.get("prompt_tokens") or e.get("manifest", {}).get("prompt_tokens") or 0)
+            total_tokens += int(e.get("completion_tokens") or e.get("manifest", {}).get("completion_tokens") or 0)
+    return {"by_user": dict(by_user), "by_model": dict(by_model), "total_egress": sum(by_model.values()), "total_tokens": total_tokens}

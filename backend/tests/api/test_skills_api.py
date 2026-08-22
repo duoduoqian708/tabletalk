@@ -51,9 +51,13 @@ async def test_skills_validation_and_builtin_protection(client):
     # 内置技能不可删
     r = await client.delete("/api/v1/skills/query")
     assert r.status_code == 403
-    # 内置技能可更新 enabled
+    # 地板技能不可禁用（T1.2/08§4.5）：query 保持启用
     r = await client.put("/api/v1/skills/query", json={"enabled": False})
+    assert r.status_code == 200
+    assert r.json()["enabled"] is True
+    # 非地板技能可禁用
+    r = await client.put("/api/v1/skills/report", json={"enabled": False})
     assert r.status_code == 200
     assert r.json()["enabled"] is False
     # 恢复，避免影响其他测试
-    await client.put("/api/v1/skills/query", json={"enabled": True})
+    await client.put("/api/v1/skills/report", json={"enabled": True})

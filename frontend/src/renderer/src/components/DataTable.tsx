@@ -345,23 +345,12 @@ export function DataTable(): React.JSX.Element {
   )
 }
 
-/** 「⋯」按钮：内容被截断时显示；点击打开预览（不触发行复制）。 */
+/** 「⋯」按钮：hover 时显现（免 JS 测量，批量渲染无回流） */
 function CellMore({ onOpen }: { onOpen: (td: HTMLTableCellElement) => void }): React.JSX.Element {
   const { t } = useI18n()
-  const [truncated, setTruncated] = useState(false)
-  const btnRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    const td = btnRef.current?.closest('td')
-    const span = td?.querySelector<HTMLElement>('.c-text')
-    if (!td || !span) return
-    setTruncated(span.scrollWidth > span.clientWidth + 1)
-  }, [])
-
   return (
     <button
-      ref={btnRef}
-      className={`c-more${truncated ? '' : ' hidden'}`}
+      className="c-more"
       title={t('table.viewFull')}
       onClick={(e) => {
         e.stopPropagation()

@@ -19,12 +19,17 @@ interface Props {
   onSelectNode: (name: string, x: number, y: number) => void
   selectedName?: string | null
   onClearSelection?: () => void
+  onOpenData?: (name: string) => void
+  /** 缩略模式（表数据视图打开时）：降帧渲染，让出主线程 */
+  mini?: boolean
 }
 
-export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onClearSelection }: Props): React.JSX.Element {
+export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onClearSelection, onOpenData, mini, paused: controlledPaused, onTogglePause }: Props & { paused?: boolean; onTogglePause?: () => void }): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const propsRef = useRef({ tables, foreignKeys, onSelectNode, onClearSelection })
-  propsRef.current = { tables, foreignKeys, onSelectNode, onClearSelection }
+  const propsRef = useRef({ tables, foreignKeys, onSelectNode, onClearSelection, onOpenData })
+  propsRef.current = { tables, foreignKeys, onSelectNode, onClearSelection, onOpenData }
+  const miniRef = useRef(mini)
+  miniRef.current = mini
   const selectedRef = useRef<number | null>(null)
   const { t } = useI18n()
 
@@ -47,14 +52,16 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     return match.slice(0, 8)
   }, [tables, q])
 
-  // D2: pause
-  const [paused, setPaused] = useState(() => {
+  // D2: pause - 受控时由外层驱动（按钮外置避免随 g3d-wrap 位移），否则内部自治
+  const [internalPaused, setInternalPaused] = useState(() => {
     try {
       return sessionStorage.getItem('tabletalk-graph-paused') === '1'
     } catch {
       return false
     }
   })
+  const isControlled = typeof controlledPaused !== 'undefined'
+  const paused = isControlled ? (controlledPaused as boolean) : internalPaused
   // D4: onboarding
   const [onboardVisible, setOnboardVisible] = useState(() => {
     try {
@@ -87,6 +94,9 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
   const onboardRef = useRef<{ active: boolean; start: number; fromYaw: number } | null>(null)
   const onboardSetterRef = useRef(setOnboardVisible)
   onboardSetterRef.current = setOnboardVisible
+  // 性能：缓存球面布点与半径/颜色，避免每帧重算（仅表集变更时重算）
+  const baseCacheRef = useRef<{ n: number; basePos: [number, number, number][]; radii: number[]; colors: string[]; minC: number; maxC: number } | null>(null)
+  const idxMapRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     pausedRef.current = paused
@@ -106,8 +116,34 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     selectedRef.current = selectedName
       ? propsRef.current.tables.findIndex((t) => t.name === selectedName)
       : null
-    scatterTargetRef.current = selectedName ? 1 : 0
+    // 已去掉拉伸：保持原位，不再外扩
+    scatterTargetRef.current = 0
   }, [selectedName])
+
+  // 缓存几何：表集变更时一次性计算，避免每帧分配
+  useEffect(() => {
+    const tbl = tables
+    const n = tbl.length
+    if (n === 0) {
+      baseCacheRef.current = null
+      idxMapRef.current = new Map()
+      return
+    }
+    const counts = tbl.map((tt) => tt.row_count)
+    const minC = Math.min(...counts)
+    const maxC = Math.max(...counts)
+    baseCacheRef.current = {
+      n,
+      basePos: spherePositions(n),
+      radii: tbl.map((tt) => radiusFor(tt.row_count, minC, maxC)),
+      colors: tbl.map((tt) => colorFor(tt.name)),
+      minC,
+      maxC
+    }
+    const m = new Map<string, number>()
+    tbl.forEach((t, i) => m.set(t.name, i))
+    idxMapRef.current = m
+  }, [tables])
 
   // 触发搜索飞行的函数（暴露给事件处理器）
   const flyTo = (name: string) => {
@@ -147,6 +183,10 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       return
     }
 
+    // 立即点亮关联（不等飞行结束，用户反馈“要缓一会才亮”）
+    selectedRef.current = idx
+    // 触发外层高亮，弹窗初始位置先给 0,0，下一帧跟随会校正到投影
+    propsRef.current.onSelectNode(name, 0, 0)
     flyingRef.current = {
       active: true,
       start: performance.now(),
@@ -174,6 +214,25 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     if (!cv) return
     const ctx = cv.getContext('2d')
     if (!ctx) return
+
+    // ---- 性能：一次性烘焙贴图（sprite），替代每帧每节点的 createRadialGradient / shadowBlur ----
+    // createRadialGradient 每帧每节点分配渐变对象、shadowBlur 走软件渲染路径，是 2D 画布最重的两类操作；
+    // 预烘焙成小画布后每帧只做 drawImage（GPU 合成），大表集下帧耗从数十毫秒降到个位数。
+    const SPR = 96
+    const mkSprite = (paint: (c: CanvasRenderingContext2D, s: number) => void): HTMLCanvasElement => {
+      const el = document.createElement('canvas')
+      el.width = SPR; el.height = SPR
+      const c = el.getContext('2d')
+      if (c) paint(c, SPR)
+      return el
+    }
+    // 星空微光贴图（替代每帧 130 次路径填充与 rgba 字符串拼接）
+    const starSprite = mkSprite((c, sz) => {
+      const cx = sz / 2
+      const g = c.createRadialGradient(cx, cx, 0, cx, cx, cx)
+      g.addColorStop(0, '#c8dcff'); g.addColorStop(0.35, '#c8dcff'); g.addColorStop(1, 'rgba(200,220,255,0)')
+      c.fillStyle = g; c.fillRect(0, 0, sz, sz)
+    })
 
     let W = 0, H = 0, D = 0, dpr = 1
     let bg: HTMLCanvasElement | null = null
@@ -256,14 +315,24 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
 
     const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current, D, W, H })
 
+    // 邻居集合缓存：选中期间每帧都要点亮相邻节点，重建 Set + 遍历全部 FK 的代价不必要
+    let hlCache: { focus: number; fkLen: number; n: number; set: Set<number> } | null = null
     const neighborsOf = (idx: number): Set<number> => {
+      const fks = propsRef.current.foreignKeys
+      const n = propsRef.current.tables.length
+      if (hlCache && hlCache.focus === idx && hlCache.fkLen === fks.length && hlCache.n === n) {
+        return hlCache.set
+      }
       const set = new Set<number>([idx])
-      propsRef.current.foreignKeys.forEach((fk) => {
-        const a = propsRef.current.tables.findIndex((t) => t.name === fk.table)
-        const b = propsRef.current.tables.findIndex((t) => t.name === fk.ref_table)
+      const mp = idxMapRef.current
+      // 优先走索引映射，O(1) 查找，回退 findIndex 兼容旧路径
+      fks.forEach((fk) => {
+        const a = mp.get(fk.table) ?? propsRef.current.tables.findIndex((t) => t.name === fk.table)
+        const b = mp.get(fk.ref_table) ?? propsRef.current.tables.findIndex((t) => t.name === fk.ref_table)
         if (a === idx && b >= 0) set.add(b)
         if (b === idx && a >= 0) set.add(a)
       })
+      hlCache = { focus: idx, fkLen: fks.length, n, set }
       return set
     }
 
@@ -274,7 +343,18 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     }
 
     let raf = 0
+    let frame = 0
+    let lastFs = -1
+    // 复用投影缓冲：projBy 按节点下标索引（边端点/弹窗取用）；orderIdx 是深度序下标数组。
+    // sort 后按下标取 projBy[a] 仍是节点 a（历史高亮错乱 bug 的教训），深度序只存在 orderIdx 里。
+    let projBy: { i: number; p: ReturnType<typeof rotate> }[] = []
+    const orderIdx: number[] = []
     const draw = (t: number): void => {
+      // 非可见时降频：页面隐藏时跳过重绘，节省 CPU/电量
+      if (typeof document !== 'undefined' && document.hidden) {
+        raf = requestAnimationFrame(draw)
+        return
+      }
       // 飞行插值
       const now = performance.now()
       // onboarding 飞行（4s，自转一周 + 缓慢拉近）
@@ -324,18 +404,19 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         }
       }
 
-      // 散开进度插值（可打断，~1s 缓动）
-      const red = isReducedMotion()
-      if (red) {
-        scatterRef.current = scatterTargetRef.current
-      } else {
-        scatterRef.current += (scatterTargetRef.current - scatterRef.current) * 0.07
-        if (Math.abs(scatterRef.current - scatterTargetRef.current) < 0.001) scatterRef.current = scatterTargetRef.current
-      }
+      // 已去掉拉伸：保持原位
+      scatterRef.current = 0
 
       // 搜索闪烁过期清理
       if (searchFlashRef.current && now > flashUntilRef.current) {
         // 不自动清 selectedRef，仅清 flash（点亮颜色恢复普通）
+      }
+
+      // 缩略模式（表数据视图打开时）隔帧渲染：后台角标 ~30fps，把主线程让给前景表格交互
+      frame += 1
+      if (miniRef.current && frame % 2 === 1) {
+        raf = requestAnimationFrame(draw)
+        return
       }
 
       if (bg) ctx.drawImage(bg, 0, 0, W, H)
@@ -348,34 +429,31 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         const x1 = st.x * cy + st.z * sy, z1 = -st.x * sy + st.z * cy
         const y1 = st.y * cp - z1 * sp
         const a = st.base * (0.55 + 0.45 * Math.sin(t * 0.001 * st.sp + st.phase))
-        ctx.fillStyle = `rgba(200,220,255,${a.toFixed(3)})`
-        ctx.beginPath()
-        ctx.arc(W / 2 + x1 * SS, H / 2 - y1 * SS, st.size, 0, 7)
-        ctx.fill()
+        const s = st.size * 3.2
+        ctx.globalAlpha = a
+        ctx.drawImage(starSprite, W / 2 + x1 * SS - s / 2, H / 2 - y1 * SS - s / 2, s, s)
       }
+      ctx.globalAlpha = 1
 
       const tbl = propsRef.current.tables
       const fks = propsRef.current.foreignKeys
-
-      const counts = tbl.map((tt) => tt.row_count)
-      const minC = counts.length ? Math.min(...counts) : 1
-      const maxC = counts.length ? Math.max(...counts) : 1
       const n = tbl.length
-      const basePos = spherePositions(n)
-      const RADII = tbl.map((tt) => radiusFor(tt.row_count, minC, maxC))
-      const COLORS = tbl.map((tt) => colorFor(tt.name))
+      // 使用缓存的几何，避免每帧重算与分配
+      const cached = baseCacheRef.current
+      const idxMap = idxMapRef.current
+      const basePos = cached && cached.n === n ? cached.basePos : spherePositions(n)
+      const RADII = cached && cached.n === tbl.length ? cached.radii : tbl.map((tt) => {
+        const counts = tbl.map((x) => x.row_count)
+        const minC0 = Math.min(...counts)
+        const maxC0 = Math.max(...counts)
+        return radiusFor(tt.row_count, minC0, maxC0)
+      })
+      const COLORS = cached && cached.n === tbl.length ? cached.colors : tbl.map((tt) => colorFor(tt.name))
 
-      // 散开：对选中节点的直接邻居径向外扩 20-30%
+      // 已去掉拉伸：保持原位，仅高亮
       const focus = selectedRef.current
       const hlSet = focus != null ? neighborsOf(focus) : null
-      const scatter = scatterRef.current
-      const POS: [number, number, number][] = basePos.map(([x, y, z], i) => {
-        if (focus != null && hlSet && hlSet.has(i) && i !== focus && scatter > 0.001) {
-          const s = 1 + 0.26 * scatter
-          return [x * s, y * s, z * s]
-        }
-        return [x, y, z]
-      })
+      const POS: [number, number, number][] = basePos
 
       geom.POS = POS
       geom.RADII = RADII
@@ -388,16 +466,50 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       ctx.ellipse(W / 2, H / 2, S, S * Math.abs(Math.cos(pitchRef.current)), 0, 0, 7)
       ctx.stroke()
 
-      const projBy = tbl.map((_, i) => ({ i, p: rotate(POS[i]) }))
-      const proj = [...projBy].sort((a, b) => b.p.z - a.p.z)
+      // 投影复用缓冲，避免每帧分配对象数组；orderIdx 升序 z（远者先画，近者后画在上层=正确遮挡序）
+      if (projBy.length !== n) {
+        projBy = tbl.map((_, i) => ({ i, p: rotate(POS[i]) }))
+      } else {
+        for (let i = 0; i < n; i++) {
+          projBy[i].i = i
+          projBy[i].p = rotate(POS[i])
+        }
+      }
+      if (orderIdx.length !== n) {
+        orderIdx.length = 0
+        for (let i = 0; i < n; i++) orderIdx.push(i)
+      }
+      orderIdx.sort((a, b) => projBy[a].p.z - projBy[b].p.z)
+
+      // 弹窗跟随：选中点的投影随图转动，命令式更新 .node-pop 位置（免 React 60fps 重渲染）
+      if (selectedRef.current != null && !miniRef.current) {
+        const selIdx = selectedRef.current
+        if (selIdx >= 0 && selIdx < n) {
+          const qp = projBy[selIdx].p
+          const popEl = document.querySelector('.node-pop') as HTMLElement | null
+          if (popEl) {
+            const wrap = document.querySelector('.g3d-wrap') as HTMLElement | null
+            const w = wrap ? wrap.clientWidth : W
+            const h = wrap ? wrap.clientHeight : H
+            const POP_W = 296, POP_H = 196
+            let px = qp.x + 16, py = qp.y - 24
+            px = Math.min(Math.max(8, px), Math.max(8, w - POP_W - 8))
+            py = Math.min(Math.max(8, py), Math.max(8, h - POP_H - 8))
+            popEl.style.left = `${px}px`
+            popEl.style.top = `${py}px`
+            popEl.style.opacity = '1'
+            popEl.style.pointerEvents = 'auto'
+          }
+        }
+      }
 
       // searchFlash 临时高亮（琥珀色）
       const flashName = searchFlashRef.current && now < flashUntilRef.current ? searchFlashRef.current : null
       const flashIdx = flashName ? tbl.findIndex((tt) => tt.name === flashName) : -1
 
       fks.forEach((fk) => {
-        const a = tbl.findIndex((t) => t.name === fk.table)
-        const b = tbl.findIndex((t) => t.name === fk.ref_table)
+        const a = idxMap.get(fk.table) ?? tbl.findIndex((t) => t.name === fk.table)
+        const b = idxMap.get(fk.ref_table) ?? tbl.findIndex((t) => t.name === fk.ref_table)
         if (a < 0 || b < 0) return
         const A = projBy[a], B = projBy[b]
         const lit = focus != null && (a === focus || b === focus)
@@ -420,62 +532,82 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         ctx.beginPath(); ctx.arc(qx, qy, lit ? 2.1 : 1.2, 0, 7); ctx.fill()
       })
 
-      proj.forEach(({ i, p }) => {
+      for (let oi = 0; oi < orderIdx.length; oi++) {
+        const i = orderIdx[oi]
+        const p = projBy[i].p
         const isFlash = i === flashIdx
         const lit = focus != null && (i === focus || (hlSet ? hlSet.has(i) : false))
         const isFocus = focus === i
         const r = Math.max(MIN_R, RADII[i] * Math.min(1.5, p.scale))
         const depth = Math.max(0, Math.min(1, (p.z + 1) / 2))
-        if (isFlash) {
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.8)
-          g.addColorStop(0, 'rgba(255,180,84,.55)'); g.addColorStop(1, '#ffb45400')
-          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.8, 0, 7); ctx.fill()
-        } else if (isFocus) {
-          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r * 2.4)
-          g.addColorStop(0, 'rgba(255,255,255,.5)'); g.addColorStop(1, COLORS[i] + '00')
-          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.4, 0, 7); ctx.fill()
+        const col = COLORS[i]
+        if (isFlash && !isFocus) {
+          // 搜索闪烁干净圈（保持本色，仅外圈琥珀）- 选中时不黄，保持白圈
+          ctx.globalAlpha = 1
+          ctx.strokeStyle = 'rgba(255,180,84,0.95)'
+          ctx.lineWidth = 1.8
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, r + 3.8, 0, Math.PI * 2)
+          ctx.stroke()
         }
-        const halo = isFlash ? 0.45 : lit ? 0.3 : 0.08 + depth * 0.12
-        const hg = ctx.createRadialGradient(p.x, p.y, r * 0.6, p.x, p.y, r * 2.6)
-        const col = isFlash ? '#ffb454' : COLORS[i]
-        hg.addColorStop(0, col + Math.round(halo * 255).toString(16).padStart(2, '0'))
-        hg.addColorStop(1, col + '00')
-        ctx.fillStyle = hg
-        ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.6, 0, 7); ctx.fill()
         ctx.globalAlpha = lit || isFlash ? 1 : 0.35 + depth * 0.35
-        ctx.fillStyle = isFlash ? '#ffb454' : COLORS[i]
+        ctx.fillStyle = col
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill()
-        ctx.lineWidth = (lit || isFocus || isFlash) ? 2 : 1
-        ctx.strokeStyle = isFlash ? 'rgba(255,180,84,.95)' : isFocus ? 'rgba(255,255,255,.95)' : lit ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.25)'
-        ctx.stroke()
-        const fs = isFocus ? 12.5 : Math.min(12, 9.5 + p.scale * 2.2)
-        ctx.font = `600 ${fs}px var(--sans, sans-serif)`
-        ctx.textAlign = 'center'
-        ctx.globalAlpha = lit || isFlash ? 1 : 0.45 + depth * 0.4
-        ctx.fillStyle = lit || isFlash ? '#fff' : 'rgba(190,205,225,.55)'
-        ctx.shadowColor = 'rgba(5,7,13,.9)'; ctx.shadowBlur = 5
-        ctx.fillText(tbl[i].name, p.x, p.y - r - 7)
-        ctx.shadowBlur = 0
-        ctx.globalAlpha = 1
-      })
+        if (isFocus) {
+          // 干净白圈，无光晕，保持本色（选中优先，搜索黄不覆盖白）
+          ctx.globalAlpha = 1
+          ctx.strokeStyle = 'rgba(255,255,255,0.92)'
+          ctx.lineWidth = 1.8
+          ctx.beginPath()
+          ctx.arc(p.x, p.y, r + 3.4, 0, Math.PI * 2)
+          ctx.stroke()
+        } else if (!isFlash) {
+          ctx.lineWidth = lit ? 2 : 1
+          ctx.strokeStyle = lit ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.25)'
+          ctx.stroke()
+        } else {
+          // isFlash 已在上方画过琥珀圈，节点本身描边保持与 lit 一致
+          ctx.lineWidth = 2
+          ctx.strokeStyle = 'rgba(255,180,84,.95)'
+          ctx.stroke()
+        }
+        if (!miniRef.current) {
+          const fs = isFocus ? 12.8 : Math.min(12, 9.5 + p.scale * 2.2)
+          if (fs !== lastFs) {
+            ctx.font = `600 ${fs}px var(--sans, sans-serif)`
+            lastFs = fs
+          }
+          ctx.textAlign = 'center'
+          ctx.globalAlpha = lit || isFlash ? 1 : 0.45 + depth * 0.4
+          // 深色底衬两次 fillText 替代 shadowBlur（阴影走软件渲染路径，是每帧文字绘制的性能悬崖）
+          ctx.fillStyle = 'rgba(5,7,13,.9)'
+          ctx.fillText(tbl[i].name, p.x + 1, p.y - r - 6)
+          ctx.fillStyle = lit || isFlash ? '#fff' : 'rgba(190,205,225,.55)'
+          ctx.fillText(tbl[i].name, p.x, p.y - r - 7)
+          ctx.globalAlpha = 1
+        }
+      }
       raf = requestAnimationFrame(draw)
     }
     raf = requestAnimationFrame(draw)
 
     const hit = (px: number, py: number): number | null => {
-      const order = propsRef.current.tables
-        .map((_, i) => ({ i, p: rotate(geom.POS[i]) }))
-        .sort((a, b) => a.p.z - b.p.z)
-      for (const { i, p } of order) {
+      // 复用绘制帧已算好的深度序投影（从近到远测试），不再在每次 pointermove 上
+      // 全量重投影 + 排序——高刷指针下该事件每秒可触发 200+ 次，曾是悬停卡顿的主要来源。
+      // 上一帧投影最多滞后 16ms，自转速度下肉眼不可辨。
+      for (let k = orderIdx.length - 1; k >= 0; k--) {
+        const i = orderIdx[k]
+        const p = projBy[i]?.p
+        if (!p) continue
         const r = Math.max(MIN_R, geom.RADII[i] * p.scale) + 6
         if ((px - p.x) ** 2 + (py - p.y) ** 2 < r * r) return i
       }
       return null
     }
 
-    const pt = (e: PointerEvent | MouseEvent) => {
-      const rect = cv.getBoundingClientRect()
-      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    // offsetX/offsetY 由浏览器直接给出（相对目标元素），免去每次事件 getBoundingClientRect 的布局查询
+    const pt = (e: PointerEvent | MouseEvent): { x: number; y: number } => {
+      return { x: e.offsetX, y: e.offsetY }
     }
 
     const cancelFlight = (): void => {
@@ -527,9 +659,18 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     }
     const onClick = (e: MouseEvent): void => {
       if (moved || downMoving) return
+      // 双击的第二次 click（detail===2）交由 dblclick 处理，避免“选中→立即取消”的闪烁
+      if ((e as MouseEvent).detail === 2) return
       const i = downHit
       hover = i
       if (i != null) {
+        if (selectedRef.current === i) {
+          // 再点已点亮的点 → 取消点亮
+          selectedRef.current = null
+          scatterTargetRef.current = 0
+          propsRef.current.onClearSelection?.()
+          return
+        }
         selectedRef.current = i
         scatterTargetRef.current = 1
         const now = Date.now()
@@ -542,6 +683,23 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         propsRef.current.onClearSelection()
         selectedRef.current = null
         scatterTargetRef.current = 0
+      }
+    }
+    const onDblClick = (e: MouseEvent): void => {
+      const p = pt(e as unknown as PointerEvent)
+      const i = hit(p.x, p.y)
+      if (i != null && propsRef.current.onOpenData) {
+        // 双击直接开表（无需先经弹窗）
+        const name = propsRef.current.tables[i].name
+        // 先保证选中态
+        selectedRef.current = i
+        scatterTargetRef.current = 1
+        propsRef.current.onSelectNode(name, 0, 0)
+        propsRef.current.onOpenData(name)
+      } else if (i != null) {
+        // 兼容未传 onOpenData 时退化为单击选中
+        const q = rotate(geom.POS[i])
+        propsRef.current.onSelectNode(propsRef.current.tables[i].name, q.x, q.y)
       }
     }
     const tick = setInterval(() => {
@@ -566,6 +724,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     cv.addEventListener('pointerleave', onLeave)
     cv.addEventListener('wheel', onWheel, { passive: false })
     cv.addEventListener('click', onClick)
+    cv.addEventListener('dblclick', onDblClick)
 
     return () => {
       ro.disconnect(); clearInterval(tick); cancelAnimationFrame(raf)
@@ -575,6 +734,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       cv.removeEventListener('pointerleave', onLeave)
       cv.removeEventListener('wheel', onWheel)
       cv.removeEventListener('click', onClick)
+      cv.removeEventListener('dblclick', onDblClick)
     }
   }, [])
 
@@ -625,15 +785,17 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           </div>
         )}
       </div>
-      {/* 暂停/恢复 */}
-      <button
-        className={`g3d-pause ${paused ? 'is-paused' : ''}`}
-        title={paused ? t('graph.resume') : t('graph.pause')}
-        onClick={() => setPaused((v) => !v)}
-        aria-label={paused ? t('graph.resume') : t('graph.pause')}
-      >
-        {paused ? '▶' : '⏸'}
-      </button>
+      {/* 暂停/恢复 - 受控时由外层按钮接管，避免随 g3d-wrap 位移 */}
+      {!isControlled && (
+        <button
+          className={`g3d-pause ${paused ? 'is-paused' : ''}`}
+          title={paused ? t('graph.resume') : t('graph.pause')}
+          onClick={() => setInternalPaused((v) => !v)}
+          aria-label={paused ? t('graph.resume') : t('graph.pause')}
+        >
+          {paused ? '▶' : '⏸'}
+        </button>
+      )}
       {/* Onboarding */}
       {onboardVisible && (
         <div

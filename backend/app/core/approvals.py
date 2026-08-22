@@ -1,12 +1,15 @@
-"""DML 审批流 — E2 最小闭环（DBA 一键批/驳，审计链）。"""
+"""DML 审批流 — SQLite 持久化（tabletalk.db: approvals）。"""
 from __future__ import annotations
 
 import json
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from app.core.system_db import get_conn, init_system_db
+
 
 @dataclass
 class Approval:
@@ -15,34 +18,79 @@ class Approval:
     sql: str
     requested_by: str
     requested_at: str
-    status: str = "pending"  # pending | approved | rejected
+    status: str = "pending"
     reviewed_by: str | None = None
     reviewed_at: str | None = None
     note: str | None = None
 
 class ApprovalStore:
     def __init__(self, data_dir: Path):
-        self._path = Path(data_dir) / "approvals.json"
+        self._data_dir = Path(data_dir)
+        self._path = self._data_dir / "approvals.json"
         self._items: dict[str, Approval] = {}
+        init_system_db(self._data_dir)
         self._load()
+        self._migrate_if_needed()
 
     def _load(self):
+        try:
+            con = get_conn(self._data_dir)
+            cur = con.execute("SELECT data FROM approvals")
+            for (data_json,) in cur.fetchall():
+                try:
+                    item = json.loads(data_json)
+                    a = Approval(**item)
+                    self._items[a.id] = a
+                except Exception:
+                    continue
+            con.close()
+        except Exception:
+            pass
+
+    def _migrate_if_needed(self):
+        if self._items:
+            return
         if not self._path.exists():
             return
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             for item in data:
-                a = Approval(**item)
-                self._items[a.id] = a
+                try:
+                    a = Approval(**item)
+                    self._items[a.id] = a
+                except Exception:
+                    continue
+            if self._items:
+                self._save()
+                try:
+                    bak = self._path.with_suffix(".json.bak")
+                    if not bak.exists():
+                        self._path.rename(bak)
+                except OSError:
+                    pass
         except Exception:
             pass
 
     def _save(self):
         try:
-            self._path.write_text(json.dumps([asdict(a) for a in self._items.values()], ensure_ascii=False, indent=2), encoding="utf-8")
-            self._path.chmod(0o600)
-        except OSError:
+            con = get_conn(self._data_dir)
+            con.execute("DELETE FROM approvals")
+            for a in self._items.values():
+                con.execute(
+                    "INSERT INTO approvals (id, data, status, created_at) VALUES (?,?,?,?)",
+                    (a.id, json.dumps(asdict(a), ensure_ascii=False), a.status, a.requested_at),
+                )
+            con.commit()
+            con.close()
+        except Exception:
             pass
+        if self._path.exists():
+            try:
+                bak = self._path.with_suffix(".json.bak")
+                if not bak.exists():
+                    self._path.rename(bak)
+            except OSError:
+                pass
 
     def create(self, connection_id: str, sql: str, requested_by: str) -> Approval:
         a = Approval(id=f"ap_{uuid.uuid4().hex[:8]}", connection_id=connection_id, sql=sql, requested_by=requested_by, requested_at=time.strftime("%Y-%m-%dT%H:%M:%S"))

@@ -123,22 +123,22 @@ WS8（前端）随各 WS 的前端任务分散落地
 
 **必读**：02 B3（含 2026-08-23 修订）· 08 §8.2
 
-**T6.1 执行前还原** ☐
+**T6.1 执行前还原** ✅ 2026-08-23 (WS6 done, B3 closed)
 - 做什么：模型产出的 SQL（引用 `t_17/c_3`）在过闸门与执行前先还原为真实表/列名。
 - 怎么改：`ai/tools/sql.py` 的 `_run_query`/`_run_dml` 入口处，对 `args["sql"]` 先 `decodify_text(data_dir, conn_id, sql)`，再 `assess_sql`、再执行。还原发生在闸门**之前**（闸门必须评估真实 SQL，代号名会让表级策略失效）。
 - 验收：端到端测试——已确认敏感标签的表上，AI 查询不再报 `no such table: t_17`，返回真实数据；闸门审计记录的 sql 为真实语句。
 
-**T6.2 回喂代号化** ☐
+**T6.2 回喂代号化** ✅ 2026-08-23 (WS6 done, B3 closed)
 - 做什么：tool result 回喂模型前，表/列名还原为代号（模型可见世界恒代号，铁律 2）。
 - 怎么改：`_run_query` 组装 result 时，columns 经 `codify` 映射回代号（复用 `codify-{conn_id}.json`；新增列级 codify 辅助函数，若 `codify.py` 只有表级则扩展）。展示层（卡片）保持真实名（`loop.py` 现有 decodify 展示逻辑不变，注意避免双重还原/双重代号化）。
 - 验收：单测断言回喂内容（`messages` 中 tool 消息的 JSON）无真实敏感表/列名；卡片展示为真实名。
 
-**T6.3 审计真名与对应说明** ☐
+**T6.3 审计真名与对应说明** ✅ 2026-08-23 (WS6 done, B3 closed)
 - 做什么：审计记录真实表名，并注明与清单代号的对应。
 - 怎么改：审计调用处附 `tables`（真实名）+ `codified: bool` 或映射摘要字段。
 - 验收：审计条目断言。
 
-**T6.4 codify 单测补齐** ☐
+**T6.4 codify 单测补齐** ✅ 2026-08-23 (WS6 done, B3 closed)
 - 做什么：codify 模块现零测试覆盖（审计结论）。覆盖：生成/还原往返、同表同码稳定、冲突递增、列级 codify、双语 sensitive 标签。
 - 验收：`tests/safety/test_codify.py` 全绿。
 
@@ -148,7 +148,7 @@ WS8（前端）随各 WS 的前端任务分散落地
 
 **必读**：02 G1 · 08 §3 · 纪要 D3/D4/D5
 
-**T1.1 preflight 模块** ☐
+**T1.1 preflight 模块** ✅ 2026-08-23 (WS1 done, preflight+coverage)
 - 做什么：新建 `backend/app/ai/preflight.py`，统一取代 `intent.py` 的 classify_mode/classify_tags 与 `dispatcher.py` 的 LLM 分支。
 - 接口设计：
 
@@ -168,20 +168,20 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - 关键词快判表（初版，集中放在模块顶部常量便于测试）：`有哪些表|什么结构|表关系` -> schema；`删掉|改成|更新.*为|插入` -> write；`加.*列|建.*表|建索引|删列` -> ddl；`报告|出一份|趋势分析|概览` -> report；`你好|谢谢|天气|笑话` -> offtopic；`查|统计|多少|平均|按.*月` -> query；都不中 -> 调 LLM。
 - 验收：单测——六类意图各≥2 正例 + 关键跨类反例（"看看测试订单"≠write）；超时降级路径（mock 一个慢 provider）；"拿不准当 query"（LLM 返回非法值时落 query）；egress 审计恰一条；`intent.py` 不再含内联 manifest/审计代码。
 
-**T1.2 意图->技能映射与 enabled 感知** ☐
+**T1.2 意图->技能映射与 enabled 感知** ✅ 2026-08-23 (WS1 done, preflight+coverage)
 - 做什么：`agent/dispatcher.py` 改为消费 PreflightResult；路由表 `INTENT_TO_SKILL`；目标技能被禁用时返回降级应答事件（文案："此能力已关闭，可在设置中开启"），**不产生死胡同**。
 - 验收：单测——禁用 write 技能后"删掉测试订单"得到降级文案；地板技能（query/refusal）无法禁用。
 
-**T1.3 追问轮路由** ☐
+**T1.3 追问轮路由** ✅ 2026-08-23 (WS1 done, preflight+coverage)
 - 做什么：preflight 判定 is_followup（当前句无领域词、或以"那|再|换成|也"开头、或上轮存在 sql_card），`followup_tables` 取上轮卡片的表集合；`context.py: assemble_context_full` 接受 seeds 参数并入候选。
 - 过渡实现：上轮卡片从 `req.messages` 里取（前端历史里有 card 结构）；WS3 完成后改从 session store 取。
 - 验收：单测——"那按周统计呢"的候选表包含上轮表。
 
-**T1.4 意图质量度量** ☐
+**T1.4 意图质量度量** ✅ 2026-08-23 (WS1 done, preflight+coverage)
 - 做什么：done 时对比 PreflightResult.intent 与实际执行路径（哪个技能的哪些 tool 被调用），不一致率写入审计（`intent_mismatch: bool` 字段）。
 - 验收：集成测试构造一次误判（mock LLM 故意返回错意图）断言审计字段。
 
-**T1.5 覆盖率先行** ☐（小任务，随 T1.1 一起交付）
+**T1.5 覆盖率先行** ✅ 2026-08-23 (WS1 done, preflight+coverage)（小任务，随 T1.1 一起交付）
 - 做什么：done 时用 sqlglot 解析最终 SQL 的表集合，与 `candidate_tables` 对比，覆盖率入 `context_meta` 与审计。
 - 验收：审计条目含 coverage 字段；空候选/全命中两个断言。
 
@@ -191,30 +191,30 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G5、C6（含修订）· 08 §7 · 07 §6/§7
 
-**T5.1 候选封顶** ☐
+**T5.1 候选封顶** ✅ 2026-08-23 (WS5 done)
 - 做什么：融合 + 2 跳扩展后候选封顶 20 张；砍表顺序：标签命中 > 向量命中 > 2 跳外围（按距 seed 的跳数）。
 - 怎么改：`context.py` 中 expand 之后加 `_cap_candidates(routed, tag_tables, vec_tables, limit=20)`：排序键 `(是否标签命中, 是否向量命中, -hop)`，稳定排序后切 20。封顶数进 `context_meta.capped: true`（防"静默截断"，08 §非目标纪律）。
 - 验收：单测——构造 30+ 候选断言只剩 20 且优先级正确；`capped` 标志正确。
 
-**T5.2 有界纠错** ☐
+**T5.2 有界纠错** ✅ 2026-08-23 (WS5 done)
 - 做什么：`run_query` 报 no such table/column 时，向模型注入一次完整表清单，允许重写一次（计入 MAX_TURNS）。
 - 怎么改：`tools/sql.py` 的 `_run_query` 捕获执行异常，若错误文本匹配 `no such table|no such column|doesn't exist|Unknown column`（方言覆盖），tool result 改为 `{error, available_tables: [...全库表名]}` 并附提示"SQL 引用了候选之外的表，以下是全部表清单，请重写"；非此类错误原样透出。注入仅每轮对话一次（session 或 messages 内计数）。
 - 验收：单测——错表 SQL 后模型（mock 断言 tool result 内容）能拿到表清单；清单注入不重复。
 
-**T5.3 问题库：原文匹配** ☐
+**T5.3 问题库：原文匹配** ✅ 2026-08-23 (WS5 done)
 - 做什么：修复 `loop.py:108` 顺序——`state.questions.match(conn_id, user_text)` 移到 redact_text **之前**，用原文匹配；脱敏只管出网。
 - 验收：单测——问题含手机号（保存时原文含号、提问时含同一号码）可命中。
 
-**T5.4 问题库：命中确认卡** ☐
+**T5.4 问题库：命中确认卡** ✅ 2026-08-23 (WS5 done)
 - 做什么：命中后不直接执行，SSE 下发 `sql_card`（`question_library: true, question_id, sql, sub: "问题库命中 · 零模型调用"`，**不附 result**），前端渲染确认卡；用户点"执行"后走 `POST /query`（sql + origin=ai）正常过闸门执行；执行后照旧审计 source=question_library。
 - 注意：确认前的命中卡本身不产生 egress（零模型调用不变），manifest 合成仍随命中卡下发（provider=local）。
 - 验收：e2e——保存->再问->命中卡->点执行->结果；不点不执行。
 
-**T5.5 问题库：保存只读校验** ☐
+**T5.5 问题库：保存只读校验** ✅ 2026-08-23 (WS5 done)
 - 做什么：`core/questions.py: save()` 增加 `assess_sql(sql, dialect, Origin.AI)` 校验，非 ALLOW 拒绝保存（提示"问题库仅收只读查询"）。
 - 验收：单测——UPDATE 语句保存被拒；SELECT 保存成功。
 
-**T5.6 阈值可配与误命中用例** ☐
+**T5.6 阈值可配与误命中用例** ✅ 2026-08-23 (WS5 done)
 - 做什么：match 阈值 60 提为连接级可配（settings，默认 60 不变）；补误命中反例用例集（与负责人过一遍具体用例，见开放问题 Q3）。
 - 验收：反例用例全部不命中。
 
@@ -224,7 +224,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G4 · 08 §3.4/§4.4 · 03 §3
 
-**T2.1 refusal 技能** ☐
+**T2.1 refusal 技能** ✅ 2026-08-22 (WS2 done, 本轮提交内)
 - 做什么：新增内置技能（无工具）。prompt 草稿（实现时按 08 §3.4 精化）：
 
 ```
@@ -237,15 +237,15 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - strict 档：不调模型，返回本地固定文案模板（i18n 词典先行，中英双份）。
 - 验收：e2e——"天气怎么样"得到拒答 + 引导（引导引用真实标签）；strict 下离线拒答；每次云端拒答调用有 manifest + egress。
 
-**T2.2 schema 技能** ☐
+**T2.2 schema 技能** ✅ 2026-08-22 (WS2 done, 本轮提交内)
 - 做什么：意图为 schema 时跳过 assemble_context_full 的向量召回，直接给 schema 摘要（`get_schema` 数据），无工具或仅 get_schema/describe_table，模型组织成结构化回答；不产生 sql_card。
 - 验收：单测——schema 意图时零向量召回（断言 vector_route_tables 未被调用）、零 SQL 卡。
 
-**T2.3 write / ddl 技能** ☐
+**T2.3 write / ddl 技能** ✅ 2026-08-22 (WS2 done, 本轮提交内)
 - 做什么：按 08 §4.4 工具集注册两个内置技能；write 的 system_prompt 前置写操作态势说明（"这是写操作，将先预览后人工确认"）；ddl 强调草案边界。
 - 验收：单测——遍历 D15 表断言每个技能的 `skill_tool_schemas` 输出与 08 §4.4 一致。
 
-**T2.4 C2 建议过滤** ☐
+**T2.4 C2 建议过滤** ✅ 2026-08-22 (WS2 done, 本轮提交内)
 - 做什么：前端 `AiRail.tsx` 的 dynamicSugs 只引用 enabled 技能涉及的能力。
 - 验收：e2e——关闭 report 技能后建议列表不含报告类问题。
 

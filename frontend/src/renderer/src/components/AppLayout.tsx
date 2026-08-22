@@ -20,6 +20,8 @@ import { KnowledgeReview } from './KnowledgeReview'
 import { AuditPage } from './ModulePages'
 import { ApprovalPage } from './ApprovalPage'
 import { SettingsDrawer } from './SettingsDrawer'
+import { LoginDialog } from './LoginDialog'
+import { setLoginRuntime } from '@renderer/hooks/useBootstrap'
 interface Props {
   health: HealthStatus | null
 }
@@ -98,6 +100,8 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const setMainView = useUi((s) => s.setMainView)
   const { t } = useI18n()
   const rt = getRuntime()
+  const [loginIsInitial, setLoginIsInitial] = useState(false)
+  const showLogin = !rt?.token
 
   const active = tabs.find((t) => t.id === activeId) ?? null
   const activeReport = active?.kind === 'report' ? active.report : null
@@ -113,7 +117,23 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   )
   const [nodeSel, setNodeSel] = useState<string | null>(null)
   const [nodeData, setNodeData] = useState<string | null>(null)
+  const [closingNode, setClosingNode] = useState<string | null>(null)
   const [nodePos, setNodePos] = useState<{ x: number; y: number } | null>(null)
+  const handleCloseTable = (): void => {
+    if (!nodeData) return
+    setClosingNode(nodeData)
+    setNodeData(null)
+    window.setTimeout(() => setClosingNode(null), 420)
+  }
+  const displayNode = nodeData || closingNode
+  const isTableClosing = !!closingNode
+  // 启停由外层控制，避免按钮随 g3d-wrap 位移动画
+  const [graphPaused, setGraphPaused] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('tabletalk-graph-paused') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { sessionStorage.setItem('tabletalk-graph-paused', graphPaused ? '1' : '0') } catch {}
+  }, [graphPaused])
   // 左右分栏：右轨宽度（px），默认 1/4
   const wsRef = useRef<HTMLDivElement>(null)
   const g3dWrapRef = useRef<HTMLDivElement>(null)
@@ -302,36 +322,50 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                   </div>
                   <div className="ws-canvas-area">
                   {mainView === 'graph' ? (
-                    <div className={`g3d-wrap${nodeData ? ' mini' : ''}`} ref={g3dWrapRef}>
-                      <Graph3D
-                        tables={graphNodes}
-                        foreignKeys={graphEdges}
-                        selectedName={nodeSel}
-                        onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
-                        onClearSelection={() => { setNodeSel(null); setNodePos(null) }}
-                      />
-                      {nodeSel && nodeInfo && nodePos && !nodeData && (() => {
-                        const POP_W = 296
-                        const POP_H = 196
-                        const wrap = g3dWrapRef.current
-                        const w = wrap ? wrap.clientWidth : 0
-                        const h = wrap ? wrap.clientHeight : 0
-                        const px = Math.min(Math.max(8, nodePos.x + 16), Math.max(8, w - POP_W - 8))
-                        const py = Math.min(Math.max(8, nodePos.y - 24), Math.max(8, h - POP_H - 8))
-                        return (
-                          <NodePopup
-                            table={nodeSel}
-                            rowCount={nodeInfo.rowCount}
-                            columnCount={nodeInfo.columnCount}
-                            fkCount={nodeInfo.fkCount}
-                            x={px}
-                            y={py}
-                            onClose={() => { setNodeSel(null); setNodePos(null) }}
-                            onOpenData={() => { setNodeData(nodeSel); setNodeSel(null); setNodePos(null) }}
-                          />
-                        )
-                      })()}
-                    </div>
+                    <>
+                      <div className={`g3d-wrap${nodeData ? ' mini' : ''}`} ref={g3dWrapRef}>
+                        <Graph3D
+                          tables={graphNodes}
+                          foreignKeys={graphEdges}
+                          selectedName={nodeSel}
+                          mini={!!nodeData}
+                          paused={graphPaused}
+                          onTogglePause={() => setGraphPaused((v) => !v)}
+                          onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
+                          onClearSelection={() => { setNodeSel(null); setNodePos(null) }}
+                          onOpenData={(name) => { setNodeData(name); setNodeSel(name); setNodePos(null) }}
+                        />
+                        {nodeSel && nodeInfo && nodePos && !nodeData && (() => {
+                          const POP_W = 296
+                          const POP_H = 196
+                          const wrap = g3dWrapRef.current
+                          const w = wrap ? wrap.clientWidth : 0
+                          const h = wrap ? wrap.clientHeight : 0
+                          const px = Math.min(Math.max(8, nodePos.x + 16), Math.max(8, w - POP_W - 8))
+                          const py = Math.min(Math.max(8, nodePos.y - 24), Math.max(8, h - POP_H - 8))
+                          return (
+                            <NodePopup
+                              table={nodeSel}
+                              rowCount={nodeInfo.rowCount}
+                              columnCount={nodeInfo.columnCount}
+                              fkCount={nodeInfo.fkCount}
+                              x={px}
+                              y={py}
+                              onClose={() => { setNodeSel(null); setNodePos(null) }}
+                              onOpenData={() => { setNodeData(nodeSel!); setNodePos(null) }}
+                            />
+                          )
+                        })()}
+                      </div>
+                      <button
+                        className={`g3d-pause g3d-pause-external ${graphPaused ? 'is-paused' : ''}`}
+                        title={graphPaused ? t('graph.resume') : t('graph.pause')}
+                        onClick={() => setGraphPaused((v) => !v)}
+                        aria-label={graphPaused ? t('graph.resume') : t('graph.pause')}
+                      >
+                        {graphPaused ? '▶' : '⏸'}
+                      </button>
+                    </>
                   ) : (
                     <div className="ws-data">
                       {tabs.length > 0 && (
@@ -367,8 +401,8 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                       </div>
                     </div>
                   )}
-                  {nodeData && currentId && (
-                    <TableDataView connId={currentId} table={nodeData} onClose={() => setNodeData(null)} />
+                  {(displayNode) && currentId && (
+                    <TableDataView connId={currentId} table={displayNode} closing={isTableClosing} onClose={handleCloseTable} />
                   )}
                   </div>
                 </div>
@@ -402,6 +436,38 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       <ConnectionModal open={modalOpen} onClose={() => setModalOpen(false)} />
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onNewConnection={() => { setSettingsOpen(false); setModalOpen(true) }} />
       <KbBuildGate />
+      <LoginDialog
+        open={showLogin}
+        isInitial={loginIsInitial}
+        onLogin={async (username, password) => {
+          try {
+            const r = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
+            const j = await r.json()
+            if (!r.ok) return { ok: false, error: j.detail || '登录失败' }
+            setLoginIsInitial(!!j.user?.is_initial)
+            // 取 dataDir 用于后续
+            const b = await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))
+            setLoginRuntime(j.token, b.dataDir || '')
+            // 强制刷新以使 getRuntime 生效
+            window.location.reload()
+            return { ok: true, is_initial: !!j.user?.is_initial }
+          } catch (e) {
+            return { ok: false, error: (e as Error).message }
+          }
+        }}
+        onChangePassword={async (username, oldPwd, newPwd) => {
+          try {
+            const r = await fetch('/api/v1/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, old_password: oldPwd, new_password: newPwd }) })
+            const j = await r.json()
+            if (!r.ok) return { ok: false, error: j.detail || '改密失败' }
+            setLoginRuntime(j.token, (await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))).dataDir || '')
+            setLoginIsInitial(false)
+            return { ok: true }
+          } catch (e) {
+            return { ok: false, error: (e as Error).message }
+          }
+        }}
+      />
     </div>
   )
 }

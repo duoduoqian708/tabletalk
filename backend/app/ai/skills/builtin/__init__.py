@@ -1,4 +1,4 @@
-"""内置技能注册：query（主场景，读写合并）与 report（数据分析报告，物理只读）。
+"""内置技能注册：query（主场景，只读）、write/ddl（写与结构变更，独立承接）与 report（数据分析报告，物理只读）。
 
 这些是 TABLETALK 的"出厂技能"。query 的剧本即四步（意图→检索→SQL→评估），
 report 的剧本是章节化分析。新增内置技能在此追加即可。
@@ -35,16 +35,50 @@ def _report_steps() -> ScriptSpec:
     )
 
 
+def _refusal_steps() -> ScriptSpec:
+    return ScriptSpec(steps=[ScriptStep(id="refuse", label="引导拒答", tool=None, output="refusal")], requires_schema=False)
+
+
+def _schema_steps() -> ScriptSpec:
+    return ScriptSpec(
+        steps=[
+            ScriptStep(id="schema", label="结构问答", tool="get_schema", output="schema"),
+            ScriptStep(id="describe", label="表详情", tool="describe_table", output="columns"),
+        ],
+        requires_schema=True,
+    )
+
+
+def _write_steps() -> ScriptSpec:
+    return ScriptSpec(
+        steps=[
+            ScriptStep(id="assess", label="写前评估", tool="run_dml", output="preview"),
+            ScriptStep(id="confirm", label="人工确认", tool=None, output="confirmed"),
+        ],
+        requires_schema=True,
+    )
+
+
+def _ddl_steps() -> ScriptSpec:
+    return ScriptSpec(
+        steps=[
+            ScriptStep(id="draft", label="草案生成", tool="draft_ddl", output="ddl"),
+            ScriptStep(id="review", label="人工复核", tool=None, output="review"),
+        ],
+        requires_schema=True,
+    )
+
+
 def BUILTIN_SKILLS() -> list[Skill]:
     return [
         Skill(
             id="query",
             name="执行 SQL",
-            description="查数据或改数据（读写合并，写需人工确认）。覆盖主场景的自然语言转 SQL。",
-            tools=["run_query", "run_dml", "get_schema", "describe_table", "draft_ddl"],
+            description="查数据（只读查询，覆盖主场景的自然语言转 SQL）。写操作由 write 技能承接（需人工确认）。",
+            tools=["get_schema", "describe_table", "run_query"],  # 08 §4.4：只读, load_result 待 WS3 并入
             script=_query_steps(),
             builtin=True,
-            read_only=False,
+            read_only=True,  # 常开地板技能，但只读：写/DDL 由独立技能承接
         ),
         Skill(
             id="report",
@@ -54,5 +88,50 @@ def BUILTIN_SKILLS() -> list[Skill]:
             script=_report_steps(),
             builtin=True,
             read_only=True,
+        ),
+        Skill(
+            id="refusal",
+            name="引导式拒答",
+            description="平台外话题拒答并引导回平台能力（无工具，云端引导式；strict 本地固定文案）。",
+            tools=[],
+            script=_refusal_steps(),
+            system_prompt=(
+                "你是 TableTalk 的数据库助手引导员。用户的问题与数据库/本平台无关。\n"
+                "你的唯一任务：①一句话礼貌说明你不处理此类问题；②给出 2~3 个基于当前数据库\n"
+                "（{connection_name}，领域：{tags}）的具体建议问题。\n"
+                "禁止：回答问题本身；延伸话题；编造数据库里不存在的内容。"
+            ),
+            builtin=True,
+            read_only=True,
+            enabled=True,
+        ),
+        Skill(
+            id="schema",
+            name="结构问答",
+            description="直接回答库表结构（跳过检索管线，不执行 SQL）。",
+            tools=["get_schema", "describe_table"],
+            script=_schema_steps(),
+            builtin=True,
+            read_only=True,
+        ),
+        Skill(
+            id="write",
+            name="写操作",
+            description="写操作（REVIEW 态势前置，需确认）。",
+            tools=["run_dml", "run_query", "describe_table", "get_schema"],
+            script=_write_steps(),
+            system_prompt="这是写操作，将先预览后人工确认。请说明影响并等待确认。",
+            builtin=True,
+            read_only=False,
+        ),
+        Skill(
+            id="ddl",
+            name="DDL 草稿",
+            description="DDL 草案（永不执行，发编辑器人工执行）。",
+            tools=["draft_ddl", "get_schema", "describe_table"],
+            script=_ddl_steps(),
+            system_prompt="这是结构变更草案边界：仅生成脚本，不执行。",
+            builtin=True,
+            read_only=False,
         ),
     ]

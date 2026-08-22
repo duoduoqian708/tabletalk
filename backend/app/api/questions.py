@@ -12,6 +12,7 @@ class SaveRequest(BaseModel):
     question: str
     sql: str
     tables: list[str] = []
+    visibility: str = "private"
 
 @router.get("/questions/{conn_id}")
 async def list_questions(conn_id: str):
@@ -30,7 +31,7 @@ async def save_question(conn_id: str, req: SaveRequest):
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     try:
-        entry = state.questions.save(conn_id, req.question, req.sql, req.tables)
+        entry = state.questions.save(conn_id, req.question, req.sql, req.tables, req.visibility)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return entry

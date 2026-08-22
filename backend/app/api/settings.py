@@ -35,6 +35,9 @@ class SettingsUpdate(BaseModel):
     kb_ai_annotation_samples: bool | None = None
     query_max_rows: int | None = None
     pool_size: int | None = None
+    # 策略与隐私（A2/B4 修复：Pydantic 缺字段导致 PUT 静默丢弃）
+    policy: dict[str, Any] | None = None
+    privacy_mode: str | None = None
 
 
 @router.get("/settings")
@@ -59,6 +62,17 @@ async def update_settings(body: SettingsUpdate, request: Request) -> dict:
             raise
         pass
     state = get_state()
+    # 记录变更前快照，用于审计
+    before_mode = state.runtime.get().privacy_mode
+    before_policy_ver = getattr(state.runtime.get().policy, "version", 0)
     runtime = state.runtime.update(body.model_dump(exclude_none=True))
     await state.pools.rebuild()
+    # B4: 档位/策略切换写审计（可追溯）
+    try:
+        if body.privacy_mode is not None and body.privacy_mode != before_mode:
+            state.audit.log(connection="settings", origin="api", tier="read", verdict="allow", status=f"privacy_mode {before_mode}->{body.privacy_mode}", sql=f"[settings] privacy_mode={body.privacy_mode}", source="settings")
+        if body.policy is not None:
+            state.audit.log(connection="settings", origin="api", tier="read", verdict="allow", status=f"policy v{before_policy_ver}->v{runtime.policy.version}", sql=f"[settings] policy updated", source="settings")
+    except Exception:
+        pass
     return runtime.public()

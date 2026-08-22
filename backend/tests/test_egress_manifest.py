@@ -97,12 +97,13 @@ async def test_report_stream_also_emits_manifest(app_state, conn_id):
     assert manifests[0]["manifest"]["include_data"] is True  # 报告强制 include_data
 
 async def test_egress_enumerable_rate_100_percent(app_state, conn_id):
-    """出网可枚举率 100%：每次 chat 调用后，egress 审计数 == 实际模型调用数（mock 下 1 次）。"""
+    """出网可枚举率 100%：每次 chat 调用后，egress 审计数 == 实际模型调用数（mock 下 1 次 + preflight 1 次）。"""
     before_egress = len([e for e in app_state.audit.list() if e.get("verdict") == "egress"])
     req = ChatRequest(connection_id=conn_id, messages=[{"role": "user", "content": "查询库存"}], provider="mock")
     _ = [ev async for ev in chat_stream(app_state, req)]
     after_egress = len([e for e in app_state.audit.list() if e.get("verdict") == "egress"])
-    assert after_egress == before_egress + 1
+    # WS1 后：chat_stream 经 assemble_context_full→preflight 产生 1 条 egress-intent，再加主链 1 条
+    assert after_egress == before_egress + 2
 
 
 async def test_privacy_mode_affects_manifest(app_state, conn_id):

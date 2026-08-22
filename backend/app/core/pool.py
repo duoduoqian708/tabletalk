@@ -2,6 +2,9 @@
 
 每个 handle 同一时刻只被一个任务持有（池内互斥，handle 自身无需锁）；
 执行失败自动重连一次后归还。
+
+架构守卫（05 §3.4 proxy 期权）：本模块不依赖 FastAPI 生命周期（`_pool_for` 仅依赖 ConnectionRegistry），
+未来加透明代理（pgbouncer 式协议层）可在 `app/api/query.py` 之上新增 TCP 代理而不改核心；此为不立项的期权，仅保证新代码不把 pool 生命周期绑死在 FastAPI app 上。
 """
 from __future__ import annotations
 
@@ -106,7 +109,11 @@ class PoolManager:
             try:
                 try:
                     return await fn(h.adapter, h.conn)
-                except Exception:
+                except Exception as e:
+                    # 对“表/列不存在”等确定性错误不重试（重试必败且可能挂起）
+                    msg = str(e).lower()
+                    if any(k in msg for k in ("no such table", "no such column", "unknown column", "doesn't exist")):
+                        raise
                     cfg = self._registry.get(conn_id)
                     adapter = get_dialect(cfg.dialect)
                     conn = await adapter.connect(cfg.to_dialect_config())

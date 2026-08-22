@@ -62,9 +62,13 @@ def test_update_skill_toggle_and_tools():
     assert updated.enabled is False
     assert updated.tools == ["run_query"]
     assert get_skill(s.id).enabled is False
-    # 内置技能可更新 enabled/tools，不可删除
+    # 内置技能可更新 enabled/tools，不可删除；地板技能 query 不可禁用（T1.2/08§4.5）
     up = update_skill("query", {"enabled": False})
-    assert up is not None and up.enabled is False
+    assert up is not None and up.enabled is True  # 地板保持启用
+    up2 = update_skill("report", {"enabled": False})
+    assert up2 is not None and up2.enabled is False
+    # 恢复 report，避免影响后续测试
+    update_skill("report", {"enabled": True})
     assert remove_skill("query") is False
     assert remove_skill(s.id) is True
     assert get_skill(s.id) is None

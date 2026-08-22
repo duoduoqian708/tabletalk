@@ -571,13 +571,21 @@ body.resizing .drag-h {
   font-size: 10px;
   cursor: pointer;
   vertical-align: middle;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s, background 0.12s;
+}
+.tableview tbody td:hover .c-more {
+  opacity: 1;
+  pointer-events: auto;
 }
 .tableview .c-more:hover {
   color: var(--accent-soft);
   background: var(--accent-dim);
 }
 .tableview .c-more.hidden {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 .tv-foot {
   flex: none;
@@ -2107,12 +2115,15 @@ body.resizing .drag-h {
 .ai-compose {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 18px;
+  border-radius: 20px;
   background: var(--void-2);
-  padding: 8px 8px 8px 16px;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  padding: 12px 12px 12px 18px;
+  min-height: 64px;
+  margin-top: auto;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+  box-shadow: 0 2px 12px rgba(0,0,0,.06);
 }
 .ai-compose:focus-within {
   border-color: var(--accent);
@@ -2122,13 +2133,14 @@ body.resizing .drag-h {
   flex: 1;
   border: 0 !important;
   background: transparent !important;
-  font-size: 14px !important;
-  line-height: 1.6 !important;
+  font-size: 15px !important;
+  line-height: 1.65 !important;
   color: var(--ink) !important;
-  padding: 8px 0 !important;
+  padding: 10px 0 !important;
+  min-height: 56px !important;
+  max-height: 180px !important;
   resize: none;
   outline: none;
-  max-height: 150px;
   font-family: var(--font-sans) !important;
 }
 .compose-input:focus {
@@ -3174,18 +3186,16 @@ body.resizing .drag-h {
 }
 body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: none; }
 .ai-bar {
-  border-top: none;
+  border-top: 1px solid var(--line);
   border-left: none;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--accent) 025%, transparent), transparent 80px),
     var(--void-1);
-  padding: 10px 14px 9px;
+  padding: 16px 16px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  min-height: 0;
-  height: 100%;
+  gap: 12px;
+  flex: none;
   box-shadow: none;
 }
 .ai-bar-top {
@@ -3200,22 +3210,19 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
   text-shadow: 0 0 8px var(--accent-glow);
 }
 .ai-panel {
-  position: absolute;
-  left: auto;
-  right: calc(100% + 10px);
-  top: 14px;
-  bottom: 14px;
-  width: min(54vw, 560px);
-  max-height: none;
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  background: rgba(11, 15, 22, 0.97);
-  border: 1px solid var(--line-strong);
-  border-radius: 18px;
-  box-shadow: var(--shadow-2), 0 -10px 50px rgba(0, 0, 0, 0.55);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
-  animation: panel-up 260ms var(--ease);
-  z-index: 50;
+  z-index: 1;
+  margin: 0;
 }
 .ai-panel-head {
   flex: none;
@@ -3333,11 +3340,15 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 .ws-canvas-area{position:relative;flex:1;min-width:0;min-height:0}
 .g3d-wrap{position:absolute;top:0;left:0;right:0;bottom:0;transition:top .42s var(--ease),left .42s var(--ease),right .42s var(--ease),bottom .42s var(--ease),width .42s var(--ease),height .42s var(--ease),border-radius .42s var(--ease),box-shadow .42s var(--ease)}
 .g3d-wrap.mini{right:auto;bottom:auto;top:14px;left:14px;width:236px;height:164px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--line-strong);box-shadow:0 16px 46px rgba(0,0,0,.55);z-index:20}
+/* 暂停/搜索等控件随星图一起位移会产生“从中间跑到角落”的显眼动画，mini 时直接隐藏，关闭时再直接显现于角落 */
+.g3d-wrap.mini .g3d-search, .g3d-wrap.mini .g3d-pause, .g3d-wrap.mini .g3d-onboard{display:none}
 .ws-data{position:absolute;inset:0}
 
-/* 直接开表：从图谱收缩角（左上）放大展开 */
+/* 直接开表：从图谱收缩角（左上）放大展开；关闭时反向收缩 */
 .table-data-view{position:absolute;inset:0;z-index:22;display:flex;flex-direction:column;background:var(--bg);transform-origin:top left;animation:td-grow .42s var(--ease) both}
+.table-data-view.closing{animation:td-shrink .32s var(--ease) both}
 @keyframes td-grow{from{transform:scale(.16);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes td-shrink{from{transform:scale(1);opacity:1}to{transform:scale(.16);opacity:0}}
 .tdv-head{flex:none;display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line-strong)}
 .tdv-title{font-size:17px;font-weight:300;color:var(--ink)}
 .tdv-title b{font-weight:700;background:linear-gradient(92deg,var(--accent),var(--accent-bright));-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -3386,7 +3397,7 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 .g3d-search-empty{padding:12px;color:var(--ink-faint);font-size:12px;text-align:center}
 .g3d-pause{position:absolute;right:12px;bottom:12px;z-index:15;width:36px;height:36px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line-strong);border-radius:var(--r-md);background:rgba(11,15,22,.72);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);color:var(--ink);font-size:13px;cursor:pointer;transition:all var(--dur) var(--ease)}
 .g3d-pause:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
-.g3d-pause.is-paused{border-color:var(--amber);color:var(--amber);background:var(--amber-dim)}
+.g3d-pause.is-paused{border-color:var(--line-strong);color:var(--ink);background:rgba(11,15,22,.72)}
 .g3d-onboard{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:16;display:flex;align-items:center;gap:10px;padding:10px 14px 10px 12px;background:rgba(11,15,22,.84);border:1px solid var(--line-strong);border-radius:var(--r-full);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:var(--shadow-2);font-size:12px;color:var(--ink);cursor:pointer;animation:card-in .4s var(--ease) both;max-width:88%;white-space:nowrap}
 .g3d-onboard-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent-glow);flex:none;animation:hero-glow 1.8s ease-in-out infinite alternate}
 .g3d-onboard-dismiss{margin-left:4px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:rgba(255,255,255,.06);color:var(--ink-faint);font-size:9px;flex:none}

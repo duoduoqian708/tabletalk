@@ -66,15 +66,22 @@ export function ApprovalPage(): React.JSX.Element {
       <div className="panel">
         {items.length===0 && <div className="mpage-empty">暂无审批</div>}
         {items.map((a)=> (
-          <div key={a.id} className="approval-row" style={{padding:'10px', borderTop:'1px solid var(--line)', display:'flex', gap:12, alignItems:'center'}}>
-            <span className="mono" style={{minWidth:90}}>{a.status}</span>
-            <span className="mono" style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>{a.sql.slice(0,80)}</span>
-            <span className="mono" style={{fontSize:11, color:'var(--ink-faint)'}}>{a.requested_by} · {a.requested_at}</span>
-            {a.status==='pending' && (
-              <>
-                <button className="mini-btn set" onClick={()=> void act(a.id,'approve')}>批准</button>
-                <button className="mini-btn dang" onClick={()=> void act(a.id,'reject')}>驳回</button>
-              </>
+          <div key={a.id} className="approval-row" style={{padding:'10px', borderTop:'1px solid var(--line)', display:'flex', flexDirection:'column', gap:6}}>
+            <div style={{display:'flex', gap:12, alignItems:'center', width:'100%'}}>
+              <span className="mono" style={{minWidth:90, color: a.status==='pending' ? 'var(--amber)' : a.status==='approved' ? 'var(--green)' : 'var(--red)'}}>{a.status}</span>
+              <span className="mono" style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={a.sql}>{a.sql.slice(0,80)}</span>
+              <span className="mono" style={{fontSize:11, color:'var(--ink-faint)'}}>{a.requested_by} · {a.requested_at}</span>
+              {a.status==='pending' && (
+                <>
+                  <button className="mini-btn set" onClick={()=> void act(a.id,'approve')}>批准</button>
+                  <button className="mini-btn dang" onClick={()=> void act(a.id,'reject')}>驳回</button>
+                </>
+              )}
+            </div>
+            {(a.reviewed_by || a.note) && (
+              <div className="mono" style={{fontSize:11, color:'var(--ink-dim)', paddingLeft:4}}>
+                → {a.reviewed_by || '—'} · {a.reviewed_at || '—'} {a.note ? `· ${a.note}` : ''} · 审计链：申请会话 {a.id} → 批准人 {a.reviewed_by || '—'}
+              </div>
             )}
           </div>
         ))}

@@ -6,10 +6,11 @@ import { useI18n } from '@renderer/store/i18n'
 interface Props {
   connId: string
   table: string
+  closing?: boolean
   onClose: () => void
 }
 
-export function TableDataView({ connId, table, onClose }: Props): React.JSX.Element {
+export function TableDataView({ connId, table, closing, onClose }: Props): React.JSX.Element {
   const { t } = useI18n()
   const [data, setData] = useState<TablePreview | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -24,7 +25,7 @@ export function TableDataView({ connId, table, onClose }: Props): React.JSX.Elem
   }, [connId, table])
 
   return (
-    <div className="table-data-view">
+    <div className={`table-data-view${closing ? ' closing' : ''}`}>
       <div className="tdv-head">
         <span className="tdv-title">{t('node.tableLabel')} <b>{table}</b></span>
         <span className="tdv-sub mono">{data ? `${data.total} ${t('table.rows')}` : t('common.loading')}</span>

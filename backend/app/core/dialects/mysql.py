@@ -135,19 +135,44 @@ class MySQLAdapter(DialectAdapter):
             async with conn.cursor() as cur:
                 await cur.execute(f"EXPLAIN {sql}")
                 rows = await cur.fetchall()
-                # MySQL EXPLAIN: rows_estimate is in column 9 or 10
+                cols = [d[0].lower() for d in (cur.description or [])]
                 detail = " | ".join(str(r) for r in rows[:2])[:600]
-                # 估算：取 rows 列的最大值
                 est = None
-                for r in rows:
-                    # MySQL's EXPLAIN output has 'rows' as 9th col (index 9)
-                    try:
-                        # try to find a numeric rows estimate
-                        for v in r:
+                # 优先按列名 rows 精确取值，对齐标准 SQL 语义
+                if "rows" in cols:
+                    idx = cols.index("rows")
+                    for r in rows:
+                        try:
+                            v = r[idx]
                             if isinstance(v, int) and v > 0:
                                 est = v if est is None else max(est, v)
-                    except Exception:
-                        pass
-                return {"estimated_rows": est, "is_scan": "ALL" in detail, "detail": detail}
+                            elif isinstance(v, str) and v.isdigit():
+                                vi = int(v)
+                                est = vi if est is None else max(est, vi)
+                        except Exception:
+                            pass
+                else:
+                    # 回退：旧逻辑取任意正整数最大值（兼容）
+                    for r in rows:
+                        try:
+                            for v in r:
+                                if isinstance(v, int) and v > 0:
+                                    est = v if est is None else max(est, v)
+                        except Exception:
+                            pass
+                # is_scan 需精确匹配 type 列为 ALL，而非子串包含
+                is_scan = False
+                if "type" in cols:
+                    t_idx = cols.index("type")
+                    for r in rows:
+                        try:
+                            if str(r[t_idx]).upper() == "ALL":
+                                is_scan = True
+                                break
+                        except Exception:
+                            pass
+                else:
+                    is_scan = "ALL" in detail
+                return {"estimated_rows": est, "is_scan": is_scan, "detail": detail}
         except Exception as e:
             return {"estimated_rows": None, "is_scan": False, "detail": f"explain failed: {e}"}

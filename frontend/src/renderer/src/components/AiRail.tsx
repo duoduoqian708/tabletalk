@@ -19,6 +19,7 @@ import { toastMsg } from '@renderer/utils/toast'
 import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
+import { listSkills } from '@renderer/api/skills'
 import { useI18n } from '@renderer/store/i18n'
 import { getRuntime } from '@renderer/api/client'
 const CmEditor = React.lazy(() => import('./CmEditor').then((m) => ({ default: m.CmEditor })))
@@ -565,6 +566,44 @@ const SUGGESTIONS: string[] = [
   'ws.sug4'
 ]
 
+/**
+ * WS2（T2.4）：C2 建议只引用 enabled 技能涉及的能力——纯函数，便于单测。
+ * 每种建议归属一个技能（query 为地板常开）；disabled 的技能不参与生成。
+ * confirmed：已确认领域标签；tableForTag：标签→代表表；enabledIds：启用技能 id 集。
+ */
+function buildSuggestions(
+  confirmed: string[],
+  tableForTag: Record<string, string>,
+  isZh: boolean,
+  enabledIds: Set<string>
+): string[] {
+  const sugs: string[] = []
+  // 数据查询建议（query 地板；默认涵盖现有"按月统计"生成）
+  if (enabledIds.has('query')) {
+    for (const tg of confirmed.slice(0, 5)) {
+      const tbl = tableForTag[tg] || ''
+      sugs.push(isZh
+        ? (tbl ? `按月统计${tg}的${tbl}数量` : `查询${tg}相关的数据`)
+        : (tbl ? `Monthly count of ${tbl} for ${tg}` : `Query ${tg} data`))
+    }
+  }
+  if (enabledIds.has('schema') && confirmed.length) {
+    sugs.push(isZh ? '这个库有哪些表结构？' : 'What tables does this database have?')
+  }
+  if (enabledIds.has('report') && confirmed.length) {
+    sugs.push(isZh ? `出一份关于${confirmed[0]}的分析报告` : `Produce a report on ${confirmed[0]}`)
+  }
+  // query 常开兜底：补齐到至少 3 条
+  if (enabledIds.has('query') && confirmed.length) {
+    let i = 0
+    while (sugs.length < 3) {
+      sugs.push(isZh ? `统计${confirmed[i % confirmed.length]}的趋势` : `Trend of ${confirmed[i % confirmed.length]}`)
+      i++
+    }
+  }
+  return sugs.slice(0, 5)
+}
+
 /* ---------- 主组件 ---------- */
 export function AiRail({ providerName, modelLabel }: { providerName?: string | null; modelLabel?: string | null }): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
@@ -612,8 +651,17 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [askDraft, setAskDraft])
-  // C2 猜你想问：基于已确认领域标签本地生成 3-5 个（零模型调用）
+  // C2 猜你想问：基于已确认领域标签 + enabled 技能本地生成 3-5 个（零模型调用）
   const [dynamicSugs, setDynamicSugs] = useState<string[] | null>(null)
+  // WS2（T2.4）：启用技能集合（query/refusal 为地板，后端保证恒 enabled）
+  const [enabledSkills, setEnabledSkills] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    let alive = true
+    void listSkills()
+      .then((cat) => alive && setEnabledSkills(new Set(cat.skills.filter((s) => s.enabled).map((s) => s.id))))
+      .catch(() => undefined)
+    return () => { alive = false }
+  }, [])
   useEffect(() => {
     if (!currentId) { setDynamicSugs(null); return }
     let alive = true
@@ -633,28 +681,13 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             if (confirmed.includes(tg) && !tableForTag[tg]) tableForTag[tg] = tbl
           }
         }
-        const locale = useI18n.getState().locale
-        const isZh = locale.startsWith('zh')
-        const sugs: string[] = []
-        for (const tg of confirmed.slice(0, 5)) {
-          const tbl = tableForTag[tg] || ''
-          if (isZh) {
-            if (tbl) sugs.push(`按月统计${tg}的${tbl}数量`)
-            else sugs.push(`查询${tg}相关的数据`)
-          } else {
-            if (tbl) sugs.push(`Monthly count of ${tbl} for ${tg}`)
-            else sugs.push(`Query ${tg} data`)
-          }
-        }
-        // 补齐到 3 条
-        while (sugs.length < 3) {
-          sugs.push(isZh ? `统计${confirmed[0]}的趋势` : `Trend of ${confirmed[0]}`)
-        }
-        if (alive) setDynamicSugs(sugs.slice(0, 5))
+        const isZh = useI18n.getState().locale.startsWith('zh')
+        const sugs = buildSuggestions(confirmed, tableForTag, isZh, enabledSkills)
+        if (alive) setDynamicSugs(sugs)
       } catch {}
     })()
     return () => { alive = false }
-  }, [currentId])
+  }, [currentId, enabledSkills])
   // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
   const effectiveModel = settings?.ai_models.find(
     (m) => m.id === (modelId ?? settings.default_ai_model),
@@ -666,7 +699,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = Math.min(150, el.scrollHeight) + 'px'
+    el.style.height = Math.min(180, Math.max(56, el.scrollHeight)) + 'px'
   }
   // 澄清挂起：报告中等待用户回答澄清问题时渲染内联输入
   const [clarifyPending, setClarifyPending] = useState<{ q: string; field: string } | null>(null)
@@ -1307,8 +1340,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
 
   return (
     <div className="ai-root">
-      {/* 对话面板：从底部命令中心向上弹出 */}
-      {panelOpen && (
+      {/* 常驻对话面板 */}
+      {(true) && (
         <div className="ai-panel">
           <div className="ai-panel-head">
             <span className={`ai-panel-state${busy ? ' busy' : ''}`}><i />{busy ? 'THINKING' : 'ONLINE'}</span>
@@ -1493,7 +1526,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
               }
             }}
             disabled={busy}
-            rows={1}
+            rows={2}
           />
           <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title={t('ws.send')}>→</button>
         </div>

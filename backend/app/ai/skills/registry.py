@@ -1,8 +1,4 @@
-"""技能注册表：可注册 / 列表 / 按 id 获取；内置技能不可删除，自定义可插拔且持久化。
-
-技能是平台扩展的单元——新增能力就是注册一个新 Skill（复用原子 Tool + 写剧本）。
-自定义技能持久化到 data_dir/skills.json；内置技能不可删除，但可启用/禁用与组合工具。
-"""
+"""技能注册表：SQLite 持久化（tabletalk.db: skills），兼容旧 JSON。"""
 from __future__ import annotations
 
 import json
@@ -12,10 +8,12 @@ from pathlib import Path
 from app.ai.skills.builtin import BUILTIN_SKILLS
 from app.ai.skills.skill import Skill
 from app.ai.tools.registry import TOOL_SCHEMAS
+from app.core.system_db import get_conn, init_system_db
 
 _skills: dict[str, Skill] = {}
 _custom: dict[str, Skill] = {}
 _custom_path: Path | None = None
+_data_dir: Path | None = None
 _loaded = False
 
 
@@ -32,28 +30,77 @@ def _new_id() -> str:
 
 
 def load_custom(data_dir: str | Path) -> None:
-    """从 data_dir/skills.json 加载自定义技能（重启后恢复）。"""
-    global _custom_path
+    global _custom_path, _data_dir
     _ensure_loaded()
-    _custom_path = Path(data_dir) / "skills.json"
+    _data_dir = Path(data_dir)
+    init_system_db(_data_dir)
+    _custom_path = _data_dir / "skills.json"
     _custom.clear()
+    # 优先从 DB 读
+    try:
+        con = get_conn(_data_dir)
+        cur = con.execute("SELECT data FROM skills")
+        rows = cur.fetchall()
+        con.close()
+        if rows:
+            for (data_json,) in rows:
+                try:
+                    d = json.loads(data_json)
+                    s = Skill.from_dict(d)
+                    if not s.builtin and s.id not in _skills:
+                        _custom[s.id] = s
+                except Exception:
+                    continue
+            return
+    except Exception:
+        pass
+    # 回退：旧 JSON 迁移
     if not _custom_path.exists():
         return
     try:
         data = json.loads(_custom_path.read_text(encoding="utf-8"))
         for d in data.get("skills", []):
-            s = Skill.from_dict(d)
-            if not s.builtin and s.id not in _skills:
-                _custom[s.id] = s
-    except Exception:  # noqa: BLE001
+            try:
+                s = Skill.from_dict(d)
+                if not s.builtin and s.id not in _skills:
+                    _custom[s.id] = s
+            except Exception:
+                continue
+        if _custom:
+            _save_custom()
+            try:
+                bak = _custom_path.with_suffix(".json.bak")
+                if not bak.exists():
+                    _custom_path.rename(bak)
+            except OSError:
+                pass
+    except Exception:
         pass
 
 
 def _save_custom() -> None:
-    if _custom_path is None:
+    if _data_dir is None:
         return
-    payload = {"skills": [s.to_dict() for s in _custom.values()]}
-    _custom_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        con = get_conn(_data_dir)
+        con.execute("DELETE FROM skills")
+        for s in _custom.values():
+            con.execute(
+                "INSERT INTO skills (id, data) VALUES (?,?)",
+                (s.id, json.dumps(s.to_dict(), ensure_ascii=False)),
+            )
+        con.commit()
+        con.close()
+    except Exception:
+        pass
+    # 旧文件归档
+    if _custom_path and _custom_path.exists():
+        try:
+            bak = _custom_path.with_suffix(".json.bak")
+            if not bak.exists():
+                _custom_path.rename(bak)
+        except OSError:
+            pass
 
 
 def register_skill(skill: Skill) -> None:
@@ -62,7 +109,6 @@ def register_skill(skill: Skill) -> None:
 
 
 def register_custom(skill: Skill) -> Skill:
-    """登记自定义技能（带持久化）；返回实际登记的对象（id 由注册表生成）。"""
     _ensure_loaded()
     if not skill.id or skill.id in _skills:
         skill.id = _new_id()
@@ -72,11 +118,16 @@ def register_custom(skill: Skill) -> Skill:
 
 
 def update_skill(skill_id: str, patch: dict) -> Skill | None:
-    """更新技能（启用/禁用、工具组合、提示词、触发词）。内置技能可改 enabled/tools/prompt，不可改 id。"""
     _ensure_loaded()
     target = _skills.get(skill_id) or _custom.get(skill_id)
     if target is None:
         return None
+    # 地板技能不可禁用（T1.2/08§4.5）：query/refusal 恒为 enabled
+    if "enabled" in patch and patch["enabled"] is False and skill_id in {"query", "refusal"}:
+        # 保持 enabled=True，不落库
+        patch = {k: v for k, v in patch.items() if k != "enabled"}
+        if not patch:
+            return target
     d = target.to_dict()
     for k in ("name", "description", "system_prompt", "triggers", "enabled", "read_only"):
         if k in patch:
@@ -94,7 +145,6 @@ def update_skill(skill_id: str, patch: dict) -> Skill | None:
 
 
 def remove_skill(skill_id: str) -> bool:
-    """仅允许移除自定义技能；内置技能不可删。"""
     _ensure_loaded()
     s = _skills.get(skill_id) or _custom.get(skill_id)
     if s is None or s.builtin:
@@ -123,7 +173,6 @@ def _tool_names() -> set[str]:
 
 
 def validate_skill(name: str, description: str, tools: list[str], triggers: list[str], read_only: bool) -> list[str]:
-    """组合校验：工具必须存在；只读技能禁用写工具。"""
     errors: list[str] = []
     if not name or not name.strip():
         errors.append("技能名称不能为空")
@@ -143,11 +192,20 @@ def validate_skill(name: str, description: str, tools: list[str], triggers: list
 
 
 def skill_tool_schemas(skill_id: str | None) -> list[dict]:
-    """按技能的工具组合过滤函数调用工具集（组合生效；过滤只会收窄，安全闸门仍兜底）。"""
+    """技能 → 可用工具集。
+
+    - skill_id 为空：全量工具（默认查询面）
+    - 技能不存在：全量工具回退（兼容旧契约，未知技能不额外收窄）
+    - 技能存在且工具集为空：**零工具**（铁律 3·禁止靠缺席——refusal 等无工具技能
+      模型拿不到任何动词，从契约层杜绝越权。空列表绝不可当"全量"）
+    - 技能存在且工具集非空：交集过滤（只收窄不扩权）
+    """
     if not skill_id:
         return list(TOOL_SCHEMAS)
     s = get_skill(skill_id)
-    if s is None or not s.tools:
+    if s is None:
         return list(TOOL_SCHEMAS)
     names = set(s.tools)
+    if not names:
+        return []
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in names]
