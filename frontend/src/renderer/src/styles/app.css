@@ -299,13 +299,27 @@
   display: flex;
 }
 
-) .modal {
+.modal {
   width: 440px;
+  max-width: calc(100vw - 48px);
+  min-width: 0;
+  box-sizing: border-box;
   background: var(--void-2);
   border: 1px solid var(--line-strong);
   border-radius: 16px;
   box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+}
+
+/* 宽度锁死：内容（报错等长文本）换行展示，不得撑开弹窗 */
+.modal .mb,
+.modal .mb > * { min-width: 0; }
+.modal .mb .note,
+.modal .mb input,
+.modal .mb select,
+.modal .mb textarea {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .modal .mh {

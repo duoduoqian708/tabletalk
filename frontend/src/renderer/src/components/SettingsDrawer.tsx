@@ -51,8 +51,8 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
       saveTestState(conn.id, st)
       setTest(st)
       toastMsg(r.ok
-        ? `✓ ${t('conn.modal.testOk', { ms: r.latency_ms })}`
-        : `✕ ${r.error ?? t('common.unknownError')}`)
+        ? t('conn.modal.testOk', { ms: r.latency_ms })
+        : (r.error ?? t('common.unknownError')))
     } catch (e) {
       const st: ConnTestState = { ok: false, error: (e as Error).message, ts: Date.now() }
       saveTestState(conn.id, st)
@@ -72,7 +72,7 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
   const targetTitle = isSqlite ? addr : `${addr} · db:${dbName} · user:${conn.user || '—'}`
 
   const sensList = (conn.sensitive ?? []).join(', ')
-  const testLabel = testing ? '…' : test ? (test.ok ? `✓ ${t('settings.conn.test')}` : `✕ ${t('settings.conn.test')}`) : t('settings.conn.test')
+  const testLabel = testing ? '…' : t('settings.conn.test')
   return (
     <div
       className={`conn-row${isCurrent ? ' cur' : ''}`}
@@ -86,8 +86,8 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
         <div className="conn-tags">
           <span className="conn-dialect mono">{conn.dialect}</span>
           {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
-          {test && test.ok && <span className="ok-tag mono">✓ {t('settings.conn.testOkTag')}</span>}
-          {test && !test.ok && <span className="fail-tag mono" title={test.error ?? ''}>✕ {t('settings.conn.testFailTag')}</span>}
+          {test && test.ok && <span className="ok-tag mono">{t('settings.conn.testOkTag')}</span>}
+          {test && !test.ok && <span className="fail-tag mono" title={test.error ?? ''}>{t('settings.conn.testFailTag')}</span>}
         </div>
         <div className="conn-target mono" title={targetTitle}>
           <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>
@@ -109,7 +109,7 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
             className="mini-btn test"
             disabled={testing}
             onClick={() => void handleTest()}
-            title={test ? (test.ok ? `✓ ${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}
+            title={test ? (test.ok ? `${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}
           >
             {testLabel}
           </button>
@@ -186,6 +186,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
   }
   useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current) }, [])
   const [savedMsg, setSavedMsg] = useState('')
+  const [saveOk, setSaveOk] = useState(true)  // 保存结果状态（样式判定，不再靠文案符号）
   const { locale, setLocale, t } = useI18n()
 
   // 主题：亮色（默认）/ 深色，localStorage 记忆
@@ -237,6 +238,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
   const [editing, setEditing] = useState<Partial<AiModelConfig> | Partial<EmbeddingModelConfig>>({})
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState('')
+  const [testOk, setTestOk] = useState(true)  // 模型测试结果状态（样式判定，不再靠文案符号）
 
   // 打开时加载配置
   useEffect(() => {
@@ -337,8 +339,10 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
           if (caps?.streaming) capTexts.push(t('settings.cap.streamingFull'))
           if (caps?.context_window) capTexts.push(`${Math.round(caps.context_window / 1000)}K`)
           setTestMsg(`${t('settings.testOk', { ms: r.latency_ms ?? '?' })}${capTexts.length ? ` · ${capTexts.join(' / ')}` : ''}`)
+          setTestOk(true)
         } else {
           setTestMsg(t('settings.testFail', { error: r.error ?? t('common.unknownError') }))
+          setTestOk(false)
         }
       } else {
         const r = await testEmbedding({
@@ -354,12 +358,15 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
             dimensions: r.dimensions,
           }))
           setTestMsg(t('settings.embTestOk', { dims: r.dimensions ?? 0, ms: r.latency_ms ?? '?' }))
+          setTestOk(true)
         } else {
           setTestMsg(t('settings.testFail', { error: r.error ?? t('common.unknownError') }))
+          setTestOk(false)
         }
       }
     } catch (e) {
       setTestMsg(t('settings.testFail', { error: (e as Error).message }))
+      setTestOk(false)
     } finally {
       setTesting(false)
     }
@@ -412,9 +419,11 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
       await updateSettings(patch)
       setSettings((s) => (s ? { ...(s as SettingsPublic), ...(patch as SettingsPublic) } : s))
       setSavedMsg(t('settings.saveSuccess'))
+      setSaveOk(true)
       return true
     } catch (e) {
       setSavedMsg(t('settings.saveFail', { msg: (e as Error).message }))
+      setSaveOk(false)
       return false
     }
   }
@@ -591,7 +600,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                           <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
                           <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? t('settings.model.add') : t('common.save')}</button>
                         </div>
-                        {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
+                        {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
@@ -673,7 +682,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                           <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
                           <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? t('settings.model.add') : t('common.save')}</button>
                         </div>
-                        {testMsg && <div className={`me-test${testMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{testMsg}</div>}
+                        {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
                       </div>
                     )}
 
@@ -765,7 +774,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
             )}
 
             <div className="save-bar">
-              {savedMsg && <span className={`test-result${savedMsg.startsWith('✓') ? ' ok' : ' bad'}`}>{savedMsg}</span>}
+              {savedMsg && <span className={`test-result${saveOk ? ' ok' : ' bad'}`}>{savedMsg}</span>}
             </div>
           </div>
         </div>

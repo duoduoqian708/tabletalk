@@ -137,7 +137,7 @@ try {
   const stored = await page.evaluate(() => localStorage.getItem('tabletalk-default-conn'))
   check('默认已持久化到 localStorage', !!stored)
 
-  console.log('== 编辑弹窗：密码占位 + 保存置灰 ==')
+  console.log('== 编辑弹窗：密码占位 + 保存置灰 + 宽度锁死 ==')
   // 点卡3（PG，已存密码）「编辑」→ 弹窗打开（onEditConnection 会先关抽屉；sqlite 无密码框，须用 PG 卡）
   const rowsNow = await page.$$('.conn-row')
   await rowsNow[2].$$eval('.conn-actions .mini-btn', (bs) => bs[2].click())
@@ -160,11 +160,31 @@ try {
   check('置灰样式（opacity 降低）', parseFloat(saveOpacity) < 1, `opacity=${saveOpacity}`)
   const saveTitle = saveBtn ? await saveBtn.getAttribute('title') : ''
   check('置灰时有提示（先测试再保存）', (saveTitle || '').includes('测试'), saveTitle)
+  // 监听 test-draft 请求体：密码留空时必须带 saved_conn_id（后端用已存密码填充）
+  const draftBodies = []
+  const onReq = (req) => {
+    if (req.url().includes('/connections/test-draft') && req.method() === 'POST') {
+      try { draftBodies.push(JSON.parse(req.postData() || '{}')) } catch { /* ignore */ }
+    }
+  }
+  page.on('request', onReq)
   // PG 无服务器 → 测试失败 → 保存仍不可点（必须测试通过才能保存）
   await page.click('.modal .btn.tl')
-  await page.waitForTimeout(2000)
+  await page.waitForTimeout(2500)
   const saveDisabled2 = saveBtn ? await saveBtn.isDisabled() : true
   check('测试失败 → 保存仍置灰', saveDisabled2 === true)
+  page.off('request', onReq)
+  const draft = draftBodies[0]
+  check('test-draft 请求带 saved_conn_id', !!draft && !!draft.saved_conn_id, JSON.stringify(draftBodies))
+  check('test-draft 请求密码为空（留空=用已存）', !!draft && draft.password === '', JSON.stringify(draftBodies))
+  // 弹窗宽度锁死：失败长报错后仍为 440px（报错换行展示，不撑开）
+  const modalBox = await page.$eval('.modal', (el) => el.getBoundingClientRect().width)
+  check('弹窗宽度固定 440px（报错不撑宽）', Math.round(modalBox) === 440, `w=${modalBox}`)
+  const noteBox = await page.$eval('.modal .mb .note', (el) => {
+    const r = el.getBoundingClientRect()
+    return { w: Math.round(r.width), text: el.textContent || '' }
+  }).catch(() => null)
+  check('报错消息换行展示（note 宽度不超弹窗）', noteBox === null || noteBox.w <= 440, JSON.stringify(noteBox))
   await page.click('.modal .close')
   await page.waitForTimeout(400)
 
@@ -174,11 +194,14 @@ try {
   await page.waitForTimeout(400)
   const rowsB = await page.$$('.conn-row')
   check('测试按钮为普通按钮（无 ok/fail 高亮类）', (await rowsB[0].$('.mini-btn.test.ok, .mini-btn.test.fail')) === null)
+  const testBtnText = await rowsB[0].$eval('.conn-actions .mini-btn.test', (b) => b.textContent.trim())
+  check('测试按钮无 ✓/✕ 符号', testBtnText === '测试', testBtnText)
   // 点卡1（sqlite 可读）测试 → 「测试通过」标签点亮
   await rowsB[0].$$eval('.conn-actions .mini-btn', (bs) => bs[0].click())
   await page.waitForTimeout(900)
   check('测试通过标签点亮', (await rowsB[0].$('.ok-tag')) !== null)
-  check('测试通过标签文案', ((await rowsB[0].$eval('.ok-tag', (e) => e.textContent)) || '').includes('测试通过'))
+  const okTagText = await rowsB[0].$eval('.ok-tag', (e) => e.textContent.trim()).catch(() => '')
+  check('测试通过标签无 ✓ 符号', okTagText === '测试通过', okTagText)
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
   process.exitCode = failures === 0 ? 0 : 1
