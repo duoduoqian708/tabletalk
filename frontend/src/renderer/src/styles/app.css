@@ -292,7 +292,8 @@
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 90;
+  /* 高于设置抽屉（90）：编辑/新建弹窗直接盖在抽屉上，保存后回到设置页 */
+  z-index: 100;
 }
 
 .modal-mask.open {

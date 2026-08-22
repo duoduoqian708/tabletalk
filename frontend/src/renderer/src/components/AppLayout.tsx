@@ -4,13 +4,15 @@ import { getRuntime } from '@renderer/api/client'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
 import { useSchema } from '@renderer/store/schema'
-import { useUi, type MainView, type View } from '@renderer/store/ui'
+import { useUi, type View } from '@renderer/store/ui'
 import { useI18n } from '@renderer/store/i18n'
 import { previewTable } from '@renderer/api/schema'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
 import { Graph3D } from './Graph3D'
+import { GraphSearch } from './GraphSearch'
+import { TagBar } from './TagBar'
 import { NodePopup } from './NodePopup'
 import { TableDataView } from './TableDataView'
 import { DataTable } from './DataTable'
@@ -84,6 +86,7 @@ function RelStrip(): React.JSX.Element | null {
 
 export function AppLayout({ health }: Props): React.JSX.Element {
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingConnId, setEditingConnId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const list = useConnections((s) => s.list)
   const currentId = useConnections((s) => s.currentId)
@@ -236,16 +239,6 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     await create({ name: '演示库', dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
   }
 
-  const MainToggle = ({ target }: { target: MainView }): React.JSX.Element => (
-    <button
-      className={`ws-tb${mainView === target ? ' on' : ''}`}
-      onClick={() => setMainView(target)}
-      title={target === 'graph' ? t('nav.graphTitle') : t('nav.tableTitle')}
-    >
-      {target === 'graph' ? t('nav.graph') : t('nav.table')}
-    </button>
-  )
-
   return (
     <div className="app">
       <header className="appbar">
@@ -312,9 +305,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               ) : (
                 <div className="ws-left">
                   <div className="ws-toolbar">
-                    <MainToggle target="graph" />
-                    <MainToggle target="table" />
-                    <span className="ws-crumb mono">{subject}</span>
+                    <GraphSearch
+                      tables={graphNodes}
+                      onPick={(name) => { setMainView('graph'); window.dispatchEvent(new CustomEvent('tabletalk:do-locate', { detail: { table: name } })) }}
+                    />
+                    <TagBar connId={currentId} />
                     <span className="spacer" />
                     {mainView === 'table' && tabs.length === 0 && (
                       <span className="ws-empty-hint">{t('app.emptyHint')}</span>
@@ -408,10 +403,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                 </div>
               )}
               <div className="ws-splitter" onPointerDown={onSplitterDown} title={t('app.splitterTitle')} />
-              <AiRail
-                providerName={health?.ai_provider_name}
-                modelLabel={health?.ai_model}
-              />
+              <AiRail />
             </section>
           </>
         ) : view === 'knowledge' || view === 'graph' ? (
@@ -423,18 +415,24 @@ export function AppLayout({ health }: Props): React.JSX.Element {
 
       {/* 航电状态栏：gate 状态 + 连接 + AI 网关 */}
       <footer className="statusline deck-status">
-        <span className="guard"><span className="led" />gate&nbsp;:&nbsp;{health?.gate ?? '…'}</span>
         <span className="mid">
-          <span>conn&nbsp;:&nbsp;<b>{list.find((c) => c.id === currentId)?.name ?? '—'}</b></span>
-          <span>dialect&nbsp;:&nbsp;<b>{list.find((c) => c.id === currentId)?.dialect ?? '—'}</b></span>
-          <span>provider&nbsp;:&nbsp;<b>{health?.ai_provider_name ?? '—'}</b></span>
-          <span>model&nbsp;:&nbsp;<b>{health?.ai_model ?? '—'}</b></span>
-          {health?.ai_mock_downgraded && <span className="warn">{t('app.mockDowngraded')}</span>}
+          <span className="mid-item">
+            <span className="led" />
+            <b>{list.find((c) => c.id === currentId)?.name ?? '—'}</b>
+            <span className="mid-sep">|</span>
+            <b>{health?.ai_provider_name ?? '—'}-{health?.ai_model ?? '—'}</b>
+          </span>
         </span>
       </footer>
 
-      <ConnectionModal open={modalOpen} onClose={() => setModalOpen(false)} />
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onNewConnection={() => { setSettingsOpen(false); setModalOpen(true) }} />
+      <ConnectionModal open={modalOpen} editId={editingConnId} onClose={() => { setModalOpen(false); setEditingConnId(null) }} />
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        // 编辑/新建弹窗盖在抽屉上（modal z-index 高于抽屉）：保存后回到设置页
+        onNewConnection={() => { setEditingConnId(null); setModalOpen(true) }}
+        onEditConnection={(id) => { setEditingConnId(id); setModalOpen(true) }}
+      />
       <KbBuildGate />
       <LoginDialog
         open={showLogin}

@@ -153,6 +153,7 @@ try {
   await rowsNow[2].$$eval('.conn-actions .mini-btn', (bs) => bs[1].click())
   await page.waitForSelector('.modal input[type=password]', { timeout: 10000 })
   await page.waitForTimeout(400)
+  check('编辑弹窗打开时设置抽屉保持（保存后回设置页）', (await page.$('.set-drawer')) !== null)
   const pwdInput = await page.$('.modal input[type=password]')
   const pwdVal = pwdInput ? await pwdInput.inputValue() : null
   check('编辑弹窗密码框为 *** 占位（真值不出网）', pwdVal === '••••••••', `got ${JSON.stringify(pwdVal)}`)
@@ -197,10 +198,10 @@ try {
   check('报错消息换行展示（note 宽度不超弹窗）', noteBox === null || noteBox.w <= 440, JSON.stringify(noteBox))
   await page.click('.modal .close')
   await page.waitForTimeout(400)
+  check('关闭弹窗后仍在设置抽屉', (await page.$('.set-drawer')) !== null)
 
-  console.log('== 测试标签（重开抽屉）==')
-  await page.click('.appbar .sys-btn')
-  await page.waitForSelector('.set-drawer .conn-row', { timeout: 10000 })
+  console.log('== 测试标签（抽屉保持）==')
+  await page.waitForSelector('.set-drawer .conn-row', { timeout: 5000 })
   await page.waitForTimeout(400)
   const rowsB = await page.$$('.conn-row')
   check('测试按钮为普通按钮（无 ok/fail 高亮类）', (await rowsB[0].$('.mini-btn.test.ok, .mini-btn.test.fail')) === null)
