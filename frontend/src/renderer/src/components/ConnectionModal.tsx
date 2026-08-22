@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { testDraftConnection } from '@renderer/api/connections'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
+import { saveTestState, type ConnTestState } from '@renderer/utils/connTestState'
 
 interface Props {
   open: boolean
@@ -52,6 +53,9 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
   const { t } = useI18n()
   const [form, setForm] = useState<Draft>(loadDraft)
   const [testedAt, setTestedAt] = useState<string | null>(null)
+  // 测试状态唯一键：每次测试生成，表单任何改动即失效；保存闸门 = 有有效测试键且快照未变
+  const [testKey, setTestKey] = useState<string | null>(null)
+  const lastTest = useRef<ConnTestState | null>(null)
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
@@ -74,6 +78,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       sensitive: (c.sensitive ?? []).join(', '),
     })
     setTestedAt(null)
+    setTestKey(null)
     setTestMsg(null)
   }, [open, editId, list])
 
@@ -96,6 +101,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
   const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => {
     setForm((f) => ({ ...f, [k]: v }))
     setTestedAt(null) // 任何字段改动 → 测试结果失效，需重新测试
+    setTestKey(null)
   }
 
   // 草稿：新建模式实时进浏览器缓存；编辑模式不回写草稿（避免覆盖用户上次的新建草稿）
@@ -115,7 +121,17 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     setTestMsg(null)
     try {
       const r = await testDraftConnection(input, { savedConnId: editId })
-      setTestedAt(r.ok ? JSON.stringify(input) : null)
+      const st: ConnTestState = { ok: r.ok, latency_ms: r.latency_ms, error: r.error ?? undefined, ts: Date.now() }
+      lastTest.current = st
+      if (r.ok) {
+        setTestedAt(JSON.stringify(input))
+        setTestKey(`t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`)  // 唯一键定位本次测试状态
+        if (editId) saveTestState(editId, st)  // 持久化：卡片「测试通过」标签据此点亮
+      } else {
+        setTestedAt(null)
+        setTestKey(null)
+        if (editId) saveTestState(editId, st)
+      }
       setTestMsg({
         ok: r.ok,
         text: r.ok
@@ -124,14 +140,15 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       })
     } catch (e) {
       setTestedAt(null)
+      setTestKey(null)
       setTestMsg({ ok: false, text: t('conn.modal.testFail', { error: (e as Error).message }) })
     } finally {
       setTesting(false)
     }
   }
 
-  // 保存闸门：测试通过 且 表单自测试后未改动
-  const canSave = testedAt !== null && testedAt === JSON.stringify(input)
+  // 保存闸门：测试通过（唯一键有效）且 表单自测试后未改动
+  const canSave = testKey !== null && testedAt !== null && testedAt === JSON.stringify(input)
 
   async function handleSave(): Promise<void> {
     if (!canSave) return
@@ -145,6 +162,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     }
     const cfg = await create(input)
     if (cfg) {
+      if (lastTest.current) saveTestState(cfg.id, lastTest.current)  // 新建落 id 后再持久化测试状态
       try {
         localStorage.removeItem(DRAFT_KEY)
       } catch {

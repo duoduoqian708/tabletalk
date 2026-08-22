@@ -94,6 +94,8 @@ export const zhCN = {
       sensitiveList: '敏感名单',
       sensitiveEmpty: '未配置',
       test: '测试',
+      testOkTag: '测试通过',
+      testFailTag: '测试失败',
       setCurrent: '设为当前',
       setDefault: '设为默认',
       isDefault: '默认',

@@ -96,6 +96,8 @@ export const enUS: Messages = {
       sensitiveList: 'Sensitive list',
       sensitiveEmpty: 'None',
       test: 'Test',
+      testOkTag: 'Tested OK',
+      testFailTag: 'Test failed',
       setCurrent: 'Set as current',
       setDefault: 'Set default',
       isDefault: 'Default',

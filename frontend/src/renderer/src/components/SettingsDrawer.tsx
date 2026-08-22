@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { testConnection } from '@renderer/api/connections'
 import { toastMsg } from '@renderer/utils/toast'
+import { loadTestState, saveTestState, type ConnTestState } from '@renderer/utils/connTestState'
 import { testGateway, testEmbedding } from '@renderer/api/ai'
 import { getSettings, updateSettings } from '@renderer/api/settings'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
@@ -28,20 +29,6 @@ const SECTIONS = [
 type Sec = (typeof SECTIONS)[number]['key']
 type ModelTab = 'chat' | 'embedding'
 
-const TEST_STATE_KEY = 'tabletalk-conn-test-'
-
-interface TestState { ok: boolean; latency_ms?: number; error?: string; ts: number }
-
-function loadTestState(id: string): TestState | null {
-  try {
-    const raw = localStorage.getItem(TEST_STATE_KEY + id)
-    return raw ? (JSON.parse(raw) as TestState) : null
-  } catch { return null }
-}
-function saveTestState(id: string, s: TestState): void {
-  try { localStorage.setItem(TEST_STATE_KEY + id, JSON.stringify(s)) } catch { /* ignore */ }
-}
-
 /** 连接卡：目标信息（路径 / host·库）为主内容，敏感名单仅配置时展示；点卡即切为当前；设为默认即时点亮。 */
 function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, isDefault }: {
   conn: { id: string; name: string; dialect: string; host: string; port: number | null; database: string; user: string; file: string; read_only?: boolean; sensitive?: string[] }
@@ -54,20 +41,20 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
 }): React.JSX.Element {
   const { t } = useI18n()
   const [testing, setTesting] = useState(false)
-  const [test, setTest] = useState<TestState | null>(() => loadTestState(conn.id))
+  const [test, setTest] = useState<ConnTestState | null>(() => loadTestState(conn.id))
 
   async function handleTest(): Promise<void> {
     setTesting(true)
     try {
       const r = await testConnection(conn.id)
-      const st: TestState = { ok: r.ok, latency_ms: r.latency_ms, error: r.error ?? undefined, ts: Date.now() }
+      const st: ConnTestState = { ok: r.ok, latency_ms: r.latency_ms, error: r.error ?? undefined, ts: Date.now() }
       saveTestState(conn.id, st)
       setTest(st)
       toastMsg(r.ok
         ? `✓ ${t('conn.modal.testOk', { ms: r.latency_ms })}`
         : `✕ ${r.error ?? t('common.unknownError')}`)
     } catch (e) {
-      const st: TestState = { ok: false, error: (e as Error).message, ts: Date.now() }
+      const st: ConnTestState = { ok: false, error: (e as Error).message, ts: Date.now() }
       saveTestState(conn.id, st)
       setTest(st)
       toastMsg((e as Error).message || t('common.unknownError'))
@@ -85,7 +72,6 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
   const targetTitle = isSqlite ? addr : `${addr} · db:${dbName} · user:${conn.user || '—'}`
 
   const sensList = (conn.sensitive ?? []).join(', ')
-  const testCls = test ? (test.ok ? ' ok' : ' fail') : ''
   const testLabel = testing ? '…' : test ? (test.ok ? `✓ ${t('settings.conn.test')}` : `✕ ${t('settings.conn.test')}`) : t('settings.conn.test')
   return (
     <div
@@ -100,6 +86,8 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
         <div className="conn-tags">
           <span className="conn-dialect mono">{conn.dialect}</span>
           {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
+          {test && test.ok && <span className="ok-tag mono">✓ {t('settings.conn.testOkTag')}</span>}
+          {test && !test.ok && <span className="fail-tag mono" title={test.error ?? ''}>✕ {t('settings.conn.testFailTag')}</span>}
         </div>
         <div className="conn-target mono" title={targetTitle}>
           <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>
@@ -118,7 +106,7 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
       <div className="conn-side">
         <div className="conn-actions" onClick={(e) => e.stopPropagation()}>
           <button
-            className={`mini-btn test${testCls}`}
+            className="mini-btn test"
             disabled={testing}
             onClick={() => void handleTest()}
             title={test ? (test.ok ? `✓ ${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}

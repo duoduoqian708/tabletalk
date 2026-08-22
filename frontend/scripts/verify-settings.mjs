@@ -137,8 +137,8 @@ try {
   const stored = await page.evaluate(() => localStorage.getItem('tabletalk-default-conn'))
   check('默认已持久化到 localStorage', !!stored)
 
-  console.log('== 编辑弹窗：密码占位 ==')
-  // 点卡3（PG，已存密码）「编辑」→ 弹窗打开（sqlite 无密码框，须用 PG 卡）
+  console.log('== 编辑弹窗：密码占位 + 保存置灰 ==')
+  // 点卡3（PG，已存密码）「编辑」→ 弹窗打开（onEditConnection 会先关抽屉；sqlite 无密码框，须用 PG 卡）
   const rowsNow = await page.$$('.conn-row')
   await rowsNow[2].$$eval('.conn-actions .mini-btn', (bs) => bs[2].click())
   await page.waitForSelector('.modal input[type=password]', { timeout: 10000 })
@@ -152,8 +152,33 @@ try {
     const after = await pwdInput.inputValue()
     check('聚焦后占位清空（可直接输入新密码）', after === '')
   }
+  // 保存按钮：未测试 → 置灰不可点（有提示）
+  const saveBtn = await page.$('.modal .btn.save')
+  const saveDisabled1 = saveBtn ? await saveBtn.isDisabled() : true
+  check('未测试时保存按钮置灰不可点', saveDisabled1 === true)
+  const saveOpacity = saveBtn ? await saveBtn.evaluate((b) => getComputedStyle(b).opacity) : '0'
+  check('置灰样式（opacity 降低）', parseFloat(saveOpacity) < 1, `opacity=${saveOpacity}`)
+  const saveTitle = saveBtn ? await saveBtn.getAttribute('title') : ''
+  check('置灰时有提示（先测试再保存）', (saveTitle || '').includes('测试'), saveTitle)
+  // PG 无服务器 → 测试失败 → 保存仍不可点（必须测试通过才能保存）
+  await page.click('.modal .btn.tl')
+  await page.waitForTimeout(2000)
+  const saveDisabled2 = saveBtn ? await saveBtn.isDisabled() : true
+  check('测试失败 → 保存仍置灰', saveDisabled2 === true)
   await page.click('.modal .close')
-  await page.waitForTimeout(300)
+  await page.waitForTimeout(400)
+
+  console.log('== 测试标签（重开抽屉）==')
+  await page.click('.appbar .sys-btn')
+  await page.waitForSelector('.set-drawer .conn-row', { timeout: 10000 })
+  await page.waitForTimeout(400)
+  const rowsB = await page.$$('.conn-row')
+  check('测试按钮为普通按钮（无 ok/fail 高亮类）', (await rowsB[0].$('.mini-btn.test.ok, .mini-btn.test.fail')) === null)
+  // 点卡1（sqlite 可读）测试 → 「测试通过」标签点亮
+  await rowsB[0].$$eval('.conn-actions .mini-btn', (bs) => bs[0].click())
+  await page.waitForTimeout(900)
+  check('测试通过标签点亮', (await rowsB[0].$('.ok-tag')) !== null)
+  check('测试通过标签文案', ((await rowsB[0].$eval('.ok-tag', (e) => e.textContent)) || '').includes('测试通过'))
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
   process.exitCode = failures === 0 ? 0 : 1
