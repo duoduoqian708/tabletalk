@@ -47,6 +47,8 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         req._server_history = []
         if req.session_id:
             try:
+                # WS4 T4.4：上一轮遗留的过期 pending 惰性清除 + 写回系统消息（须在装载历史前，本轮模型即可见）
+                _expire_stale_pending(state, req.session_id)
                 req._server_history = state.chats.get_messages(req.session_id) or []
                 # T3.4 压缩 v1：服务端历史机械化压缩（机械优先，仍超限才 LLM 兜底走单管道）。
                 # 压缩在组装前完成，preflight 尾部/追问轮种子与 chat_stream 模型历史两处一致。
@@ -135,6 +137,22 @@ def _last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _expire_stale_pending(state: "AppState", sid: str | None) -> None:
+    """WS4 T4.4：上一轮遗留的过期 pending_dml 惰性清除，并写回系统消息（下轮模型上下文可见）。"""
+    if not sid:
+        return
+    try:
+        p = state.chats.get_pending_dml(sid)
+        if p and int(time.time()) > int(p.get("expires_at", 0)):
+            state.chats.clear_pending_dml(sid)
+            state.chats.append_messages(sid, [{
+                "role": "assistant", "kind": "system",
+                "content": "上一次写操作确认已过期，需重新预览后才能执行。",
+            }])
+    except Exception:
+        pass
+
+
 # ---- WS3 T3.1：服务端历史 → 模型可见消息 ----
 
 def _card_skeleton(row: dict) -> str:
@@ -178,6 +196,9 @@ def _server_history_for_model(rows: list[dict]) -> list[dict]:
             out.append({"role": "user", "content": content})
         elif kind in ("text", "report", "clarify"):
             out.append({"role": "assistant", "content": content})
+        elif kind == "system":
+            # WS4 T4.4：取消/过期等系统信号——模型下轮可见（assistant 视角，避免打断 user 轮次）
+            out.append({"role": "assistant", "content": f"[系统] {content}"})
         elif kind == "sql_card":
             out.append({"role": "assistant", "content": _card_skeleton(m)})
         # think / stage / gate 跳过（非模型对话）

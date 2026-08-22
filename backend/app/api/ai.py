@@ -505,6 +505,24 @@ def _events_to_messages(events: list[dict], request_messages: list) -> list[dict
 
 # ---- chat sessions ----
 
+@router.post("/ai/dml/cancel")
+async def dml_cancel(body: dict) -> dict:
+    """WS4 T4.4：用户取消待确认写操作——清 pending_dml，并向会话写回系统消息（下轮模型可见）。"""
+    state = get_state()
+    sid = body.get("session_id") or ""
+    if not sid:
+        raise HTTPException(status_code=400, detail="缺少 session_id")
+    from app.safety.confirm import clear_pending
+
+    had = clear_pending(state.chats, sid)
+    if had:
+        state.chats.append_messages(sid, [{
+            "role": "assistant", "kind": "system",
+            "content": "用户取消了该写操作，未执行任何变更。",
+        }])
+    return {"ok": True, "cancelled": had}
+
+
 @router.get("/chat/sessions")
 async def list_sessions(connection: str | None = None, limit: int = 50) -> dict:
     state = get_state()

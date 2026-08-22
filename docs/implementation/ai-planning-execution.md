@@ -286,7 +286,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G3 · 08 §6 · 03 §6 · 纪要 D11
 
-> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅。下一步 T4.4 取消写回历史。续接顺序 WS4 → WS7（T4.5 顺修 E2 建议先做可独立落地）。
+> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅（a3f5b85）· T4.4 ✅。下一步 T4.5 顺修 E2 审批绕闸（高优）。完成后 WS4 收尾 → WS7。
 
 **T4.1 confirm_token 状态机** ✅ 2026-08-22 (safety/confirm.py, gate 340)
 - 做什么：token 生成与校验工具（可放 `safety/confirm.py`）。
@@ -301,7 +301,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - 做什么：`POST /query` 接受 `confirm_token`（与 confirm=true 同传）：校验 token -> **重新 `assess_sql`**（确认不是通行证）-> 执行 -> 审计带 `confirm_token` + `turn_id`（与 preview 审计条目可互相检索）。
 - 验收：集成——确认执行的审计条目能关联 preview 条目（token 相同）；确认时 SQL 被篡改则拒绝。
 
-**T4.4 取消写回历史** ☐
+**T4.4 取消写回历史** ✅ 2026-08-22 (POST /ai/dml/cancel；过期惰性清除；kind=system 消息入模型上下文)
 - 做什么：取消/过期后，向 session 追加一条系统可见消息（如 kind=system, "用户取消了该写操作"），下轮模型上下文可见；同时清除 pending_dml。
 - 验收：单测——取消后下轮 messages 含取消信号。
 
