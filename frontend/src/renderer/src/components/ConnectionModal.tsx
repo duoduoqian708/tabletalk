@@ -6,6 +6,8 @@ import { useI18n } from '@renderer/store/i18n'
 interface Props {
   open: boolean
   onClose: () => void
+  /** 传入连接 id 时为编辑模式（加载既有配置，保存走 update）；否则新建 */
+  editId?: string | null
 }
 
 const DIALECTS = ['sqlite', 'postgres', 'mysql']
@@ -41,13 +43,37 @@ function loadDraft(): Draft {
   return EMPTY
 }
 
-export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | null {
+export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Element | null {
   const create = useConnections((s) => s.create)
+  const update = useConnections((s) => s.update)
+  const list = useConnections((s) => s.list)
   const { t } = useI18n()
   const [form, setForm] = useState<Draft>(loadDraft)
   const [testedAt, setTestedAt] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  // 编辑模式：加载既有连接配置（密码为掩码时留空，保存不覆盖）
+  useEffect(() => {
+    if (!open || !editId) return
+    const c = list.find((x) => x.id === editId)
+    if (!c) return
+    setForm({
+      name: c.name ?? '',
+      dialect: c.dialect ?? 'postgres',
+      host: c.host ?? '',
+      port: c.port != null ? String(c.port) : '',
+      user: c.user ?? '',
+      password: '',
+      database: c.database ?? '',
+      file: c.file ?? '',
+      ssl: c.ssl ?? false,
+      readOnly: c.read_only ?? false,
+      sensitive: (c.sensitive ?? []).join(', '),
+    })
+    setTestedAt(null)
+    setTestMsg(null)
+  }, [open, editId, list])
 
   const isSqlite = form.dialect === 'sqlite'
 
@@ -70,15 +96,15 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
     setTestedAt(null) // 任何字段改动 → 测试结果失效，需重新测试
   }
 
-  // 草稿：表单内容实时进浏览器缓存（未测/失败也保留，防止切换页面丢失）
+  // 草稿：新建模式实时进浏览器缓存；编辑模式不回写草稿（避免覆盖用户上次的新建草稿）
   useEffect(() => {
-    if (!open) return
+    if (!open || editId) return
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(form))
     } catch {
       /* ignore */
     }
-  }, [form, open])
+  }, [form, open, editId])
 
   if (!open) return null
 
@@ -107,6 +133,14 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
 
   async function handleSave(): Promise<void> {
     if (!canSave) return
+    if (editId) {
+      // 编辑模式：密码留空表示不修改（掩码不可回传覆盖）
+      const patch: import('@renderer/api/connections').ConnectionInput = { ...input }
+      if (!patch.password) delete patch.password
+      await update(editId, patch)
+      onClose()
+      return
+    }
     const cfg = await create(input)
     if (cfg) {
       try {
@@ -122,7 +156,7 @@ export function ConnectionModal({ open, onClose }: Props): React.JSX.Element | n
     <div className="modal-mask open" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
           <div className="mh">
-            <span className="t">{t('conn.modal.title')}</span>
+            <span className="t">{editId ? t('conn.modal.titleEdit') : t('conn.modal.title')}</span>
             <button className="close" onClick={onClose}>✕</button>
           </div>
           <div className="mb">

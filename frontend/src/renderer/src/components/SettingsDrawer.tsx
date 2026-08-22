@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
+import { testConnection } from '@renderer/api/connections'
+import { toastMsg } from '@renderer/utils/toast'
 import { testGateway, testEmbedding } from '@renderer/api/ai'
 import { getSettings, updateSettings } from '@renderer/api/settings'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
@@ -10,6 +12,7 @@ interface Props {
   open: boolean
   onClose: () => void
   onNewConnection: () => void
+  onEditConnection: (id: string) => void
 }
 
 const SECTIONS = [
@@ -25,59 +28,110 @@ const SECTIONS = [
 type Sec = (typeof SECTIONS)[number]['key']
 type ModelTab = 'chat' | 'embedding'
 
-/** 连接行：敏感名单可展开编辑（数据边界由用户画）。 */
-function ConnRow({ conn, onSelect, onRemove, isCurrent }: {
-  conn: { id: string; name: string; dialect: string; read_only?: boolean; sensitive?: string[] }
-  onSelect: () => void
+const TEST_STATE_KEY = 'tabletalk-conn-test-'
+
+interface TestState { ok: boolean; latency_ms?: number; error?: string; ts: number }
+
+function loadTestState(id: string): TestState | null {
+  try {
+    const raw = localStorage.getItem(TEST_STATE_KEY + id)
+    return raw ? (JSON.parse(raw) as TestState) : null
+  } catch { return null }
+}
+function saveTestState(id: string, s: TestState): void {
+  try { localStorage.setItem(TEST_STATE_KEY + id, JSON.stringify(s)) } catch { /* ignore */ }
+}
+
+/** 连接卡：目标信息（路径 / host·库）为主内容，敏感名单仅配置时展示；点卡即切为当前；设为默认即时点亮。 */
+function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, isDefault }: {
+  conn: { id: string; name: string; dialect: string; host: string; port: number | null; database: string; user: string; file: string; read_only?: boolean; sensitive?: string[] }
+  onEdit: () => void
   onRemove: () => void
+  onSetDefault: () => void
+  onSelect: () => void
   isCurrent: boolean
+  isDefault: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState((conn.sensitive ?? []).join(', '))
-  const [saving, setSaving] = useState(false)
-  const update = useConnections((s) => s.update)
+  const [testing, setTesting] = useState(false)
+  const [test, setTest] = useState<TestState | null>(() => loadTestState(conn.id))
 
-  async function save(): Promise<void> {
-    setSaving(true)
+  async function handleTest(): Promise<void> {
+    setTesting(true)
     try {
-      await update(conn.id, {
-        sensitive: draft.split(',').map((x) => x.trim()).filter(Boolean)
-      })
-      setOpen(false)
+      const r = await testConnection(conn.id)
+      const st: TestState = { ok: r.ok, latency_ms: r.latency_ms, error: r.error ?? undefined, ts: Date.now() }
+      saveTestState(conn.id, st)
+      setTest(st)
+      toastMsg(r.ok
+        ? `✓ ${t('conn.modal.testOk', { ms: r.latency_ms })}`
+        : `✕ ${r.error ?? t('common.unknownError')}`)
+    } catch (e) {
+      const st: TestState = { ok: false, error: (e as Error).message, ts: Date.now() }
+      saveTestState(conn.id, st)
+      setTest(st)
+      toastMsg((e as Error).message || t('common.unknownError'))
     } finally {
-      setSaving(false)
+      setTesting(false)
     }
   }
 
+  // 连接目标：SQLite 显文件路径；PG/MySQL 显 host:port · 库名（user 放 title）
+  const isSqlite = conn.dialect === 'sqlite'
+  const target = isSqlite
+    ? conn.file || '—'
+    : [conn.host && conn.port ? `${conn.host}:${conn.port}` : (conn.host || '—'), conn.database || '—'].join(' · ')
+  const targetTitle = isSqlite ? target : `${target} · user:${conn.user || '—'}`
+
+  const sensList = (conn.sensitive ?? []).join(', ')
+  const testCls = test ? (test.ok ? ' ok' : ' fail') : ''
+  const testLabel = testing ? '…' : test ? (test.ok ? `✓ ${t('settings.conn.test')}` : `✕ ${t('settings.conn.test')}`) : t('settings.conn.test')
   return (
-    <div className={`conn-row${isCurrent ? ' cur' : ''}`}>
-      <span className={`st${isCurrent ? ' live' : ' idle'}`} />
-      <span className="cn mono">{conn.name}</span>
-      <span className="cd mono">{conn.dialect}</span>
-      {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
-      {(conn.sensitive ?? []).length > 0 && (
-        <span className="sens-tag mono" title={conn.sensitive!.join(', ')}>{t('settings.conn.blocked', { n: (conn.sensitive ?? []).length })}</span>
-      )}
-      <span className="spacer" />
-      <button className="mini-btn" onClick={() => { setOpen((o) => !o); setDraft((conn.sensitive ?? []).join(', ')) }}>
-        {t('settings.conn.sensitiveList')}{open ? ' ▴' : ' ▾'}
-      </button>
-      <button className="mini-btn set" onClick={onSelect}>{t('settings.conn.setCurrent')}</button>
-      <button className="mini-btn dang" onClick={onRemove}>{t('common.delete')}</button>
-      {open && (
-        <div className="conn-sens">
-          <input
-            className="sens-input mono"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={t('settings.conn.sensitivePlaceholder')}
-            onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
-          />
-          <span className="sens-hint">{t('settings.conn.sensitiveHint')}</span>
-          <button className="mini-btn set" disabled={saving} onClick={() => void save()}>{t('common.save')}</button>
+    <div
+      className={`conn-row${isCurrent ? ' cur' : ''}`}
+      onClick={onSelect}
+      title={t('settings.conn.selectTitle')}
+    >
+      <div className="conn-main">
+        <div className="conn-line1">
+          <span className="conn-name">{conn.name}</span>
+          <span className="conn-dialect mono">{conn.dialect}</span>
+          {conn.read_only && <span className="ro-tag mono">{t('conn.readOnly')}</span>}
+          {isDefault && <span className="def-tag mono">★ {t('settings.conn.isDefault')}</span>}
         </div>
-      )}
+        <div className="conn-target mono" title={targetTitle}>
+          <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>
+          <span className="ct-text">{target}</span>
+        </div>
+        {sensList && (
+          <div className="conn-sens mono">
+            <span className="sens-label">{t('settings.conn.sensitiveList')}：</span>
+            <span className="sens-list" title={sensList}>{sensList}</span>
+          </div>
+        )}
+      </div>
+      <div className="conn-side">
+        {isCurrent && <span className="cur-tag">{t('settings.conn.current')}</span>}
+        <div className="conn-actions" onClick={(e) => e.stopPropagation()}>
+          <button
+            className={`mini-btn test${testCls}`}
+            disabled={testing}
+            onClick={() => void handleTest()}
+            title={test ? (test.ok ? `✓ ${test.latency_ms ?? ''}ms` : test.error) : t('settings.conn.test')}
+          >
+            {testLabel}
+          </button>
+          <button
+            className={`mini-btn${isDefault ? ' set' : ''}`}
+            onClick={onSetDefault}
+            title={isDefault ? t('settings.conn.isDefaultTitle') : t('settings.conn.setDefaultTitle')}
+          >
+            {isDefault ? t('settings.conn.isDefault') : t('settings.conn.setDefault')}
+          </button>
+          <button className="mini-btn" onClick={onEdit}>{t('settings.conn.edit')}</button>
+          <button className="mini-btn dang" onClick={onRemove}>{t('common.delete')}</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -123,9 +177,22 @@ function CapBadges({ caps }: { caps?: { connectivity?: boolean; function_calling
   )
 }
 
-export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React.JSX.Element | null {
+export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnection }: Props): React.JSX.Element | null {
   const [sec, setSec] = useState<Sec>('dsm')
-  const { list, currentId, select, remove } = useConnections()
+  const { list, currentId, defaultId, remove, setDefault, select } = useConnections()
+  const [closing, setClosing] = useState(false)
+  const closeTimer = useRef<number | null>(null)
+
+  // 关闭动画：先播放 setSlideOut，动画结束才通知父组件卸载
+  function handleClose(): void {
+    if (closing) return
+    setClosing(true)
+    closeTimer.current = window.setTimeout(() => {
+      setClosing(false)
+      onClose()
+    }, 280)
+  }
+  useEffect(() => () => { if (closeTimer.current) window.clearTimeout(closeTimer.current) }, [])
   const [savedMsg, setSavedMsg] = useState('')
   const { locale, setLocale, t } = useI18n()
 
@@ -379,12 +446,12 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
   if (!open) return null
 
   return (
-    <div className="set-mask" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <aside className="set-drawer">
+    <div className="set-mask" onClick={(e) => e.target === e.currentTarget && handleClose()}>
+      <aside className={`set-drawer${closing ? ' closing' : ''}`}>
         <div className="set-head">
           <span className="set-title">{t('settings.titleFull')}</span>
           <span className="set-sub mono">{t('settings.sub')}</span>
-          <button className="set-x" onClick={onClose}>✕</button>
+          <button className="set-x" onClick={handleClose}>✕</button>
         </div>
 
         <div className="set-body">
@@ -403,7 +470,16 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
                 <div className="sec-d">{t('settings.dsm.desc')}</div>
                 <div className="conn-list">
                   {list.map((c) => (
-                    <ConnRow key={c.id} conn={c} onSelect={() => select(c.id)} onRemove={() => void remove(c.id)} isCurrent={c.id === currentId} />
+                    <ConnRow
+                      key={c.id}
+                      conn={c}
+                      onEdit={() => onEditConnection(c.id)}
+                      onRemove={() => void remove(c.id)}
+                      onSetDefault={() => setDefault(c.id)}
+                      onSelect={() => select(c.id)}
+                      isCurrent={c.id === currentId}
+                      isDefault={c.id === defaultId}
+                    />
                   ))}
                   {list.length === 0 && <div className="mpage-empty">{t('settings.dsm.empty')}</div>}
                   <button className="conn-add" onClick={onNewConnection}>＋ {t('settings.conn.addConnection')}</button>
@@ -657,6 +733,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection }: Props): React
 
             {sec === 'skills' && (
               <section className="set-sec">
+                <div className="sec-d mono">{t('skill.floorNote')}</div>
                 <SkillPlaza />
               </section>
             )}
