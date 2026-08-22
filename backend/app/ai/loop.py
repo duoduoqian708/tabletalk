@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -355,6 +356,8 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     # T1.4/T1.5 度量：记录实际工具与最终表集合
     _tools_used: list[str] = []
     _executed_sqls: list[str] = []
+    # WS4 T4.2：run_dml REVIEW → 本 turn 到此为止（模型不再发言，防幻觉"已执行"）
+    _awaiting_confirm = False
     # 铁律3·禁止靠缺席的**执行层**强制：技能工具集外的工具调用一律拒绝执行。
     # 只收窄 schema 只对模型是"建议"；此处杜绝 mock 的硬编码 tool_call 或模型幻觉
     # 在只读技能（如 query）下误触发 run_dml/draft_ddl。
@@ -421,6 +424,27 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 pass
             if outcome.think:
                 yield {"type": "think", "text": outcome.think}
+            # WS4 T4.2：run_dml REVIEW → 生成 confirm_token，pending_dml 落会话（豁免压缩），
+            # 确认卡附 token/expires_in；确认只是"人看过预览"的凭证（T4.3 执行时仍重新过闸门）
+            _dml_review = bool(
+                outcome.card
+                and outcome.card.get("tier") == "dml"
+                and outcome.card.get("verdict") == "review"
+            )
+            if _dml_review:
+                from app.safety.confirm import create_pending
+
+                _sid = req.session_id or state.chats.upsert(None, conn_id, None)
+                req.session_id = _sid
+                payload = create_pending(
+                    state.chats, _sid,
+                    outcome.card.get("sql", ""),
+                    outcome.card.get("preview_rows"),
+                    outcome.card.get("rollback"),
+                )
+                outcome.card["confirm_token"] = payload["token"]
+                outcome.card["expires_in"] = max(0, int(payload["expires_at"]) - int(time.time()))
+                outcome.card["needs_confirm"] = True
             if outcome.card:
                 # WS3 T3.2：每张 sql_card 落 result_id（引用寻址；API 层据此写 artifact）
                 if "result_id" not in outcome.card:
@@ -432,6 +456,11 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 "name": tc.name,
                 "content": json.dumps(outcome.result, ensure_ascii=False),
             })
+            if _dml_review:
+                # 确认协议：本 turn 终止，不进下一 MAX_TURNS 轮次，模型不再发言
+                _awaiting_confirm = True
+        if _awaiting_confirm:
+            break
     # T1.4 意图质量 + T1.5 覆盖率：done 前计算并写审计/回传
     try:
         # 覆盖率：最终 SQL 表集合 vs candidate_tables

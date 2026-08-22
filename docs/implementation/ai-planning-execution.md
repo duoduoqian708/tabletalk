@@ -286,14 +286,14 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G3 · 08 §6 · 03 §6 · 纪要 D11
 
-> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）。T4.2 为下一步（REVIEW 处终结 loop + review 卡挂 confirm_token/expires_in）。续接顺序 WS4 → WS7（WS4 依赖 WS3 session 存储，已就绪；T4.5 顺修 E2，建议先做可独立落地）。
+> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅。下一步 T4.3 确认执行通路（POST /query 接 confirm_token，重新 assess_sql）。续接顺序 WS4 → WS7（T4.5 顺修 E2 建议先做可独立落地）。
 
 **T4.1 confirm_token 状态机** ✅ 2026-08-22 (safety/confirm.py, gate 340)
 - 做什么：token 生成与校验工具（可放 `safety/confirm.py`）。
 - 设计：`token = uuid4().hex`；session 存 `pending_dml = {token, sql_hash(sha256), preview, rollback, created_at, expires_at(+10min), consumed: false}`；校验：未过期 + 未消费 + sql_hash 一致 -> 置 consumed 并放行；任何一条不满足 -> 拒绝并要求重走 preview。
 - 验收：单测——合法确认、过期拒绝、二次消费拒绝、SQL 哈希不符拒绝（TOCTOU）。
 
-**T4.2 loop 终止与确认卡下发** ◐ 进行中（下一步：把 confirm_token/expires_in 挂到 run_dml 下发的 review 卡，loop REVIEW 处 break 出 MAX_TURNS）
+**T4.2 loop 终止与确认卡下发** ✅ 2026-08-22 (loop.py REVIEW 处 break，卡带 confirm_token/expires_in/needs_confirm)
 - 做什么：`run_dml` 返回 REVIEW 结果时，loop 当轮终止（不再进入下一 MAX_TURNS 轮次，模型不再发言）；SSE 下发 sql_card 附 `confirm_token` 与 `expires_in`；pending_dml 写入 session（豁免压缩，T3.4 已保）。
 - 验收：e2e——run_dml 后无后续模型输出；卡片含 token。
 
