@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -32,6 +33,14 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_msgs_conv ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conv_conn ON conversations(connection_id);
+-- WS3 T3.2 结果工件：每张 sql_card 的 result_id → 结果数据（本地落盘，非出网；load_result 按 id 取）
+CREATE TABLE IF NOT EXISTS artifacts (
+  result_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id);
 """
 
 
@@ -95,6 +104,42 @@ class ChatStore:
             cur = c.execute("UPDATE conversations SET title=? WHERE id=?", (title, session_id))
             return cur.rowcount > 0
 
+    def save_artifact(self, session_id: str, result_id: str, data: dict) -> None:
+        """WS3 T3.2：结果工件落盘（本地，非出网）。按 result_id 去重覆盖。"""
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO artifacts (result_id, session_id, data, created_at) VALUES (?,?,?,?)",
+                (result_id, session_id, json.dumps(data, ensure_ascii=False), _now()),
+            )
+
+    def get_artifact(self, session_id: str, result_id: str) -> dict | None:
+        """WS3 T3.2/T3.3：按 id 取工件；跨 session 拒绝（T3.3 必查）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT session_id, data FROM artifacts WHERE result_id=?", (result_id,)).fetchone()
+            if row is None or row["session_id"] != session_id:
+                return None
+            try:
+                return json.loads(row["data"])
+            except Exception:
+                return None
+
+    def list_artifacts(self, session_id: str) -> list[dict]:
+        """WS3 T3.2：sesssion 内全部工件（id + 元数据部分），供压缩骨架/诊断。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT result_id, data, created_at FROM artifacts WHERE session_id=? ORDER BY created_at",
+                (session_id,),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = {}
+            try:
+                d = json.loads(r["data"])
+            except Exception:
+                pass
+            out.append({"result_id": r["result_id"], "data": d, "created_at": r["created_at"]})
+        return out
+
     def list(self, connection_id: str | None = None, limit: int = 50) -> list[dict]:
         """只读列表：按 updated_at 倒序，附消息数。"""
         q = """
@@ -110,6 +155,21 @@ class ChatStore:
         with self._conn() as c:
             rows = c.execute(q.format(where=where), params).fetchall()
         return [dict(r) for r in rows]
+
+    def get_messages(self, session_id: str) -> list[dict]:
+        """WS3 T3.1：读会话消息（含 kind 元数据），供服务端历史组装。只读，不刷新 updated_at。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT role, kind, content, sql, verdict FROM messages WHERE conversation_id=? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_connection(self, session_id: str) -> str | None:
+        """WS3 T3.5：查会话归属的数据源 id；不存在返回 None（供切库跨 session 校验）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT connection_id FROM conversations WHERE id=?", (session_id,)).fetchone()
+            return row["connection_id"] if row else None
 
     def get(self, session_id: str) -> dict | None:
         """只读详情：会话 + 全部消息。"""

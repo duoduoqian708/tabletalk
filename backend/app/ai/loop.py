@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
@@ -20,6 +21,8 @@ from app.ai.report import report_stream
 from app.ai.dto import ChatRequest
 from app.ai.skills.registry import get_skill, skill_tool_schemas
 from app.ai.tools import execute_tool
+from app.ai.tools.registry import reset_active_session as _reset_active_session
+from app.ai.tools.registry import set_active_session as _set_active_session
 from app.core.schema import get_schema
 from app.core.sensitive import filter_sensitive
 
@@ -38,12 +41,32 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
     if req.mode in (MODE_REPORT, MODE_QUERY):
         mode = req.mode
     else:
+        # WS3 T3.1：服务端历史优先——从 state.chats 读 session 历史，req.messages 降级为兼容通道。
+        # 统一在此取一次，供 preflight（对话尾部判类/追问轮种子）与 chat_stream（模型历史组装）复用。
+        req._server_history = []
+        if req.session_id:
+            try:
+                req._server_history = state.chats.get_messages(req.session_id) or []
+                # T3.4 压缩 v1：服务端历史机械化压缩（机械优先，仍超限才 LLM 兜底走单管道）。
+                # 压缩在组装前完成，preflight 尾部/追问轮种子与 chat_stream 模型历史两处一致。
+                if req._server_history:
+                    try:
+                        from app.ai.compress import compress_hist
+
+                        _ch = await compress_hist(state, req.connection_id, req._server_history)
+                        req._server_history = _ch["rows"]
+                        req._compress_stats = _ch["stats"]
+                    except Exception:
+                        pass
+            except Exception:
+                req._server_history = []
         user_text = _last_user_text(_normalize_messages(req.messages))
         # WS1 preflight 统一 owner（单次脱敏/清单/审计，≤2s）
         try:
             from app.ai.preflight import preflight as _pf
             from app.ai.agent.dispatcher import resolve_skill_from_intent as _resolve_skill
-            history_tail = _normalize_messages(req.messages)
+            # 追问轮/对话尾的历史：有服务端历史用服务端，否则用前端 req.messages（旧会话/测试直连）
+            history_tail = getattr(req, "_server_history", None) or _normalize_messages(req.messages)
             pf = await _pf(state, req.connection_id, user_text, history_tail=history_tail)
             # 缓存于 req 供 chat_stream 复用（避免二次 preflight）
             req._preflight = pf  # type: ignore[attr-defined]
@@ -111,6 +134,55 @@ def _last_user_text(messages: list[dict]) -> str:
     return ""
 
 
+# ---- WS3 T3.1：服务端历史 → 模型可见消息 ----
+
+def _card_skeleton(row: dict) -> str:
+    """D7 骨架：result_id/表名/verdict/rowcount + sql。铁律1：落库的 sql_card 原始 content 含 result.rows，
+    feed 回模型等于行数据出网绕过脱敏管道——只准骨架，绝不带 columns/rows。"""
+    card: dict = {}
+    raw = row.get("content")
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            card = json.loads(raw)
+        except Exception:
+            card = {}
+    res = card.get("result") or {}
+    pieces: list[str] = []
+    if card.get("result_id"):
+        pieces.append(f"result_id={card['result_id']}")
+    if card.get("verdict") or row.get("verdict"):
+        pieces.append(f"verdict={card.get('verdict') or row.get('verdict')}")
+    if res.get("row_count") is not None:
+        pieces.append(f"row_count={res['row_count']}")
+    elif card.get("row_count") is not None:
+        pieces.append(f"row_count={card['row_count']}")
+    sql = row.get("sql") or card.get("sql") or ""
+    legend = "；".join(pieces)
+    if sql:
+        legend += f"；sql={sql}" if legend else f"sql={sql}"
+    return f"[上轮结果卡] {legend or '(未取到骨架)'}"
+
+
+def _server_history_for_model(rows: list[dict]) -> list[dict]:
+    """WS3 T3.1：落库的服务端历史还原为模型可见消息。
+    - user 原样；assistant 的 text/clarify/report 为正文/叙述原文。
+    - sql_card 只喂 D7 骨架（result_id/表名/verdict/rowcount），绝不带原始行数据（铁律1）。
+    - think/stage 是 UI/审计元数据，非对话，跳过。"""
+    out: list[dict] = []
+    for m in rows:
+        role = m.get("role", "")
+        kind = m.get("kind", "text")
+        content = m.get("content") or ""
+        if role == "user":
+            out.append({"role": "user", "content": content})
+        elif kind in ("text", "report", "clarify"):
+            out.append({"role": "assistant", "content": content})
+        elif kind == "sql_card":
+            out.append({"role": "assistant", "content": _card_skeleton(m)})
+        # think / stage / gate 跳过（非模型对话）
+    return out
+
+
 # T2.1 strict 离线拒答：本地固定文案（不调模型、不出网）。中文默认（后端生成的文本与现有 mock/错误文案一致）。
 _STRICT_REFUSAL_ZH = "这不在我的职责范围内。我是一个数据库与平台助手，只处理与当前数据源相关的查询、分析或平台操作。"
 
@@ -162,6 +234,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
             "question_library": True,
             "question_id": matched.get("id"),
             "needs_confirm": True,
+            "result_id": f"r{uuid.uuid4().hex[:10]}",
         }
         yield {"type": "turn_start", "connection": conn_id}
         yield {"type": "stage", "stage": "intent", "value": ["question_library"]}
@@ -190,7 +263,13 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         pass
 
     # 历史消息同样脱敏（避免原文出网）
-    _norm_msgs = _normalize_messages(req.messages)
+    # WS3 T3.1：有服务端历史则从服务端组装（+ 本轮最新 user 问题），否则用 req.messages 兼容通道
+    _server_hist = getattr(req, "_server_history", None) or []
+    _norm_msgs = _server_history_for_model(_server_hist) if _server_hist else _normalize_messages(req.messages)
+    if _server_hist:
+        _new_q = _last_user_text(_normalize_messages(req.messages))
+        if _new_q:
+            _norm_msgs.append({"role": "user", "content": _new_q})
     try:
         from app.safety.redact import get_salt as _gs2, redact_text as _rt2
         from app.config import get_env as _ge2
@@ -312,7 +391,12 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 continue
             _tools_used.append(tc.name)
             yield {"type": "think", "text": f"调用 {tc.name}"}
-            outcome = await execute_tool(state, tc.name, tc.arguments, conn_id, include_data=req.include_data)
+            # T3.3：工具执行期间暴露当前会话（load_result 按 session 隔离工件）
+            _sess_tok = _set_active_session(req.session_id)
+            try:
+                outcome = await execute_tool(state, tc.name, tc.arguments, conn_id, include_data=req.include_data)
+            finally:
+                _reset_active_session(_sess_tok)
             # 收集执行过的 SQL 供覆盖率
             try:
                 _sql = None
@@ -338,6 +422,9 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
             if outcome.think:
                 yield {"type": "think", "text": outcome.think}
             if outcome.card:
+                # WS3 T3.2：每张 sql_card 落 result_id（引用寻址；API 层据此写 artifact）
+                if "result_id" not in outcome.card:
+                    outcome.card["result_id"] = f"r{uuid.uuid4().hex[:10]}"
                 yield {"type": "sql_card", "card": outcome.card}
             messages.append({
                 "role": "tool",

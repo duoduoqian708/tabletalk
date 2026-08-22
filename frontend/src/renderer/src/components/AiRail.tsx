@@ -793,6 +793,20 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     setInput('')
   }
 
+  /** T3.5 切库换 session：取得当前连接对应的会话 id。
+   * 活动会话若属于其它连接（切库竞态 / 异常状态）→ 立即开新会话，绝不发混合上下文请求（后端另有 409 双保险）。 */
+  function resolveSessionForConn(connId: string): string {
+    const { activeId: aid, conversations: convs } = useChat.getState()
+    const act = convs.find((c) => c.id === aid)
+    if (act && act.connId === connId && aid) return aid
+    const id = newConversation(connId)
+    setTurns([])
+    histRef.current = []
+    userCountRef.current = 0
+    firstQRef.current = ''
+    return id
+  }
+
   function clearStepTimers(): void {
     stepTimers.current.forEach((t) => clearTimeout(t))
     stepTimers.current = []
@@ -907,6 +921,9 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     userCountRef.current += 1
     if (isFirstQ) firstQRef.current = q
     curQuestionRef.current = q
+    // T3.5：请求恒锁当前连接的会话 id；若活动会话属其它连接 → resolveSessionForConn 已开新会话
+    const reqSid = resolveSessionForConn(currentId)
+    const convForReq = useChat.getState().conversations.find((c) => c.id === reqSid)
     streamDoneRef.current = false
     gateDoneRef.current = false
     autoRanRef.current = false
@@ -927,7 +944,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     cardsRef.current = []
     if (mode !== 'report') playSteps(q)
     // 提问刷新会话更新时间（查看历史不刷新）
-    if (activeId) touch(activeId)
+    if (reqSid) touch(reqSid)
 
     try {
       await chatStream(
@@ -935,8 +952,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
           connection_id: currentId,
           messages: cur.map((m) => ({ role: m.role, content: m.content })),
           table: selectedTable,
-          session_id: activeId,
-          title: activeConv?.title ?? null,
+          session_id: reqSid,
+          title: convForReq?.title ?? null,
           mode: mode ?? null,
           reasoning: supportsReasoning ? reasoningEffort : null,
           model_id: modelId ?? undefined,
@@ -1103,8 +1120,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             // 读卡自动执行（若评估已完成）
             maybeAutoRun(cardsRef.current[cardsRef.current.length - 1])
             // 首问完成 → 异步生成对话标题（替换 ASSISTANT 位置，并回传后端）
-            if (isFirstQ && activeId) {
-              const convId = activeId
+            if (isFirstQ && reqSid) {
+              const convId = reqSid
               const q = firstQRef.current
               window.setTimeout(() => {
                 const { activeId: aid2, conversations: convs2 } = useChat.getState()
@@ -1162,7 +1179,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     setBusy(true)
     setTurns((t) => [...t, { role: 'user', text: ans }])
     setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true }])
-    if (activeId) touch(activeId)
+    const reqSid = resolveSessionForConn(currentId)
+    if (reqSid) touch(reqSid)
     try {
       await chatStream(
         {
@@ -1170,8 +1188,8 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
           // 保留 name:'clarify'——后端 _extract_clarify_answers 凭 system+name 识别澄清问答并 replay
           messages: msgs.map((m) => ({ role: m.role, content: m.content, name: m.name })),
           table: selectedTable,
-          session_id: activeId,
-          title: activeConv?.title ?? null,
+          session_id: reqSid,
+          title: useChat.getState().conversations.find((c) => c.id === reqSid)?.title ?? null,
           mode: 'report'
         },
         (ev: AiEvent) => {

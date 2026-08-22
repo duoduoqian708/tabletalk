@@ -5,8 +5,25 @@ execute_tool 按工具名派发。这是 skill 框架的底层积木——任一
 """
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+# 当前会话（T3.3 load_result 按 session 隔离工件；跨 session 拒绝）。
+# loop 在每次 execute_tool 前设置，工具内读取；不进 handler 参数，避免扩大全量签名。
+_ACTIVE_SESSION: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_session", default=None)
+
+
+def set_active_session(session_id: str | None):
+    return _ACTIVE_SESSION.set(session_id)
+
+
+def reset_active_session(token):
+    _ACTIVE_SESSION.reset(token)
+
+
+def get_active_session() -> str | None:
+    return _ACTIVE_SESSION.get()
 
 if TYPE_CHECKING:
     from app.state import AppState

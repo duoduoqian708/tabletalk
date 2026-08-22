@@ -35,11 +35,11 @@ def test_ddl_skill_tools():
 
 
 def test_query_report_present_tools():
-    """T2.3：query（常开地板）按 08 §4.4 只读——get_schema/describe_table/run_query
-    （load_result 为 WS3 未注册，register 后补入断言）；report 同样只读。"""
-    assert _names("query") == {"run_query", "get_schema", "describe_table"}
+    """T2.3：query（常开地板）按 08 §4.4 只读——get_schema/describe_table/run_query/load_result
+    （load_result 为 WS3 并入）；report 同样只读。"""
+    assert _names("query") == {"run_query", "get_schema", "describe_table", "load_result"}
     assert "run_dml" not in _names("query") and "draft_ddl" not in _names("query")
-    assert _names("report") == {"run_query", "get_schema", "describe_table"}
+    assert _names("report") == {"run_query", "get_schema", "describe_table", "load_result"}
 
 
 @pytest.mark.asyncio

@@ -362,7 +362,17 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+    session_id = req.session_id
+    # T3.5 切库换 session：后端双保险——会话归属数据源必须与请求一致，否则明确拒绝（不发混合上下文）
+    if session_id:
+        stored_conn = state.chats.get_connection(session_id)
+        if stored_conn is not None and stored_conn != req.connection_id:
+            raise HTTPException(
+                status_code=409,
+                detail="该会话属于其它数据源，不能跨数据源连续提问；请新建会话",
+            )
     session_id = state.chats.upsert(req.session_id, req.connection_id, req.title)
+    req.session_id = session_id  # 回写解析后的会话 id，供 loop / 工具（load_result 按 session 隔离工件）使用
 
     # 卡死边界：知识库未构建/未确认的数据源 AI 不可用（SSE 内报错，保持流式协议）
     cfg = state.connections.get(req.connection_id)
@@ -384,6 +394,8 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
         # [DONE] 之前落消息（SSE client 收到 DONE 后立即断开，后面的代码可能不执行）
         try:
+            # WS3 T3.2：sql_card 工件按 result_id 落库（本地，行数已由 query._auto_cap 封顶，truncated 随存）
+            _persist_artifacts(state, session_id, events)
             msgs = _events_to_messages(events, req.messages)
             state.chats.append_messages(session_id, msgs)
         except Exception:
@@ -391,6 +403,38 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _persist_artifacts(state, session_id: str, events: list[dict]) -> None:
+    """WS3 T3.2：把 SSE 里的 sql_card 工件按 result_id 落库。
+
+    行数上限与 run_query 一致（query._auto_cap 已封顶）；此处再防御性截断一次，
+    保证超大异常数据也不会膨胀会话存储（acceptance：行数超过上限时截断存储）。
+    本地落盘（chat.db）非出网，不受铁律1 的出网管道约束；load_result 回喂时才过脱敏。
+    """
+    try:
+        max_rows = state.runtime.get().query_max_rows or 1000
+    except Exception:
+        max_rows = 1000
+    for ev in events:
+        if ev.get("type") != "sql_card":
+            continue
+        card = ev.get("card") or {}
+        rid = card.get("result_id")
+        res = card.get("result")
+        if not rid or not isinstance(res, dict):
+            continue
+        data = {k: v for k, v in res.items() if k != "rows"}
+        rows = res.get("rows")
+        if rows is not None:
+            capped = (rows or [])[: max_rows or len(rows or [])]
+            data["rows"] = capped
+            if len(rows or []) > len(capped):
+                data["truncated"] = True
+        try:
+            state.chats.save_artifact(session_id, rid, data)
+        except Exception:
+            continue
 
 
 def _events_to_messages(events: list[dict], request_messages: list) -> list[dict]:
@@ -408,6 +452,15 @@ def _events_to_messages(events: list[dict], request_messages: list) -> list[dict
         t = ev.get("type")
         if t == "text":
             text_parts.append(ev.get("content", ""))
+        elif t == "think":
+            # T3.1 落库侧补齐：think 进 kind（时间线可重建；喂模型历史时按非对话跳过）
+            if text_parts:
+                out.append({"role": "assistant", "kind": "text", "content": "".join(text_parts)})
+                text_parts = []
+            out.append({"role": "assistant", "kind": "think", "content": ev.get("text", "")})
+        elif t == "stage":
+            # T3.1 落库侧补齐：stage 元数据进 kind（gate 无独立事件，verdict 已随 sql_card 落库）
+            out.append({"role": "assistant", "kind": "stage", "content": json.dumps(ev, ensure_ascii=False)})
         elif t == "sql_card":
             # 先把累计 text 作为一条
             if text_parts:

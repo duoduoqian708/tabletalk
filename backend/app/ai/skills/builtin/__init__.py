@@ -75,7 +75,7 @@ def BUILTIN_SKILLS() -> list[Skill]:
             id="query",
             name="执行 SQL",
             description="查数据（只读查询，覆盖主场景的自然语言转 SQL）。写操作由 write 技能承接（需人工确认）。",
-            tools=["get_schema", "describe_table", "run_query"],  # 08 §4.4：只读, load_result 待 WS3 并入
+            tools=["get_schema", "describe_table", "run_query", "load_result"],  # 08 §4.4：只读 + WS3 工件引用
             script=_query_steps(),
             builtin=True,
             read_only=True,  # 常开地板技能，但只读：写/DDL 由独立技能承接
@@ -84,7 +84,7 @@ def BUILTIN_SKILLS() -> list[Skill]:
             id="report",
             name="数据分析报告",
             description="产出一份章节化分析报告（澄清口径→规划→逐章查询→图表→结论），物理只读。",
-            tools=["run_query", "get_schema", "describe_table"],
+            tools=["run_query", "get_schema", "describe_table", "load_result"],
             script=_report_steps(),
             builtin=True,
             read_only=True,
