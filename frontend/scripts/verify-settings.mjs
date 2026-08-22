@@ -58,6 +58,10 @@ try {
     method: 'POST', headers: h,
     body: JSON.stringify({ name: '备份库', dialect: 'sqlite', file: demoFile, read_only: false, sensitive: ['payroll_*'] }),
   })
+  await fetch(`${baseUrl}/api/v1/connections`, {
+    method: 'POST', headers: h,
+    body: JSON.stringify({ name: '订单PG', dialect: 'postgres', host: '127.0.0.1', port: 5432, database: 'orders', user: 'postgres', read_only: false }),
+  })
 
   const page = await browser.newPage({ viewport: { width: 1480, height: 940 } })
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
@@ -72,14 +76,14 @@ try {
 
   console.log('== dsm 卡片结构 ==')
   const rows = await page.$$('.conn-row')
-  check('两张连接卡', rows.length === 2, `got ${rows.length}`)
+  check('三张连接卡', rows.length === 3, `got ${rows.length}`)
 
   // 卡1（订单库，当前）结构
   const card1 = rows[0]
   check('卡1 高亮为当前 (cur)', (await card1.getAttribute('class')).includes('cur'))
   check('卡1 名称渲染', (await card1.$eval('.conn-name', (e) => e.textContent)) === '订单库')
   check('卡1 方言 chip', (await card1.$eval('.conn-dialect', (e) => e.textContent.trim())) === 'sqlite')
-  check('卡1 目标行含 demo.db', ((await card1.$eval('.conn-target .ct-text', (e) => e.textContent)) || '').includes('demo.db'))
+  check('卡1 目标行含 demo.db', ((await card1.$eval('.conn-target .ct-line', (e) => e.textContent)) || '').includes('demo.db'))
   check('卡1 无旧状态点 .st', (await card1.$('.st')) === null)
   const btns1 = await card1.$$eval('.conn-actions .mini-btn', (bs) => bs.map((b) => b.textContent.trim()))
   check('卡1 动作 2×2 四按钮', btns1.length === 4, JSON.stringify(btns1))
@@ -97,9 +101,16 @@ try {
   check('卡2 非当前', !(await card2.getAttribute('class')).includes('cur'))
   const sensText = await card2.$eval('.conn-sens .sens-list', (e) => e.textContent)
   check('卡2 敏感名单行展示', (sensText || '').includes('payroll_*'), String(sensText))
-  check('卡2 目标行', ((await card2.$eval('.conn-target .ct-text', (e) => e.textContent)) || '').includes('demo.db'))
+  check('卡2 目标行', ((await card2.$eval('.conn-target .ct-line', (e) => e.textContent)) || '').includes('demo.db'))
   // 卡1 无敏感配置 → 敏感行应隐藏
   check('卡1 无敏感 → 行隐藏', (await card1.$('.conn-sens')) === null)
+
+  // 卡3（PG 配置）：地址一行、库名单独一行
+  const card3 = rows[2]
+  const lines = await card3.$$eval('.conn-target .ct-line', (ls) => ls.map((l) => l.textContent))
+  check('卡3 地址/库名分行（两行）', lines.length === 2, JSON.stringify(lines))
+  check('卡3 地址行 host:port', (lines[0] || '').includes('127.0.0.1:5432'), JSON.stringify(lines))
+  check('卡3 库名行 db:orders', (lines[1] || '').includes('db:orders'), JSON.stringify(lines))
 
   console.log('== 点卡切换当前 ==')
   await card2.click()

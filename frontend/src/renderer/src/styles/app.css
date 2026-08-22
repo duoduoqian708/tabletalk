@@ -1551,14 +1551,16 @@ body.resizing {
 .conn-line1 .def-tag { font-size: 11px; color: var(--amber); background: var(--amber-dim); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent); border-radius: 9px; padding: 2px 9px; font-weight: 600; flex: none; }
 .conn-target {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 12.5px;
   color: var(--ink-dim);
   min-width: 0;
 }
-.conn-target .ct-ic { flex: none; opacity: .65; font-size: 11px; }
-.conn-target .ct-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.conn-target .ct-ic { flex: none; opacity: .65; font-size: 11px; margin-top: 2px; }
+.conn-target .ct-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.conn-target .ct-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.conn-target .ct-line.sub { font-size: 11.5px; color: var(--ink-faint); }
 .conn-sens {
   display: flex;
   align-items: center;

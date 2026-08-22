@@ -76,12 +76,13 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
     }
   }
 
-  // 连接目标：SQLite 显文件路径；PG/MySQL 显 host:port · 库名（user 放 title）
+  // 连接目标：SQLite 显文件路径；PG/MySQL 地址一行、库名一行（user 放 title）
   const isSqlite = conn.dialect === 'sqlite'
-  const target = isSqlite
+  const addr = isSqlite
     ? conn.file || '—'
-    : [conn.host && conn.port ? `${conn.host}:${conn.port}` : (conn.host || '—'), conn.database || '—'].join(' · ')
-  const targetTitle = isSqlite ? target : `${target} · user:${conn.user || '—'}`
+    : (conn.host && conn.port ? `${conn.host}:${conn.port}` : (conn.host || '—'))
+  const dbName = isSqlite ? '' : conn.database || '—'
+  const targetTitle = isSqlite ? addr : `${addr} · db:${dbName} · user:${conn.user || '—'}`
 
   const sensList = (conn.sensitive ?? []).join(', ')
   const testCls = test ? (test.ok ? ' ok' : ' fail') : ''
@@ -101,7 +102,10 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
         </div>
         <div className="conn-target mono" title={targetTitle}>
           <span className="ct-ic">{isSqlite ? '▤' : '◈'}</span>
-          <span className="ct-text">{target}</span>
+          <span className="ct-body">
+            <span className="ct-line">{addr}</span>
+            {dbName && <span className="ct-line sub">db:{dbName}</span>}
+          </span>
         </div>
         {sensList && (
           <div className="conn-sens mono">
