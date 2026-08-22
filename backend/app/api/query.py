@@ -21,6 +21,10 @@ class QueryRequest(BaseModel):
     sql: str
     origin: str = "manual"
     confirm: bool = False
+    # WS4 T4.3：chat 内 DML 确认协议——confirm_token 与 confirm=true 同传；
+    # pending_dml 按 session 寻址，故需 session_id
+    confirm_token: str | None = None
+    session_id: str | None = None
     limit: int | None = None
     offset: int | None = None
     count_total: bool = False
@@ -222,7 +226,7 @@ async def run_query(req: QueryRequest) -> dict:
         }
 
     # REVIEW
-    if not req.confirm:
+    if not req.confirm and not req.confirm_token:
         preview = None
         if assessment.tier.value == "dml":
             preview = await safety_gate.preview_rows(state, req.connection_id, req.sql, dialect)
@@ -284,12 +288,31 @@ async def run_query(req: QueryRequest) -> dict:
             "reasons": reassess.reasons,
             "suggestions": safety_gate.suggest_safe(req.sql, dialect, origin),
         }
+    # WS4 T4.3：确认执行通路——token 校验（一次性/未过期/SQL 哈希一致，防 TOCTOU）。
+    # 确认不是通行证：上方 assess 已对本次请求重新过闸（BLOCK 已拦截），此处只验"人看过预览"的凭证。
+    _confirm_meta: dict = {}
+    if req.confirm_token:
+        from app.safety.confirm import clear_pending, get_pending, validate_and_consume
+
+        ok, why = validate_and_consume(state.chats, req.session_id or "", req.confirm_token, req.sql)
+        if not ok:
+            raise HTTPException(status_code=409, detail={"code": "confirm_rejected", "message": why})
+        _confirm_meta = get_pending(state.chats, req.session_id or "") or {}
     res = await core_query.execute(state, req.connection_id, req.sql, req.limit, req.offset)
     elapsed = round((time.monotonic() - t0) * 1000, 1)
     status = "已确认执行" if assessment.tier.value == "dml" else "已执行"
     state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
                     verdict=assessment.verdict.value, status=status, sql=req.sql, elapsed_ms=elapsed,
-                    reasons=assessment.reasons, tables=assessment.tables)
+                    reasons=assessment.reasons, tables=assessment.tables,
+                    **({"confirm_token": req.confirm_token,
+                        "turn_id": _confirm_meta.get("turn_id")} if req.confirm_token else {}))
+    if req.confirm_token and req.session_id:
+        # token 已消费，清理 pending（防残留）
+        try:
+            from app.safety.confirm import clear_pending as _cp
+            _cp(state.chats, req.session_id)
+        except Exception:
+            pass
     return {
         "verdict": "executed", "tier": assessment.tier.value,
         "reason": "已确认执行",

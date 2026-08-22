@@ -286,7 +286,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G3 · 08 §6 · 03 §6 · 纪要 D11
 
-> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅。下一步 T4.3 确认执行通路（POST /query 接 confirm_token，重新 assess_sql）。续接顺序 WS4 → WS7（T4.5 顺修 E2 建议先做可独立落地）。
+> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅。下一步 T4.4 取消写回历史。续接顺序 WS4 → WS7（T4.5 顺修 E2 建议先做可独立落地）。
 
 **T4.1 confirm_token 状态机** ✅ 2026-08-22 (safety/confirm.py, gate 340)
 - 做什么：token 生成与校验工具（可放 `safety/confirm.py`）。
@@ -297,7 +297,7 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - 做什么：`run_dml` 返回 REVIEW 结果时，loop 当轮终止（不再进入下一 MAX_TURNS 轮次，模型不再发言）；SSE 下发 sql_card 附 `confirm_token` 与 `expires_in`；pending_dml 写入 session（豁免压缩，T3.4 已保）。
 - 验收：e2e——run_dml 后无后续模型输出；卡片含 token。
 
-**T4.3 确认执行通路** ☐
+**T4.3 确认执行通路** ✅ 2026-08-22 (api/query.py confirm_token+session_id；preview/执行审计经 token+turn_id 闭环)
 - 做什么：`POST /query` 接受 `confirm_token`（与 confirm=true 同传）：校验 token -> **重新 `assess_sql`**（确认不是通行证）-> 执行 -> 审计带 `confirm_token` + `turn_id`（与 preview 审计条目可互相检索）。
 - 验收：集成——确认执行的审计条目能关联 preview 条目（token 相同）；确认时 SQL 被篡改则拒绝。
 

@@ -24,8 +24,9 @@ def _hash_sql(sql: str) -> str:
 
 
 def create_pending(store, session_id: str, sql: str, preview: int | None, rollback: str | None,
-                   ttl: int = TOKEN_TTL) -> dict:
-    """生成并落一份待确认 DML，返回 payload（含 token / sql / sql_hash / preview / rollback / expires_at / consumed=False）。"""
+                   ttl: int = TOKEN_TTL, turn_id: str | None = None) -> dict:
+    """生成并落一份待确认 DML，返回 payload（含 token / sql / sql_hash / preview / rollback / expires_at / consumed=False）。
+    turn_id（T4.3）：preview 轮次标识，随审计落库，与确认执行条目闭环检索。"""
     now = _now()
     payload = {
         "token": uuid.uuid4().hex,
@@ -36,6 +37,7 @@ def create_pending(store, session_id: str, sql: str, preview: int | None, rollba
         "created_at": now,
         "expires_at": now + ttl,
         "consumed": False,
+        "turn_id": turn_id,
     }
     store.set_pending_dml(session_id, payload)
     return payload

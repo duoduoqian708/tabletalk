@@ -356,6 +356,8 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     # T1.4/T1.5 度量：记录实际工具与最终表集合
     _tools_used: list[str] = []
     _executed_sqls: list[str] = []
+    # WS4 T4.3：本轮 turn 标识（preview 审计与确认执行审计经 token+turn_id 闭环）
+    _turn_id = uuid.uuid4().hex[:12]
     # WS4 T4.2：run_dml REVIEW → 本 turn 到此为止（模型不再发言，防幻觉"已执行"）
     _awaiting_confirm = False
     # 铁律3·禁止靠缺席的**执行层**强制：技能工具集外的工具调用一律拒绝执行。
@@ -441,10 +443,25 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                     outcome.card.get("sql", ""),
                     outcome.card.get("preview_rows"),
                     outcome.card.get("rollback"),
+                    turn_id=_turn_id,
                 )
                 outcome.card["confirm_token"] = payload["token"]
                 outcome.card["expires_in"] = max(0, int(payload["expires_at"]) - int(time.time()))
                 outcome.card["needs_confirm"] = True
+                # T4.3 preview 审计：与确认执行条目经 confirm_token/turn_id 互相检索（闭环）
+                try:
+                    try:
+                        _conn_name = state.connections.get(conn_id).name
+                    except Exception:
+                        _conn_name = conn_id
+                    state.audit.log(
+                        connection=_conn_name, origin="ai", tier="dml", verdict="review",
+                        status="需确认", sql=outcome.card.get("sql", ""), source="dml_preview",
+                        reasons=outcome.card.get("reasons") or [],
+                        confirm_token=payload["token"], turn_id=_turn_id,
+                    )
+                except Exception:
+                    pass
             if outcome.card:
                 # WS3 T3.2：每张 sql_card 落 result_id（引用寻址；API 层据此写 artifact）
                 if "result_id" not in outcome.card:
