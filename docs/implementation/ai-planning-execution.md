@@ -282,20 +282,15 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 ---
 
-> **进度快照（2026-08-22 收盘）**：WS6 ✅ → WS1 ✅ → WS5 ✅ → WS2 ✅ → WS3 ✅ → WS4 **T4.1~T4.4 ✅**（gate 352 全绿，HEAD 8d451e8）。**下一步：T4.5（WS4 收尾）→ WS7（T7.1→T7.4）→ WS8 前端随落（T8.2 确认卡可先做，后端协议已就绪）**。
+> **进度快照（2026-08-22 收盘）**：WS6 ✅ → WS1 ✅ → WS5 ✅ → WS2 ✅ → WS3 ✅ → WS4 **全部 ✅**（T4.5 于 2026-08-23 完成：审批闸门 fail-closed + 真实 verdict 审计 + tests/api/test_approvals.py 9 用例回归，gate 361 全绿）。**下一步：WS7（T7.1→T7.4 平台工具与技能开关）→ WS8 前端随落（T8.2 确认卡可先做，后端协议已就绪）**。
 
 ### WS4 · DML 确认协议（依赖 WS3 的 session 存储）
 
 **必读**：02 G3 · 08 §6 · 03 §6 · 纪要 D11
 
-> **进行中（2026-08-22）**：T4.1 ✅（57a29a4）· T4.2 ✅（79a7a87）· T4.3 ✅（a3f5b85）· T4.4 ✅（8d451e8）。
+> **WS4 完成（T4.1 57a29a4 · T4.2 79a7a87 · T4.3 a3f5b85 · T4.4 8d451e8 · T4.5 2026-08-23，gate 361 全绿）**。
 
-**T4.5 续接指引（2026-08-22 已勘察，代码未动）**：
-`api/approvals.py` 批准路径已有 `assess_sql(Origin.AI)` 复查（BLOCK→403）与 read_only 检查，**尚余三个缺口**：
-① 创建审批时 assess 结果被丢弃（`pass`），审计 verdict 硬编码 `"review"`，未记录真实闸门判定与 reasons；
-② 批准路径的连接查找包在 `except Exception: pass` 内——连接缺失时闸门复查被静默跳过（fail-open），会继续走执行；
-③ 全仓无任何 approval 测试，验收用例"批准的无 WHERE UPDATE 被闸门拦"缺回归保护。
-测试环境备忘：approve 需团队模式 + admin 角色——`TABLETALK_AUTH_MODE=team` 可 monkeypatch（运行时读取）；admin 经 JWT 注入 `request.state.user`，单测建议直调 handler 配 fake Request（scope 带 state）或 mock `auth.verify_token`。另：create 的审计 `connection=` 目前传的是 id，应统一为 `cfg.name`。
+**T4.5 勘察备忘（2026-08-22，缺口已由上方 T4.5 落地修复）**：原三缺口为 ①create 丢弃 assess 结果、verdict 硬编码；②approve 连接查找 `except: pass` fail-open；③全仓无 approval 测试。测试环境：`TABLETALK_AUTH_MODE=team` monkeypatch + JWT 注入 admin 角色（tests/api/test_approvals.py 有现成范式）。
 
 **T4.1 confirm_token 状态机** ✅ 2026-08-22 (safety/confirm.py, gate 340)
 - 做什么：token 生成与校验工具（可放 `safety/confirm.py`）。
@@ -314,9 +309,10 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 - 做什么：取消/过期后，向 session 追加一条系统可见消息（如 kind=system, "用户取消了该写操作"），下轮模型上下文可见；同时清除 pending_dml。
 - 验收：单测——取消后下轮 messages 含取消信号。
 
-**T4.5 顺修 E2 审批绕闸** ☐（已勘察未动码，缺口与测试环境备忘见上方"续接指引"）
+**T4.5 顺修 E2 审批绕闸** ✅ 2026-08-23 (approvals fail-closed + 真实审计；tests/api/test_approvals.py)
 - 做什么：`api/approvals.py` 批准执行路径补 `assess_sql(Origin.AI)` + read_only 检查 + confirm 语义（仅 ALLOW/已确认 REVIEW 可执行）；创建审批时也先过闸门记录 verdict。
-- 验收：单测——批准的无 WHERE UPDATE 被闸门拦（这条是审计 2026-08-21 的高优 bug 修复）。
+- 落地：①create 记录真实判定/tier/reasons 并挂 approval_id、connection 统一为连接名；②approve 连接缺失/闸门异常一律 fail-closed（404/403 + 拦截审计，绝不执行），rollback 构建复用已查 cfg；③reject 审计同口径。
+- 验收：单测——批准的无 WHERE UPDATE 被闸门拦（这条是审计 2026-08-21 的高优 bug 修复）；连接缺失 fail-closed；只读拦截；合法 UPDATE 批准执行且转审批/通过/执行完成审计链齐全（approval_id 可关联）。
 
 ---
 
@@ -324,21 +320,25 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：02 G6/G7 · 08 §4.2/§4.5 · 纪要 D13/D14
 
-**T7.1 工具注册规格扩展** ☐
+**T7.1 工具注册规格扩展** ✅ 2026-08-23 (TOOL_META 强制 trust；tests/ai/test_tool_meta.py)
 - 做什么：`tools/registry.py` 的工具定义加 `trust: readonly|mutating|destructive`、`confirm: none|card|admin`、`audit_source` 元数据；注册校验：缺 trust 拒绝注册（含启动时自检）。
-- 验收：单测——缺元数据注册被拒；既有 5 工具补挂后通过自检。
+- 落地：`register_tool` 强校验（缺/非法 trust 或 confirm 抛 ValueError）+ `TOOL_META` 注册表 + `validate_registry()` 启动自检挂 main.py lifespan；既有 6 工具补挂（get_schema/describe_table/run_query/load_result/draft_ddl=readonly，run_dml=mutating+card；draft_ddl 不执行故运行期只读）。
+- 验收：单测——缺元数据/非法值注册被拒；孤儿 handler 自检报错；6 工具元数据断言 + 自检通过。
 
-**T7.2 query_audit / get_last_operations** ☐
+**T7.2 query_audit / get_last_operations** ✅ 2026-08-23 (platform_tools.py；tests/ai/test_platform_tools.py 8 用例)
 - 做什么：两个平台工具。`query_audit`：读 `audit.log` JSONL，过滤（时间范围/origin/verdict/connection），返回结构化条目（分页，默认 20 条）；`get_last_operations`：当前用户当前 session 连接最近 N 条执行的语句。结果回喂过 `redact_rows`/`redact_text`（审计里含 SQL 原文，按 standard 档处理）。每次调用审计 `source=system_tool`。
-- 验收：e2e——"我刚才干了什么"返回正确回顾；单测——回喂内容经脱敏；审计条目存在。
+- 落地：`app/ai/tools/platform_tools.py`（trust=readonly/audit_source=system_tool，filter→state.audit.list + 逆序分页 + redact_text 脱敏 + system_tool 审计）；`__init__.py` 挂注册；回喂脱敏尊重 privacy_mode（open 明文，其余脱敏）。
+- 验收：单测——过滤/分页/标准档脱敏-open明文/每次调用产生 system_tool 审计；get_last_operations 当前连接最近 N 条 + 默认 10。
 
-**T7.3 audit_qa 技能** ☐
+**T7.3 audit_qa 技能** ✅ 2026-08-23 (audit_qa 3工具；tests/ai/test_audit_qa_skill.py)
 - 做什么：按 08 §4.4 注册技能（query_audit, get_last_operations, load_result）；system_prompt 指导审计问答（时间范围、verdict 含义、引导去审计页看全量）。
-- 验收：单测——工具集与 D15 一致；意图 audit 路由到此技能。
+- 落地：`app/ai/skills/builtin/__init__.py` 新增 audit_qa（tools=query_audit/get_last_operations/load_result，read_only，常开非地板，可被 admin 禁用→降级；system_prompt 含时间范围/verdict 解释/审计页引导）。
+- 验收：单测——工具集与 D15 一致；意图 audit 路由到此技能；禁用时降级文案。
 
-**T7.4 技能开关完善** ☐
+**T7.4 技能开关完善** ✅ 2026-08-23 (地板双层校验+审计+团队交集；tests/ai/test_skill_switch.py 3 用例)
 - 做什么：①`skills/registry.py` 或 settings 层加地板常量（query/refusal 禁止 disable，校验在 update_skill 与 API 两层）；②设置 API 的技能开关变更写审计（source=settings, skill_id, enabled）；③团队模式交集：组织策略（admin 设置）∩ 个人勾选（E4 角色体系上实现，单人模式合一）。
-- 验收：单测——地板不可关；勾选产生审计事件；成员勾选不能恢复管理员禁用项。
+- 落地：`app/ai/skills/registry.py` 新增 `_org_disabled` + `is_org_disabled/set_org_disabled`（admin 禁用入集、启用清集）；`app/api/skills.py` PUT 双层地板校验（FLOOR={query,refusal} API 层先拦）、团队交集（`is_team` 时 member 对 `is_org_disabled` 的启用请求 403）、启用变更审计 `source=settings` 含 skill_id/enabled；单机 `not is_team` 视为 admin。
+- 验收：单测——地板不可关；勾选产生审计事件；成员勾选不能恢复管理员禁用项（admin 禁用后 member 再启用 403，admin 可恢复）。
 
 ---
 
@@ -346,13 +346,13 @@ async def preflight(state, conn_id, question, history_tail: list[dict]) -> Prefl
 
 **必读**：03 §3/§6 · 04（颜色 token）
 
-**T8.1 真 4 步** ☐（随 WS1）
+**T8.1 真 4 步** ✅ 2026-08-23 (ThinkPanel 默认展开+真事件驱动；`typecheck+build` 双过)
 - `AiRail.tsx`：移除 `playSteps` 及 1500ms 定时器；ThinkPanel 默认展开；4 段由 stage/manifest/think/sql_card/gate 真事件驱动；intent/retrieval 的 detail 绑定 `context_meta`。拒答轮不渲染 4 步。
 
-**T8.2 确认卡** ☐（随 WS4/WS5；后端协议已就绪：卡带 `confirm_token`/`expires_in`/`needs_confirm`，执行走 `POST /query` 同传 token+session_id，取消走 `POST /ai/dml/cancel`）
+**T8.2 确认卡** ✅ 2026-08-23 (DML 三态+问题库卡·`AiCard:{confirm_token}`/`query.ts:{session_id}`/`typecheck+build` 双过)
 - DML 确认卡三态：执行（文案带预览行数，"确认更新 238 行"）/取消/过期提示；问题库命中卡（T5.4）。文案全部先入 i18n 词典。
 
-**T8.3 技能开关 UI** ☐（随 WS7）
+**T8.3 技能开关 UI** ✅ 2026-08-23 (地板 `query/refusal` 置灰+`floorHint`/`toggleOk`·`SettingsDrawer:floorNote`·`typecheck+build` 双过)
 - SettingsDrawer skills 分节：地板技能置灰+说明；其余勾选；变更 toast 确认。
 
 ---
