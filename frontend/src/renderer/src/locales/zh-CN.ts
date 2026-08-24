@@ -503,6 +503,12 @@ export const zhCN = {
     linkedToast: '已连线 {from} → {to}',
     relDeletedToast: '已删除关系 {from} → {to}',
     excludedToast: '已将 {name} 移出图谱',
+    goReview: '去审查',
+    pillNotBuilt: '知识库未构建',
+    pillPendingReview: '待审查',
+    dataConsent: '数据使用确认',
+    dataConsentDesc: '构建会将表结构与字段样本取值发送给已配置的 AI 服务用于生成注释与标签；取消勾选则仅使用结构信息。',
+    rebuildAll: '全部重建',
   },
   skill: {
     title: '技能广场',

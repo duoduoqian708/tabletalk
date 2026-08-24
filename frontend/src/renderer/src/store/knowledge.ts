@@ -121,7 +121,10 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     if (get().busy) return
     set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
-      await readBuildEvents(connId, (p) => set({ buildProgress: p }))
+      await readBuildEvents(connId, (p) => {
+        set({ buildProgress: p })
+        if (p.error && p.error !== 'cancelled') set({ error: p.error })
+      })
       await get().load(connId)
     } catch (e) {
       set({ error: (e as Error).message })

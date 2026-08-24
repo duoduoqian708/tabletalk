@@ -5,25 +5,25 @@ import { useConnections } from '@renderer/store/connections'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useI18n } from '@renderer/store/i18n'
-import { useUi } from '@renderer/store/ui'
 
 /**
  * 构建门禁（全局右下浮卡，不阻塞页面操作）：
  * - 构建进度由 store 驱动（所有入口统一走 useKnowledge.buildTask → SSE 推送），本组件零轮询
  * - 当前连接 kb_status != ready → 弹出：none 引导构建 / building 进度条 / pending_review 引导确认
  * - 构建中强制显示（可最小化为胶囊，不可关闭），完成/取消后自动收起
- * - 「稍后」只关本次浮卡；切走再切回该连接重新弹出
+ * - ✕/稍后 → 缩为常驻警告胶囊：none 点回浮卡、pending_review 直达审阅弹窗；ready 才消失
  */
 export function KbBuildGate(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
   const list = useConnections((s) => s.list)
-  const setView = useUi((s) => s.setView)
   const forceConnId = useKbGate((s) => s.forceConnId)
   const clearForce = useKbGate((s) => s.clearForce)
+  const buildTrigger = useKbGate((s) => s.buildTrigger)
+  const closeBuildDialog = useKbGate((s) => s.closeBuildDialog)
   const { t } = useI18n()
   const [status, setStatus] = useState<KbStatus | null>(null)
-  const [dismissed, setDismissed] = useState<string | null>(null)
-  const [showDialog, setShowDialog] = useState(false)
+  /** 「稍后」后的常驻胶囊态（boolean）：切连接重置，ready 后随浮卡一起消失 */
+  const [dismissed, setDismissed] = useState(false)
   const [includeSamples, setIncludeSamples] = useState(true)
   /** 构建中最小化：缩到右下角胶囊（构建未完成不允许彻底关闭） */
   const [minimized, setMinimized] = useState(false)
@@ -34,6 +34,7 @@ export function KbBuildGate(): React.JSX.Element | null {
   const buildBusy = useKnowledge((s) => s.busy)
   const buildProgress = useKnowledge((s) => s.buildProgress)
   const buildTask = useKnowledge((s) => s.buildTask)
+  const reattachBuild = useKnowledge((s) => s.reattachBuild)
 
   const conn = list.find((c) => c.id === currentId) ?? null
 
@@ -50,6 +51,23 @@ export function KbBuildGate(): React.JSX.Element | null {
     return () => {
       alive = false
     }
+  }, [currentId])
+
+  // 刷新页面后若后端构建任务仍在跑 → 重挂 SSE 只吃剩余进度
+  useEffect(() => {
+    if (!currentId) return
+    let alive = true
+    kbStatus(currentId).then((s) => {
+      if (alive && s?.building) void reattachBuild(currentId)
+    }).catch(() => undefined)
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentId])
+
+  // 切换连接 → 重置浮卡的「稍后/最小化」状态
+  useEffect(() => {
+    setDismissed(false)
+    setMinimized(false)
   }, [currentId])
 
   // 构建结束（busy 变 false）→ 重新查一次状态（构建结果决定 pending_review/ready）
@@ -70,12 +88,13 @@ export function KbBuildGate(): React.JSX.Element | null {
   const isBuilding = buildBusy && buildProgress !== null
   const needsBuild = status !== null && status.kb_status !== 'ready'
   const show = currentId !== null && conn !== null
-    && (isBuilding || (needsBuild && (dismissed !== currentId || forceConnId === currentId)))
+    && (isBuilding || needsBuild)
 
   if (!show) return null
 
   const st = isBuilding ? 'building' : (status?.kb_status ?? 'none')
   const progress = buildProgress
+  const trig = buildTrigger
 
   /* 构建中且被最小化 → 右下角胶囊（仍显示进度，点击展开；可停止） */
   if (st === 'building' && minimized) {
@@ -91,11 +110,26 @@ export function KbBuildGate(): React.JSX.Element | null {
     )
   }
 
-  async function startBuild(samples = true): Promise<void> {
+  /* 稍后 → 常驻警告胶囊（最终形态，无关闭按钮）：pending_review 点击直达审阅弹窗，否则点回完整卡 */
+  const pillMode = !isBuilding && dismissed && forceConnId !== currentId
+  if (pillMode) {
+    const pend = status?.kb_status === 'pending_review'
+    return (
+      <div className={`kb-gate-min warn${pend ? ' goto-review' : ''}`}
+           onClick={() => (pend ? useKbGate.getState().openReview() : setDismissed(false))}
+           title={pend ? t('kb.pillPendingReview') : t('kb.pillNotBuilt')}>
+        <span className="kb-min-pulse" />
+        <span className="kb-min-label mono">
+          {pend ? t('kb.pillPendingReview') : t('kb.pillNotBuilt')}
+        </span>
+      </div>
+    )
+  }
+
+  async function startBuild(samples = true, trigger: 'init' | 'rebuild' = 'init'): Promise<void> {
     if (!currentId) return
-    setShowDialog(false)
     setStatus((s) => (s ? { ...s, kb_status: 'building', building: true } : s))
-    await buildTask(currentId)
+    await buildTask(currentId, undefined, trigger)
     // buildTask 完成后已刷新 overview；这里再同步一次 kb_status 兜底
     if (currentId) kbStatus(currentId).then((s) => s && setStatus(s)).catch(() => undefined)
   }
@@ -137,7 +171,7 @@ export function KbBuildGate(): React.JSX.Element | null {
             className="kb-gate-x"
             title={t('kb.laterTitle')}
             onClick={() => {
-              setDismissed(currentId)
+              setDismissed(true)
               clearForce()
             }}
           >✕</button>
@@ -150,7 +184,8 @@ export function KbBuildGate(): React.JSX.Element | null {
             {t('kb.gateNoneDesc')}
           </div>
           <div className="kb-gate-actions">
-            <button className="btn save" disabled={buildBusy} onClick={() => setShowDialog(true)}>
+            <button className="btn save" disabled={buildBusy}
+              onClick={() => useKbGate.getState().openBuildDialog('init')}>
               {buildBusy ? t('kb.starting') : t('kb.build')}
             </button>
           </div>
@@ -197,11 +232,9 @@ export function KbBuildGate(): React.JSX.Element | null {
 
       {st === 'pending_review' && (
         <div className="kb-gate-body">
-          <div className="kb-gate-text">
-            {t('kb.gatePendingDesc')}
-          </div>
+          <div className="kb-gate-text">{t('kb.gatePendingDesc')}</div>
           <div className="kb-gate-actions">
-            <button className="btn tl" onClick={() => setView('knowledge')}>{t('kb.viewFix')}</button>
+            <button className="btn tl" onClick={() => useKbGate.getState().openReview()}>{t('kb.goReview')}</button>
             <button className="btn save" onClick={() => void goConfirm()}>{t('kb.confirmAll')}</button>
           </div>
         </div>
@@ -223,10 +256,11 @@ export function KbBuildGate(): React.JSX.Element | null {
         </div>
       )}
 
-      {showDialog && (
-        <div className="kb-dialog-mask" onClick={() => setShowDialog(false)}>
+      {/* 构建入口统一受控确认弹窗：开关由 kbgate store 驱动（trigger 决定文案） */}
+      {buildTrigger !== null && (
+        <div className="kb-dialog-mask" onClick={() => closeBuildDialog()}>
           <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="kb-dialog-title">{t('kb.dialogTitle')}</div>
+            <div className="kb-dialog-title">{trig === 'rebuild' ? t('kb.rebuildTitle2') : t('kb.dialogTitle')}</div>
             <label className="kb-dialog-option">
               <input
                 type="checkbox"
@@ -237,9 +271,10 @@ export function KbBuildGate(): React.JSX.Element | null {
             </label>
             <p className="kb-dialog-sub">{t('kb.dialogSampleDesc')}</p>
             <div className="kb-dialog-actions">
-              <button className="btn ghost" onClick={() => setShowDialog(false)}>{t('kb.dialogCancel')}</button>
-              <button className="btn save" onClick={() => void startBuild(includeSamples)}>
-                {t('kb.dialogStart')}
+              <button className="btn ghost" onClick={() => closeBuildDialog()}>{t('kb.dialogCancel')}</button>
+              <button className="btn save" disabled={buildBusy}
+                onClick={() => { void startBuild(includeSamples, trig ?? 'init'); closeBuildDialog() }}>
+                {trig === 'rebuild' ? t('kb.rebuildAll') : t('kb.dialogStart')}
               </button>
             </div>
           </div>

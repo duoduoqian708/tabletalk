@@ -505,6 +505,12 @@ export const enUS: Messages = {
     linkedToast: 'Linked {from} → {to}',
     relDeletedToast: 'Removed relation {from} → {to}',
     excludedToast: 'Removed {name} from graph',
+    goReview: 'Go to review',
+    pillNotBuilt: 'KB not built',
+    pillPendingReview: 'Pending review',
+    dataConsent: 'Data consent',
+    dataConsentDesc: 'Building sends table structure and sample values to the configured AI service to generate annotations and tags; uncheck to use structure info only.',
+    rebuildAll: 'Rebuild all',
   },
   skill: {
     title: 'Skill Plaza',
