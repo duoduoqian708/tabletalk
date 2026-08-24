@@ -5214,6 +5214,8 @@ tr.clickable.open { background: var(--accent-dim); }
 }
 .krm-hint { font-size: 11px; color: var(--ink-faint); }
 .krm-spacer { flex: 1; }
+.krm-close { cursor: pointer; color: var(--ink-faint); font-size: 14px; padding: 0 4px; background: none; border: none; }
+.krm-close:hover { color: var(--ink); }
 .krm-body {
   flex: 1;
   display: grid;

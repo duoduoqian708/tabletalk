@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import * as kbApi from '@renderer/api/knowledge'
 import type { ReviewTable } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
+import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { toastMsg } from '@renderer/utils/toast'
 
 /* ═══════════════════════════════════════════════
    知识库审核弹窗（三栏审核 + 底部确认大按钮）
-   构建完成（pending_review）后自动弹出；
-   确认提交后关闭 → 进入知识库主页（左右布局）
+   不再由 kb_status===pending_review 自动弹出，
+   经 kbgate.reviewOpen 受控开启（浮卡「去审查」/常驻胶囊）；
+   确认提交成功自动关闭 → 进入知识库主页（左右布局）
    ═══════════════════════════════════════════════ */
 
 /* ── 8 色标签色板 ── */
@@ -68,10 +70,8 @@ export function KbReviewModal(): React.JSX.Element | null {
   const tagColor = (name: string): string =>
     colorMap[name] ?? TAG_COLORS[Math.abs(hashStr(name)) % TAG_COLORS.length]
 
-  const isPending = overview?.kb_status === 'pending_review'
-
-  /* 非 pending_review（或未构建）时不显示弹窗 —— 必须在所有 hooks 之后返回 */
-  const notPending = !currentId || !isPending
+  const reviewOpen = useKbGate((s) => s.reviewOpen)
+  const closeReview = useKbGate((s) => s.closeReview)
 
   const tagRows = (overview?.tags.library ?? []).map(tg => ({
     ...tg,
@@ -188,6 +188,7 @@ export function KbReviewModal(): React.JSX.Element | null {
     try {
       await confirmAll(currentId)
       toastMsg('知识库已确认并启用')
+      closeReview()
     } finally {
       setConfirming(false)
     }
@@ -200,7 +201,8 @@ export function KbReviewModal(): React.JSX.Element | null {
     return GRAY
   }
 
-  if (notPending) return null
+  /* 受控开关：reviewOpen 未开启（或数据未就绪）时不渲染 —— 必须在所有 hooks 之后返回 */
+  if (!currentId || !reviewOpen || !overview) return null
 
   return (
     <div className="krm-mask">
@@ -212,6 +214,7 @@ export function KbReviewModal(): React.JSX.Element | null {
           <span className="krm-pending">{totalPending} 项待确认</span>
           <span className="krm-spacer" />
           <span className="krm-hint">确认后知识库将正式启用</span>
+          <button className="krm-close" onClick={closeReview} title="稍后再审">✕</button>
         </div>
 
         {/* ═══ 三栏主体 ═══ */}
