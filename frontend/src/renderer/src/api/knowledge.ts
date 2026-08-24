@@ -30,19 +30,6 @@ export function kbStatus(connId: string): Promise<KbStatus> {
   return request(`/api/v1/knowledge/${connId}/status`)
 }
 
-export interface SyncResult {
-  changed: boolean
-  tables_added: number
-  tables_removed: number
-  tables_changed: number
-  message?: string
-}
-
-/** 手动增量同步：指纹对比 → 变化则增量构建（返回 diff 摘要）。 */
-export function syncKb(connId: string): Promise<SyncResult> {
-  return request(`/api/v1/knowledge/${connId}/sync`, { method: 'POST' })
-}
-
 /** 确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。 */
 export function confirmAllEnabled(connId: string): Promise<{ docs: number; tags: number; kb_status: string }> {
   return request(`/api/v1/knowledge/${connId}/confirm-all`, { method: 'POST' })

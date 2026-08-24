@@ -4825,6 +4825,11 @@ body.g-panning .gcanvas {
   transition: all var(--dur) var(--ease);
 }
 .kb-min-stop:hover { background: var(--red-dim); }
+.kb-gate-min.warn { border-color: var(--amber); }
+.kb-gate-min.warn:hover { border-color: var(--amber); }
+.kb-gate-min.warn .kb-min-label { color: var(--amber); }
+.kb-gate-min.warn .kb-min-pulse { background: var(--amber); }
+.kb-gate-min.goto-review { cursor: pointer; }
 .kb-gate-head {
   display: flex;
   align-items: center;

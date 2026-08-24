@@ -30,8 +30,6 @@ interface KnowledgeState {
   buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, opts?: { trigger?: 'init' | 'rebuild'; includeSamples?: boolean }) => Promise<void>
   /** 构建中刷新页面后重挂 SSE：只吃剩余进度（后端对无任务推 idle+done 帧后关闭） */
   reattachBuild: (connId: string) => Promise<void>
-  annotateTags: (connId: string) => Promise<void>
-  annotateEnums: (connId: string) => Promise<void>
   confirmComment: (connId: string, table: string, column?: string) => Promise<void>
   rejectComment: (connId: string, table: string, column?: string) => Promise<void>
   confirmTag: (connId: string, name: string) => Promise<void>
@@ -130,26 +128,6 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
       set({ error: (e as Error).message })
     } finally {
       set({ busy: false, buildProgress: null })
-    }
-  },
-
-  async annotateTags(connId) {
-    set({ busy: true })
-    try {
-      await api.annotateTags(connId)
-      await get().load(connId)
-    } finally {
-      set({ busy: false })
-    }
-  },
-
-  async annotateEnums(connId) {
-    set({ busy: true })
-    try {
-      await api.annotateEnums(connId)
-      await get().load(connId)
-    } finally {
-      set({ busy: false })
     }
   },
 
