@@ -460,7 +460,7 @@ async def confirm_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
 
 @router.post("/{conn_id}/enums/reject")
 async def reject_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
-    """拒绝某列全部 draft 枚举 → 移除。"""
+    """拒绝某列全部枚举条目（含已确认）→ 移除，列文档取值对照同步撤下。"""
     _have(conn_id)
     state = get_state()
     n = state.knowledge.reject_enum(conn_id, body.table, body.column)

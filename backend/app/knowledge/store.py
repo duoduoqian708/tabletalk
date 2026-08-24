@@ -397,6 +397,8 @@ class KnowledgeBase:
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
         self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # 枚举消费：历史 confirmed 枚举并入列文档 body（本轮新产出的 draft 不入文档）
+        self._apply_enum_bodies(conn_id)
         # 向量化（含 AI 生成的 draft 文档）
         if on_progress:
             on_progress("向量化", 45, None)
@@ -592,6 +594,8 @@ class KnowledgeBase:
             auto.extend(new_docs)
             docs_added = len(new_docs)
             self._auto[conn_id] = auto
+            # 枚举消费：变化表新文档并入 confirmed 枚举（重嵌入前，向量随新 body 计算）
+            self._apply_enum_bodies(conn_id, rebuild_tables)
             # 重嵌入：移除这些文档的旧向量，嵌入新文档
             vec = self._vec.get(conn_id, {})
             for d in new_docs:
@@ -1279,20 +1283,19 @@ class KnowledgeBase:
                 e["status"] = "confirmed"
                 n += 1
         if n:
+            self._refresh_col_doc(conn_id, table, column)  # confirmed 对照并入列文档
             self._save_conn(conn_id)
         return n
 
     def reject_enum(self, conn_id: str, table: str, column: str) -> int:
-        """拒绝某列全部 draft 枚举 → 移除。"""
+        """拒绝某列全部枚举条目（含已确认——拒绝即整列撤下，文档中的取值对照同步移除）。"""
         cols = self._enums.get(conn_id, {}).get(table)
         if not cols or column not in cols:
             return 0
-        before = len(cols[column])
-        cols[column] = [e for e in cols[column] if e.get("status") != "draft"]
-        if not cols[column]:
-            del cols[column]
-        removed = before - len(cols[column])
+        removed = len(cols[column])
+        del cols[column]
         if removed:
+            self._refresh_col_doc(conn_id, table, column)  # 撤下取值对照，body/向量恢复
             self._save_conn(conn_id)
         return removed
 
@@ -1305,9 +1308,91 @@ class KnowledgeBase:
             if e.get("value") == value:
                 e["meaning"] = (meaning or "").strip()
                 e["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                self._refresh_col_doc(conn_id, table, column)
                 self._save_conn(conn_id)
                 return True
         return False
+
+    # ---------- 枚举消费：confirmed 对照并入列注释文档（向量检索/to_context 天然携带） ----------
+    def _enum_suffix(self, conn_id: str, table: str, column: str) -> str:
+        """该列 confirmed 枚举的「。取值：V=M、…」后缀（draft 不入文档；无 confirmed 返回空）。"""
+        entries = self._enums.get(conn_id, {}).get(table, {}).get(column, [])
+        pairs = "、".join(
+            f"{e['value']}={e['meaning']}"
+            for e in entries
+            if e.get("status") == "confirmed" and e.get("meaning")
+        )
+        return f"。取值：{pairs}" if pairs else ""
+
+    def _compose_col_body(self, conn_id: str, table: str, column: str) -> str | None:
+        """由当前 schema 快照重建列文档基础 body 并追加 confirmed 枚举对照（与 _from_schema 同格式）。"""
+        col = next(
+            (c for c in self._schema.get(conn_id, {}).get("columns", [])
+             if c.get("table") == table and c.get("name") == column),
+            None,
+        )
+        if col is None:
+            return None
+        marks = [m for m, f in (("主键", col.get("pk")), ("外键", col.get("fk"))) if f]
+        body = f"{table}.{column} 列，类型 {col.get('type', '')}"
+        if marks:
+            body += "（" + "、".join(marks) + "）"
+        if col.get("comment"):
+            body += f"。列注释：{col['comment']}"
+        return body + self._enum_suffix(conn_id, table, column)
+
+    def _apply_enum_bodies(self, conn_id: str, tables: set[str] | None = None) -> bool:
+        """批量把 confirmed 枚举并入列文档 body（build/incremental 在向量化前调用）。
+
+        tables=None 处理全部列文档；否则只处理指定表。返回是否有变更。
+        """
+        changed = False
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        for d in self._auto.get(conn_id, []):
+            if d.archived or d.kind != "column":
+                continue
+            if tables is not None and d.table not in tables:
+                continue
+            new_body = self._compose_col_body(conn_id, d.table or "", d.column or "")
+            if new_body is not None and new_body != d.body:
+                d.body = new_body
+                d.updated_at = now
+                changed = True
+        return changed
+
+    def _refresh_col_doc(self, conn_id: str, table: str, column: str) -> None:
+        """单列枚举变更后同步列文档 body；该文档已有向量时调度单文档重嵌。"""
+        doc = next(
+            (d for d in self._auto.get(conn_id, [])
+             if d.kind == "column" and d.table == table and d.column == column and not d.archived),
+            None,
+        )
+        if doc is None:
+            return
+        new_body = self._compose_col_body(conn_id, table, column)
+        if new_body is None or new_body == doc.body:
+            return
+        doc.body = new_body
+        doc.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self._save_conn(conn_id)
+        if self._vec.get(conn_id, {}).get(doc.id):
+            self._schedule_reembed(conn_id, doc)
+
+    def _schedule_reembed(self, conn_id: str, doc: KnowledgeDoc) -> None:
+        """在运行中的事件循环调度重嵌；同步上下文（无循环）就地执行保持确定性。"""
+        try:
+            asyncio.get_running_loop().create_task(self._reembed_one(conn_id, doc))
+        except RuntimeError:
+            asyncio.run(self._reembed_one(conn_id, doc))
+
+    async def _reembed_one(self, conn_id: str, doc: KnowledgeDoc) -> None:
+        try:
+            vec = await self._emb.embed(self._doc_text(doc))  # 与 _embed_docs 同款文本拼接
+            self._vec.setdefault(conn_id, {})[doc.id] = vec
+            self._rebuild_vstore(conn_id)
+            self._save_conn(conn_id)
+        except Exception:
+            pass
 
     def _fk_adj(self, conn_id: str) -> dict[str, set[str]]:
         adj: dict[str, set[str]] = {}
