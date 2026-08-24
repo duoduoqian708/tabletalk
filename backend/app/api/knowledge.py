@@ -90,6 +90,7 @@ class GraphExcludeRequest(BaseModel):
 
 class BuildRequest(BaseModel):
     include_samples: bool = True
+    trigger: str = "init"   # init | rebuild
 
 
 class EnumConfirmRequest(BaseModel):
@@ -119,7 +120,23 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
     state = get_state()
     if state.build_jobs.is_running(conn_id):
         raise HTTPException(status_code=409, detail="构建已在运行")
-    include_samples = (body.include_samples if body else True)
+    if body is None:
+        body = BuildRequest()
+    if body.trigger not in ("init", "rebuild"):
+        raise HTTPException(status_code=422, detail="trigger 必须为 init|rebuild")
+    # 确认留痕（spec §3.8）：用户点击"开始构建"即写审计，先于后台任务启动
+    state.audit.log(
+        connection=conn_id,
+        origin="kb_build",
+        tier="read",
+        verdict="allow",
+        status="confirmed",
+        sql=f"-- kb build trigger={body.trigger} include_samples={body.include_samples}",
+        source="manual",
+        trigger=body.trigger,
+        include_samples=body.include_samples,
+    )
+    include_samples = body.include_samples
     state.connections.set_kb_status(conn_id, "building")
 
     async def _run(report):
