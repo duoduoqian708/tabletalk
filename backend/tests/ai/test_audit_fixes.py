@@ -27,7 +27,7 @@ async def test_kb_build_filters_sensitive(client, app_state, demo_db):
     docs = (await client.get(f"/api/v1/knowledge/{c.id}/docs")).json()
     assert not any(d["table"] == "secret_payroll" for d in docs["docs"])
     r = (await client.get(f"/api/v1/knowledge/{c.id}/retrieve", params={"q": "secret_payroll"})).json()
-    assert not any(d["table"] == "secret_payroll" for d in r["docs"])
+    assert not any(x["table"] == "secret_payroll" for x in r["cards"])
 
 
 async def test_run_dml_readonly_conn_blocked(app_state, demo_db):

@@ -470,6 +470,7 @@ def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
     """程序启发式：根据列名匹配 + 类型兼容，生成可能有关联的表对候选。
 
     策略：A 表某列名（去掉 _id 后缀）≈ B 表名，或两表有同名非通用列且类型兼容。
+    边 v2：from 恒为持有引用列的表（多侧）；列兼主键 → 1:1，否则 n:1。
     """
     candidates: list[dict[str, str]] = []
     tables = schema.get("tables", [])
@@ -498,20 +499,29 @@ def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
                      if cc["name"].lower() == "id"),
                     "id",
                 )
+                cardinality = "1:1" if c.get("pk") else "n:1"
                 key = (pair[0], pair[1], c["name"], ref_col)
                 if key not in seen_pairs:
                     candidates.append({
                         "from_table": tname, "from_col": c["name"],
                         "to_table": base, "to_col": ref_col,
-                        "reason": f"列名匹配：{tname}.{c['name']} → {base}.id",
+                        "cardinality": cardinality,
+                        "reason": f"列名匹配：{tname}.{c['name']} → {base}.{ref_col}",
                     })
                     seen_pairs.add(key)
 
     return candidates
 
 
-def _parse_graph_edges(text: str) -> list[dict[str, Any]]:
-    """解析 LLM 返回的关系 JSON 数组。"""
+def _parse_graph_edges(text: str, schema: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """解析 LLM 返回的关系 JSON 数组（边 v2：四元组 + cardinality + reason）。
+
+    校验规则：
+    - 缺 from_col/to_col/cardinality（四元组/基数不齐）→ 丢弃；
+    - schema 提供时：字段必须真实存在，自环丢弃；
+    - 多侧校验：from_col 为 from_table 主键却声明 n:1 → 矛盾丢弃
+      （主键列不可能为多侧；1:1 声明保留）。
+    """
     t = text.strip()
     if t.startswith("```"):
         t = re.sub(r"^```(?:json)?\s*", "", t)
@@ -528,6 +538,10 @@ def _parse_graph_edges(text: str) -> list[dict[str, Any]]:
             return []
     if not isinstance(data, list):
         return []
+    cols = {
+        (c["table"], c["name"]): bool(c.get("pk"))
+        for c in (schema or {}).get("columns", [])
+    }
     out: list[dict[str, Any]] = []
     for it in data:
         if not isinstance(it, dict):
@@ -536,23 +550,38 @@ def _parse_graph_edges(text: str) -> list[dict[str, Any]]:
         to_t = str(it.get("to_table") or it.get("to") or "").strip()
         from_c = str(it.get("from_col") or "").strip()
         to_c = str(it.get("to_col") or "").strip()
-        if not from_t or not to_t:
-            continue
+        cardinality = str(it.get("cardinality") or "").strip()
+        if not from_t or not to_t or not from_c or not to_c:
+            continue  # 缺四元组 → 丢弃
+        if cardinality not in ("n:1", "1:1"):
+            continue  # 缺/错基数 → 丢弃
+        if from_t == to_t and from_c == to_c:
+            continue  # 自环 → 丢弃
+        if schema is not None:
+            if (from_t, from_c) not in cols or (to_t, to_c) not in cols:
+                continue  # 字段不存在 → 丢弃
+            if cardinality == "n:1" and cols[(from_t, from_c)]:
+                continue  # from 为主键却 n:1 → 矛盾丢弃（主键不可能为多侧）
         out.append({
-            "from_table": from_t, "from_col": from_c or None,
-            "to_table": to_t, "to_col": to_c or None,
+            "from_table": from_t, "from_col": from_c,
+            "to_table": to_t, "to_col": to_c,
+            "cardinality": cardinality,
             "reason": str(it.get("reason") or ""),
+            "confidence": str(it.get("confidence") or ""),
+            "status": str(it.get("status") or ""),
         })
     return out
 
 
 def _mock_graph_edges(schema: dict[str, Any]) -> list[dict[str, Any]]:
-    """mock：基于外键生成确定性图谱边。"""
+    """mock：基于外键生成确定性图谱边（边 v2：FK 方向 + 基数推导）。"""
     edges: list[dict[str, Any]] = []
+    col_pk = {(c["table"], c["name"]): bool(c.get("pk")) for c in schema.get("columns", [])}
     for fk in schema.get("foreign_keys", []):
         edges.append({
             "from_table": fk["table"], "from_col": fk["column"],
             "to_table": fk["ref_table"], "to_col": fk["ref_column"],
+            "cardinality": "1:1" if col_pk.get((fk["table"], fk["column"])) else "n:1",
             "reason": f"FK 约束：{fk['table']}.{fk['column']} → {fk['ref_table']}.{fk['ref_column']}",
         })
     return edges
@@ -593,17 +622,22 @@ async def annotate_graph(
         "- 不限于同名列匹配，注意语义关联（如 status 字段可能有枚举含义）\n"
         "- 可能存在复合关联（如 order_items 同时关联 orders 和 products）\n"
         "- 注意区分：真正的业务关联 vs 仅仅是同名字段\n"
-        "- 返回 confident（高确信）和 uncertain（低确信）两类\n\n"
+        "- 返回 confident（高确信）和 uncertain（低确信）两类\n"
+        "方向规则（边 v2）：from_table 必须是多侧（明细/子表一侧，持有引用字段），"
+        "to_table 是一侧（主表/父表）；from_col 为 from_table 中引用 to_table 的字段。\n"
+        "基数规则：cardinality 只能取 n:1（多行 from 对应一行 to）或 1:1（一对一，"
+        "如外键兼主键）；不确定时取 n:1；from_col 为 from_table 主键时只能 1:1。\n"
+        "禁止 n:m 直连边：多对多必须通过中间表（junction）拆成两条 n:1 边。\n\n"
         "【表结构】\n" + graph_overview + "\n\n"
         "返回 JSON 数组，元素形如 "
         '{"from_table":"A", "from_col":"a_id", "to_table":"B", "to_col":"id", '
-        '"confidence":"high/medium/low", "reason":"一句话说明关联依据"}。\n'
+        '"cardinality":"n:1", "confidence":"high/medium/low", "reason":"一句话说明关联依据"}。\n'
         "只返回 JSON，不要多余文字。"
     )
     global_resp = await provider.chat(
         [{"role": "user", "content": global_prompt}], tools=None,
     )
-    global_edges = _parse_graph_edges(global_resp.content or "")
+    global_edges = _parse_graph_edges(global_resp.content or "", schema)
     if not global_edges:
         logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·全局扫描）", conn_id)
     logger.debug("[kb.graph] conn=%s 全局扫描边数=%s", conn_id, len(global_edges))
@@ -648,7 +682,7 @@ async def annotate_graph(
     for c in unverified:
         verify_lines.append(
             f"- {c['from_table']}.{c['from_col']} → {c['to_table']}.{c['to_col']}"
-            f"  （依据：{c['reason']}）"
+            f"  （{c.get('cardinality', 'n:1')}，依据：{c['reason']}）"
         )
 
     # 相关表的精简结构（供 LLM 判断字段语义）
@@ -666,18 +700,21 @@ async def annotate_graph(
     verify_prompt = (
         "你是数据库关系分析专家。以下是程序通过列名匹配发现的候选关系。\n"
         "请判断每个候选是否成立。若关联字段不正确，请给出修正后的字段。\n"
-        "拒绝无实际业务关联的候选（如仅仅是命名巧合）。\n\n"
+        "拒绝无实际业务关联的候选（如仅仅是命名巧合）。\n"
+        "方向规则（边 v2）：from_table 必须是多侧（明细/子表一侧，持有引用字段），"
+        "to_table 是一侧（主表/父表）。\n"
+        "基数规则：cardinality 只能取 n:1 或 1:1（from_col 为 from_table 主键时只能 1:1）。\n\n"
         "【相关表结构】\n" + "\n".join(rel_schema_lines) + "\n\n"
         "【待验证候选关系】\n" + "\n".join(verify_lines) + "\n\n"
         "返回 JSON 数组，元素形如 "
         '{"from_table":"A", "from_col":"a_id", "to_table":"B", "to_col":"id", '
-        '"confidence":"high/medium/low", "reason":"说明", "status":"confirmed/rejected"}。\n'
+        '"cardinality":"n:1", "confidence":"high/medium/low", "reason":"说明", "status":"confirmed/rejected"}。\n'
         "只返回 JSON，不要多余文字。"
     )
     verify_resp = await provider.chat(
         [{"role": "user", "content": verify_prompt}], tools=None,
     )
-    verified_edges = _parse_graph_edges(verify_resp.content or "")
+    verified_edges = _parse_graph_edges(verify_resp.content or "", schema)
     if not verified_edges:
         logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·候选验证 %s 条）", conn_id, len(unverified))
     for e in verified_edges:

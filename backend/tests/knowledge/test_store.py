@@ -34,8 +34,8 @@ async def test_build_and_keyword_retrieve(tmp_path):
     kb = KnowledgeBase(tmp_path)
     stats = await kb.build("c1", _schema())
     assert stats["docs"] > 0
-    docs = await kb.retrieve("c1", query="订单", k=10)
-    assert any("orders" in d.title for d in docs)
+    cards = await kb.retrieve("c1", query="订单", k=10)
+    assert any(c.table == "orders" for c in cards)
 
 
 async def test_graph_includes_fk_only(tmp_path):
@@ -51,17 +51,17 @@ async def test_graph_includes_fk_only(tmp_path):
 async def test_fk_graph_expansion_surfaces_neighbors(tmp_path):
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())
-    docs = await kb.retrieve("c1", query="订单表", k=10)
-    titles = [d.title for d in docs]
-    assert any("orders" in t for t in titles)
-    assert any("customers" in t for t in titles)
+    cards = await kb.retrieve("c1", query="订单表", k=10)
+    tables = {c.table for c in cards}
+    assert "orders" in tables
+    assert "customers" in tables
 
 
 async def test_target_table_still_ranks_first(tmp_path):
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())
-    docs = await kb.retrieve("c1", query="订单", table="customers", k=10)
-    assert docs[0].table == "customers"
+    cards = await kb.retrieve("c1", query="订单", table="customers", k=10)
+    assert cards[0].table == "customers"
 
 
 async def test_ai_draft_then_confirm_new_model(tmp_path):
@@ -125,8 +125,8 @@ async def test_artifact_persists_across_instances(tmp_path):
 
     kb2 = KnowledgeBase(tmp_path)
     assert kb2.is_built("c1")  # artifact 存在 → 无需重采样即可检索
-    docs = await kb2.retrieve("c1", query="订单", k=10)
-    assert any("orders" in d.title for d in docs)
+    cards = await kb2.retrieve("c1", query="订单", k=10)
+    assert any(c.table == "orders" for c in cards)
     # 确认状态在 artifact（v2 表级知识）中保留
     ov = kb2.overview("c1")
     tbl = next(t for t in ov["tables"] if t["name"] == "orders")
@@ -182,19 +182,20 @@ async def test_route_tables_respects_table_tags(tmp_path):
     assert r["tables"] == ["orders"]
 
 
-async def test_annotate_persists_across_instances(tmp_path):
+async def test_user_note_persists_across_instances(tmp_path):
+    """用户手写笔记跨实例保留（v3：笔记不进向量检索，检索统一走表知识卡）。"""
     kb = KnowledgeBase(tmp_path)
     kb.annotate("c1", "orders", "status", "pending 表示待支付")
     kb2 = KnowledgeBase(tmp_path)
-    docs = await kb2.retrieve("c1", query="待支付", k=5)
-    assert any("待支付" in d.body for d in docs)
+    docs = kb2.list_docs("c1")
+    assert any(d.body == "pending 表示待支付" for d in docs)
 
 
 async def test_empty_query_returns_all(tmp_path):
     kb = KnowledgeBase(tmp_path)
-    n = (await kb.build("c1", _schema()))["docs"]
-    docs = await kb.retrieve("c1", query="", k=100)
-    assert len(docs) == n
+    await kb.build("c1", _schema())
+    cards = await kb.retrieve("c1", query="", k=100)
+    assert {c.table for c in cards} == {"orders", "customers"}
 
 
 async def test_embedding_api_selection(tmp_path):
@@ -222,3 +223,123 @@ async def test_overview_without_retrieve_loads_artifact(tmp_path):
     tables = kb2.overview("c1")["tables"]
     assert any(t["name"] == "orders" for t in tables)
     assert any(e["kind"] == "fk" for e in kb2.graph("c1")["edges"])
+
+
+# ---------- T2：一表一 chunk 向量合一（spec §4） ----------
+
+
+async def test_synthesize_text_confirmed_priority(tmp_path):
+    """合成文本：confirmed 内容入文（可选值/示例/注释），draft 仅计 payload.draft_count。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), _samples(), enable_ai_annotation=False)
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "comment": "订单主表草案"},
+        {"table": "orders", "column": "status", "comment": "订单状态",
+         "values": "P=待付款；S=已发货", "example": "P"},
+    ])
+    tk = kb._tables["c1"]["orders"]
+    text = kb._synthesize_table_text("c1", tk)
+    # draft 内容不入文；结构壳（字段名/主键/类型）在
+    assert "订单状态" not in text and "待付款" not in text and "订单主表草案" not in text
+    assert "id" in text and "主键" in text and "customer_id" in text
+    payload = kb._table_payload("c1", tk)
+    assert payload["draft_count"] == 2 and payload["ddl"] == tk.ddl
+    # 确认后：confirmed 内容入文，draft_count 归零
+    kb.confirm("c1", "orders")
+    text2 = kb._synthesize_table_text("c1", kb._tables["c1"]["orders"])
+    assert text2.startswith("orders，订单主表草案。字段有：")
+    assert "订单状态" in text2 and "P=待付款；S=已发货" in text2 and "示例为P" in text2
+    assert kb._table_payload("c1", kb._tables["c1"]["orders"])["draft_count"] == 0
+
+
+async def test_table_payload_shape(tmp_path):
+    """payload = {ddl, tags, layout, draft_count, updated_at}；layout 仅透传。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb.upsert_tags("c1", [{"name": "订单"}])
+    kb.assign_table_tags("c1", "orders", ["订单"])
+    kb._tables["c1"]["orders"].layout = {"x": 10, "y": 20}
+    payload = kb._table_payload("c1", kb._tables["c1"]["orders"])
+    assert set(payload) == {"ddl", "tags", "layout", "draft_count", "updated_at"}
+    assert payload["tags"] == ["订单"]
+    assert payload["layout"] == {"x": 10, "y": 20}
+    assert payload["draft_count"] == 0
+    assert payload["ddl"].startswith("CREATE TABLE")
+
+
+async def test_retrieve_returns_table_cards(tmp_path):
+    """retrieve 返回表知识卡（text/payload/score），一表一卡；to_context 输出【知识库】表卡段。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), _samples(), enable_ai_annotation=False)
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "comment": "订单主表"},
+        {"table": "orders", "column": "status", "comment": "订单状态", "values": "P=待付款", "example": "P"},
+    ])
+    kb.confirm("c1", "orders")
+    cards = await kb.retrieve("c1", query="订单", k=10)
+    assert cards and cards[0].table == "orders"
+    assert "订单状态" in cards[0].text and "P=待付款" in cards[0].text
+    assert cards[0].payload["draft_count"] == 0
+    assert cards[0].payload["ddl"] and "updated_at" in cards[0].payload
+    assert cards[0].score >= 0
+    ctx = await kb.to_context("c1", query="订单", k=10)
+    assert "【知识库】" in ctx and "- [表] orders，订单主表。字段有：" in ctx
+    assert "AI 草案" not in ctx  # 全确认 → 无草案标记
+
+
+async def test_vstore_single_table_system(tmp_path):
+    """一表一 chunk：vstore 恰 N 表条 chunk，collection=table，payload 进 chunk。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), _samples(), enable_ai_annotation=False)
+    vs = kb._vector_store("c1")
+    assert len(vs) == 2
+    chunk = vs._chunks["tbl-orders"]
+    assert chunk.collection == "table"
+    assert chunk.metadata == {"table": "orders"}
+    assert chunk.payload["ddl"] and "tags" in chunk.payload and "layout" in chunk.payload
+    assert chunk.text.startswith("orders") and "字段有：" in chunk.text
+
+
+# ---------- T2：边 v2（字段级端点 + 基数） ----------
+
+
+async def test_fk_edge_v2_direction_and_cardinality(tmp_path):
+    """FK 边 v2：子表=from（多侧）→ 父表=to；FK 兼 PK→1:1 否则 n:1；reason 记录推断依据。"""
+    schema = _schema()
+    schema["tables"].append({"name": "user_profiles", "kind": "table", "comment": "", "column_count": 1})
+    schema["columns"].append({"table": "user_profiles", "name": "id", "type": "int",
+                              "nullable": True, "pk": True, "fk": True, "default": None, "comment": ""})
+    schema["foreign_keys"].append(
+        {"table": "user_profiles", "column": "id", "ref_table": "customers", "ref_column": "id"})
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", schema, enable_ai_annotation=False)
+    edges = kb.graph("c1")["edges"]
+    by_field = {(e["from"], e["from_col"]): e for e in edges}
+    e_n1 = by_field[("orders", "customer_id")]
+    assert e_n1["to"] == "customers" and e_n1["to_col"] == "id"
+    assert e_n1["cardinality"] == "n:1"
+    assert "FK 约束" in e_n1["reason"]
+    e_11 = by_field[("user_profiles", "id")]
+    assert e_11["cardinality"] == "1:1"
+
+
+async def test_add_graph_edge_cardinality_and_field_dedup(tmp_path):
+    """手绘边：cardinality 校验（默认 n:1）、字段级去重、reason=人工连线。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    e = kb.add_graph_edge("c1", "orders", "customers", "user",
+                          frm_col="customer_id", to_col="id")
+    assert e["cardinality"] == "n:1" and e["reason"] == "人工连线"
+    # 同字段对去重（返回同一条）；不同字段对可并存
+    e2 = kb.add_graph_edge("c1", "orders", "customers", "user",
+                           frm_col="customer_id", to_col="id")
+    assert e2 is e
+    e3 = kb.add_graph_edge("c1", "orders", "customers", "user",
+                           frm_col="status", to_col="name", cardinality="1:1")
+    assert e3["cardinality"] == "1:1"
+    assert len([x for x in kb.graph("c1")["edges"] if x["kind"] == "user"]) == 2
+    try:
+        kb.add_graph_edge("c1", "orders", "customers", "user", cardinality="m:n")
+        raise AssertionError("非法基数应抛错")
+    except ValueError:
+        pass

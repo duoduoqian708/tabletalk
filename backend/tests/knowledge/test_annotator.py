@@ -1,7 +1,13 @@
 """AI 自动注释器测试：prompt 构造 / JSON 解析 / mock 确定性注释。"""
 from __future__ import annotations
 
-from app.knowledge.annotator import _mock_comments, _parse_items, annotate_knowledge
+from app.knowledge.annotator import (
+    _generate_candidate_pairs,
+    _mock_comments,
+    _parse_graph_edges,
+    _parse_items,
+    annotate_knowledge,
+)
 
 
 def _schema() -> dict:
@@ -76,3 +82,78 @@ async def test_annotate_knowledge_truncates_samples_before_send(app_state):
     body = st.knowledge._tables["c-anno"]["orders"].columns["status"].comment
     assert long_val[:60] in body   # 截断值进入草案（= 发送内容）
     assert long_val not in body    # 原始长句不出网/不入库
+
+
+# ---------- T2：边 v2 解析与候选（四元组 + cardinality + 多侧校验） ----------
+
+
+def _graph_schema() -> dict:
+    return {
+        "tables": [{"name": "orders"}, {"name": "customers"}],
+        "columns": [
+            {"table": "orders", "name": "id", "pk": True},
+            {"table": "orders", "name": "customer_id", "pk": False},
+            {"table": "customers", "name": "id", "pk": True},
+        ],
+    }
+
+
+def test_parse_graph_edges_four_tuple_and_cardinality():
+    """四元组 + cardinality 齐备才收；缺字段/缺基数丢弃。"""
+    ok = _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"customer_id","to_table":"customers","to_col":"id",'
+        '"cardinality":"n:1","reason":"订单归属客户"}]', _graph_schema())
+    assert len(ok) == 1
+    assert ok[0]["from_col"] == "customer_id" and ok[0]["cardinality"] == "n:1"
+    # 缺 from_col → 丢弃
+    assert _parse_graph_edges(
+        '[{"from_table":"orders","to_table":"customers","cardinality":"n:1"}]', _graph_schema()) == []
+    # 缺 cardinality → 丢弃
+    assert _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"customer_id","to_table":"customers","to_col":"id"}]',
+        _graph_schema()) == []
+    # 非法基数 → 丢弃
+    assert _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"customer_id","to_table":"customers","to_col":"id",'
+        '"cardinality":"m:n"}]', _graph_schema()) == []
+
+
+def test_parse_graph_edges_many_side_validation():
+    """多侧校验：from_col 为 from_table 主键却声明 n:1 → 矛盾丢弃；1:1 保留。"""
+    schema = _graph_schema()
+    bad = _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"id","to_table":"customers","to_col":"id",'
+        '"cardinality":"n:1"}]', schema)
+    assert bad == []
+    ok = _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"id","to_table":"customers","to_col":"id",'
+        '"cardinality":"1:1"}]', schema)
+    assert len(ok) == 1 and ok[0]["cardinality"] == "1:1"
+    # 字段不存在 → 丢弃；自环 → 丢弃
+    assert _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"nope","to_table":"customers","to_col":"id",'
+        '"cardinality":"n:1"}]', schema) == []
+    assert _parse_graph_edges(
+        '[{"from_table":"orders","from_col":"id","to_table":"orders","to_col":"id",'
+        '"cardinality":"1:1"}]', schema) == []
+
+
+def test_generate_candidate_pairs_cardinality():
+    """候选对：from=持有引用列的表（多侧）；列兼主键 → 1:1，否则 n:1。"""
+    schema = {
+        "tables": [{"name": "order"}, {"name": "customer"},
+                   {"name": "profile"}, {"name": "user"}],
+        "columns": [
+            {"table": "order", "name": "id", "pk": True},
+            {"table": "order", "name": "customer_id", "pk": False},
+            {"table": "customer", "name": "id", "pk": True},
+            {"table": "profile", "name": "user_id", "pk": True},
+            {"table": "user", "name": "id", "pk": True},
+        ],
+    }
+    cands = _generate_candidate_pairs(schema)
+    n1 = next(c for c in cands if c["from_table"] == "order" and c["from_col"] == "customer_id")
+    assert n1["to_table"] == "customer" and n1["to_col"] == "id"
+    assert n1["cardinality"] == "n:1"
+    one1 = next(c for c in cands if c["from_table"] == "profile" and c["from_col"] == "user_id")
+    assert one1["to_table"] == "user" and one1["cardinality"] == "1:1"

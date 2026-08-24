@@ -79,6 +79,7 @@ class GraphEdgeRequest(BaseModel):
     from_col: str | None = None
     to_col: str | None = None
     weight: float | None = None
+    cardinality: str = "n:1"   # 边 v2：n:1 | 1:1（默认 n:1）
 
 
 class GraphEdgeDelete(BaseModel):
@@ -313,7 +314,7 @@ async def add_graph_edge(conn_id: str, body: GraphEdgeRequest) -> dict:
     try:
         edge = state.knowledge.add_graph_edge(
             conn_id, body.from_table, body.to_table, body.kind,
-            body.from_col, body.to_col, body.weight)
+            body.from_col, body.to_col, body.weight, body.cardinality)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"edge": edge, "graph": state.knowledge.graph(conn_id)}
@@ -377,8 +378,8 @@ async def reject_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = N
 async def retrieve(conn_id: str, q: str = "", table: str | None = None, k: int = 10) -> dict:
     _have(conn_id)
     state = get_state()
-    docs = await state.knowledge.retrieve(conn_id, q, table, k)
-    return {"count": len(docs), "docs": [d.to_dict() for d in docs]}
+    cards = await state.knowledge.retrieve(conn_id, q, table, k)
+    return {"count": len(cards), "cards": [c.to_dict() for c in cards]}
 
 
 @router.get("/{conn_id}/docs")

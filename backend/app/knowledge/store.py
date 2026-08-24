@@ -62,6 +62,7 @@ class TableKnowledge:
     columns: dict[str, ColumnInfo] = field(default_factory=dict)
     ddl: str = ""
     excluded: bool = False
+    layout: dict[str, Any] = field(default_factory=dict)  # 2D 图布局坐标（透传存储，渲染在 T4）
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -73,6 +74,7 @@ class TableKnowledge:
             "columns": {k: v.to_dict() for k, v in self.columns.items()},
             "ddl": self.ddl,
             "excluded": self.excluded,
+            "layout": self.layout,
         }
 
     @classmethod
@@ -87,7 +89,25 @@ class TableKnowledge:
             columns=cols,
             ddl=d.get("ddl", ""),
             excluded=bool(d.get("excluded")),
+            layout=dict(d.get("layout") or {}),
         )
+
+
+@dataclass
+class TableCard:
+    """检索命中的表知识卡（一表一卡，spec §4）：text=可读表描述，payload=结构化信息。"""
+    table: str
+    text: str
+    payload: dict[str, Any]
+    score: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "table": self.table,
+            "text": self.text,
+            "payload": self.payload,
+            "score": self.score,
+        }
 
 
 class KnowledgeBase:
@@ -101,12 +121,11 @@ class KnowledgeBase:
         self._user: dict[str, list[KnowledgeDoc]] = {}
         self._samples: dict[str, dict[str, dict[str, list[Any]]]] = {}  # conn -> table -> column -> [values]
         self._graph: dict[str, dict[str, Any]] = {}                       # conn -> {edges}
-        self._vec: dict[str, dict[str, list[float]]] = {}                 # conn -> doc_id -> 向量
         self._tags: dict[str, dict[str, dict[str, Any]]] = {}               # conn -> tag名 -> {description,status}
         self._table_tags: dict[str, dict[str, list[str]]] = {}            # conn -> table -> [tag名]
         self._tables: dict[str, dict[str, TableKnowledge]] = {}           # conn -> 表名 -> TableKnowledge（v2 核心存储）
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（增量 diff/图谱校验用）
-        self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
+        self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（唯一向量体系，一表一 chunk）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
         self._schema_fingerprint_map: dict[str, str] = {}                 # conn -> 结构指纹（增量对比）
         self._edge_tombstones: dict[str, list[dict]] = {}                 # conn -> 用户删除的 overlap 边（不复活）
@@ -146,8 +165,7 @@ class KnowledgeBase:
         self._user[conn_id] = _docs_(snap.user)
         self._samples[conn_id] = snap.samples
         self._graph[conn_id] = {"edges": snap.edges}
-        self._vec[conn_id] = snap.vec
-        self._table_vec[conn_id] = snap.table_vec
+        self._table_vec[conn_id] = snap.table_vec  # 唯一向量体系（doc_vec 碎片已作废不加载）
         self._tags[conn_id] = snap.tags
         self._table_tags[conn_id] = snap.table_tags
         self._tables[conn_id] = {
@@ -173,7 +191,6 @@ class KnowledgeBase:
                 user=[d.to_dict() for d in self._user.get(conn_id, [])],
                 samples=self._samples.get(conn_id, {}),
                 edges=self._graph.get(conn_id, {"edges": []}).get("edges", []),
-                vec=self._vec.get(conn_id, {}),
                 table_vec=self._table_vec.get(conn_id, {}),
                 tags=self._tags.get(conn_id, {}),
                 table_tags=self._table_tags.get(conn_id, {}),
@@ -245,13 +262,21 @@ class KnowledgeBase:
         }
 
     def _build_graph(self, conn_id: str, schema: dict[str, Any], samples: dict[str, dict[str, list[Any]]]) -> dict[str, Any]:
+        """构图（边 v2）：只画 FK 边（真实外键关系）；overlap 值重叠不上图。
+
+        方向不变式：FK 子表（多侧）= from → 被引用父表（一侧）= to；
+        基数：FK 兼 PK → 1:1，否则 n:1；reason 记录推断依据（悬停展示）。
+        墓碑按字段对（from_col/to_col）匹配，不复活。
+        """
         edges: list[dict[str, Any]] = []
-        # 只画 FK 边（真实外键关系）；overlap 值重叠不上图，仅用于知识库内部检索
+        col_pk = {(c["table"], c["name"]): bool(c.get("pk")) for c in schema.get("columns", [])}
         for fk in schema.get("foreign_keys", []):
             e = {
                 "from": fk["table"], "from_col": fk["column"],
                 "to": fk["ref_table"], "to_col": fk["ref_column"],
                 "kind": "fk", "weight": 1.0,
+                "cardinality": "1:1" if col_pk.get((fk["table"], fk["column"])) else "n:1",
+                "reason": f"FK 约束：{fk['table']}.{fk['column']} → {fk['ref_table']}.{fk['ref_column']}",
             }
             if not self._is_tombstoned(conn_id, e):
                 edges.append(e)
@@ -265,6 +290,7 @@ class KnowledgeBase:
         """从 schema 建/同步 TableKnowledge 壳。
 
         - 结构字段（type/pk/fk/db_comment/column_count）以 schema 为准刷新；
+        - ddl 结构兜底：快照合成 CREATE TABLE（payload 用，实时 DDL 在 AI 阶段覆盖）；
         - 知识字段（comment/values/example/status）保留（重建/增量不清掉人工成果）；
         - drop: 增量删除的表落壳；schema 中已消失的列从壳中移除。
         """
@@ -275,12 +301,17 @@ class KnowledgeBase:
         cols_by_table: dict[str, list[dict[str, Any]]] = {}
         for c in schema.get("columns", []):
             cols_by_table.setdefault(c["table"], []).append(c)
+        from app.knowledge.ddl_context import ddls_from_schema  # noqa: PLC0415
+
+        ddls = ddls_from_schema(schema)
         for name, tinfo in tables_idx.items():
             tk = tabs.get(name)
             if tk is None:
                 tk = tabs[name] = TableKnowledge(name=name)
             tk.db_comment = tinfo.get("comment", "")
             tk.column_count = int(tinfo.get("column_count", 0) or 0)
+            if not tk.ddl:
+                tk.ddl = ddls.get(name, "")
             alive: set[str] = set()
             for c in cols_by_table.get(name, []):
                 cname = c["name"]
@@ -332,7 +363,7 @@ class KnowledgeBase:
         return "hash"
 
     async def reembed_if_needed(self, conn_id: str) -> bool:
-        """嵌入配置变化（用户新配/更换嵌入模型）→ 重嵌文档级与表级向量，返回是否重嵌。
+        """嵌入配置变化（用户新配/更换嵌入模型）→ 重嵌表级向量（一表一 chunk），返回是否重嵌。
 
         模型必须用户配置：用户配置了真语义嵌入后，旧 artifact 里哈希时代的向量必须作废重建，
         否则"配了模型却不生效"。只重嵌向量，不重建结构/图谱。
@@ -343,22 +374,15 @@ class KnowledgeBase:
         # 无条件同步嵌入器到当前配置：进程重启后 _emb 可能仍是默认哈希嵌入器，
         # 即使指纹一致不重嵌，查询向量维度也必须与库中一致（避免 matmul 不匹配）。
         self._emb = self._embedder()
-        # 维度自愈：活跃文档向量维度混杂（旧模型残留）也触发重嵌，避免检索 matmul 不匹配。
-        # 只统计活跃文档（archived 残留向量不参与检索，不触发重嵌循环）。
-        active_ids = {d.id for d in self._docs(conn_id)}
-        active_vecs = {k: v for k, v in self._vec.get(conn_id, {}).items() if k in active_ids}
-        active_vecs.update(self._table_vec.get(conn_id, {}))
-        dims = {len(v) for v in active_vecs.values() if v}
+        # 维度自愈：表级向量维度混杂（旧模型残留）也触发重嵌，避免检索 matmul 不匹配。
+        active_vecs = {k: v for k, v in self._table_vec.get(conn_id, {}).items() if v}
+        dims = {len(v) for v in active_vecs.values()}
         dim_mismatch = len(dims) > 1
         if cur == stored and not dim_mismatch:
             return False
-        schema = self._schema.get(conn_id)
-        if schema is None:
+        if not self._tables.get(conn_id):
             return False
-        # 顺带清理归档文档的残留向量（不在活跃文档集合）
-        self._vec[conn_id] = {k: v for k, v in self._vec.get(conn_id, {}).items() if k in active_ids}
-        await self._embed_docs(conn_id, self._docs(conn_id))
-        await self._embed_table_docs(conn_id, schema)
+        await self._embed_tables(conn_id)
         self._artifact_fingerprint[conn_id] = cur
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
@@ -507,13 +531,10 @@ class KnowledgeBase:
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
         self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        # 向量化（结构文档桥接；Task 2 统一重做为表级 chunk）
+        # 向量化（一表一 chunk，spec §4）：统一表级嵌入
         if on_progress:
             on_progress("向量化", 45, None)
-        await self._embed_docs(conn_id, self._docs(conn_id), on_progress=on_progress, p0=45, p1=75)
-        if on_progress:
-            on_progress("向量化", 80, None)
-        await self._embed_table_docs(conn_id, schema, on_progress=on_progress, p0=80, p1=90)
+        await self._embed_tables(conn_id, on_progress=on_progress, p0=45, p1=90)
         if on_progress:
             on_progress("落盘", 95, None)
         self._rebuild_vstore(conn_id)
@@ -682,7 +703,7 @@ class KnowledgeBase:
         auto = self._auto.get(conn_id, [])
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        # 2. 删除的表：auto 文档归档 + 移除表级向量 + 移除文档向量
+        # 2. 删除的表：auto 文档归档 + 移除表级向量
         removed = set(diff["removed_tables"])
         for d in auto:
             if d.table in removed and not d.archived:
@@ -691,13 +712,8 @@ class KnowledgeBase:
         tv = self._table_vec.get(conn_id, {})
         for t in removed:
             tv.pop(t, None)
-        if removed:
-            vec = self._vec.get(conn_id, {})
-            for d in auto:
-                if d.table in removed:
-                    vec.pop(d.id, None)
 
-        # 3. 新增/变化表：移除旧 auto 文档（该表）→ 重新生成 → 重嵌入
+        # 3. 新增/变化表：移除旧 auto 文档（该表）→ 重新生成 → 表级向量重算
         rebuild_tables = touched - removed
         docs_added = 0
         if rebuild_tables:
@@ -708,13 +724,8 @@ class KnowledgeBase:
             auto.extend(new_docs)
             docs_added = len(new_docs)
             self._auto[conn_id] = auto
-            # 重嵌入：移除这些文档的旧向量，嵌入新文档
-            vec = self._vec.get(conn_id, {})
-            for d in new_docs:
-                vec.pop(d.id, None)
-            await self._embed_docs(conn_id, new_docs)
-            # 表级向量：变化表重算
-            await self._embed_table_docs_for(conn_id, new_schema, rebuild_tables)
+            # 变化表向量重算（一表一 chunk 收口，其余表向量保留）
+            await self._embed_tables(conn_id, rebuild_tables)
         else:
             self._auto[conn_id] = auto
 
@@ -792,43 +803,82 @@ class KnowledgeBase:
             **diff,
         }
 
-    def _table_embed_text(self, conn_id: str, name: str, tinfo: dict[str, Any],
-                          cols: list[dict[str, Any]]) -> str:
-        """表级向量文本（Task 2 表级 chunk 重做前的桥接）：优先 v2 TableKnowledge。"""
-        tk = self._tables.get(conn_id, {}).get(name)
-        table_tags = self._table_tags.get(conn_id, {})
-        lib = self._tags.get(conn_id, {})
-        confirmed = [n for n in table_tags.get(name, []) if lib.get(n, {}).get("status") == "confirmed"]
-        if tk is not None:
-            col_txt = "，".join(
-                f"{ci.name}（{ci.type}"
-                f"{'：' + ci.comment if ci.comment else ''}"
-                f"{'；可选值 ' + ci.values if ci.values else ''}）"
-                for ci in tk.columns.values()
-            )
-            comment = tk.comment or tk.db_comment
-            return f"{name} 表：{col_txt}；注释：{comment}；领域标签：{'、'.join(confirmed)}"
-        col_txt = "，".join(
-            f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
-            for c in cols
-        )
-        return f"{name} 表：{col_txt}；注释：{tinfo.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
+    # ---------- 一表一 chunk（spec §4 向量合一） ----------
+    def _synthesize_table_text(self, conn_id: str, tk: TableKnowledge) -> str:
+        """合成可读表描述（embedding 文本，spec §4 格式）。
 
-    async def _embed_table_docs_for(self, conn_id: str, schema: dict[str, Any], tables: set[str]) -> None:
-        """只重算指定表的表级向量（增量用）。"""
-        snap = self._schema.get(conn_id, {})
-        columns = snap.get("columns", [])
-        vecs = dict(self._table_vec.get(conn_id, {}))
-        for t in tables:
-            tinfo = next((x for x in snap.get("tables", []) if x.get("name") == t), {})
-            cols = [c for c in columns if c.get("table") == t]
-            text = self._table_embed_text(conn_id, t, tinfo, cols)
+        - confirmed 列知识（comment/values/example）优先入文；
+        - 未确认仅结构壳（类型 + 库注释兜底）；未授权构建天然无 values/example；
+        - 表注释取 confirmed 的 AI 注释，否则回退 db_comment。
+        例：orders，订单表。字段有：id：主键，订单ID，示例为123；status：订单状态，可选值：S=已发货、R=已退货
+        """
+        header = tk.comment if tk.status == "confirmed" else tk.db_comment
+        rows: list[str] = []
+        for ci in tk.columns.values():
+            parts = [ci.name]
+            marks = []
+            if ci.pk:
+                marks.append("主键")
+            if ci.fk:
+                marks.append("外键")
+            if marks:
+                parts.append("、".join(marks))
+            if ci.status == "confirmed":
+                if ci.comment:
+                    parts.append(ci.comment)
+                if ci.values:
+                    parts.append(f"可选值：{ci.values}")
+                if ci.example:
+                    parts.append(f"示例为{ci.example}")
+            else:
+                if ci.type:
+                    parts.append(ci.type)
+                if ci.db_comment:
+                    parts.append(ci.db_comment)
+            rows.append(f"{parts[0]}：" + "，".join(parts[1:]) if len(parts) > 1 else parts[0])
+        head = f"{tk.name}，{header}" if header else tk.name
+        return f"{head}。字段有：{'；'.join(rows) or '无'}"
+
+    def _table_payload(self, conn_id: str, tk: TableKnowledge) -> dict[str, Any]:
+        """表级 chunk payload（spec §4）：结构化信息（渲染在 T4，此处仅存储透传）。"""
+        draft_count = (1 if tk.status == "draft" else 0) + sum(
+            1 for ci in tk.columns.values() if ci.status == "draft"
+        )
+        return {
+            "ddl": tk.ddl,
+            "tags": list(self._table_tags.get(conn_id, {}).get(tk.name, [])),
+            "layout": tk.layout,
+            "draft_count": draft_count,
+            "updated_at": self._synced_at.get(conn_id, ""),
+        }
+
+    async def _embed_tables(self, conn_id: str, tables: set[str] | None = None,
+                            on_progress: Any | None = None, p0: int = 45, p1: int = 90) -> None:
+        """统一表级嵌入（一表一 chunk）：文本 = _synthesize_table_text，key = 表名。
+
+        tables=None → 全量表（全量构建/重嵌）；否则只重算这些表（增量同步，其余保留）。
+        """
+        tabs = self._tables.get(conn_id, {})
+        targets = [t for t in tabs if tables is None or t in tables]
+        if not targets:
+            return
+        vecs: dict[str, list[float]] = {}
+        n = len(targets)
+        for i, name in enumerate(targets):
+            if on_progress and i % max(1, n // 4) == 0:
+                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n), None)
             try:
-                vecs[t] = await self._emb.embed(text)
+                vecs[name] = await self._emb.embed(self._synthesize_table_text(conn_id, tabs[name]))
             except Exception as e:
-                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, t, e)
-                vecs[t] = [0.0]
-        self._table_vec[conn_id] = vecs
+                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, name, e)
+                vecs[name] = [0.0]
+        if tables is None:
+            self._table_vec[conn_id] = vecs
+        else:
+            cur = self._table_vec.get(conn_id, {})
+            for t in targets:
+                cur.pop(t, None)
+            self._table_vec[conn_id] = {**cur, **vecs}
 
     def needs_sync(self, conn_id: str, schema: dict[str, Any]) -> bool:
         """指纹对比：schema 是否有变化（周期任务/手动检查的零开销预判）。"""
@@ -866,51 +916,7 @@ class KnowledgeBase:
         )
         return result
 
-    async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any],
-                                on_progress: Any | None = None, p0: int = 80, p1: int = 90) -> None:
-        """每张表一条"表级文档"向量（表名+列名+类型+注释+标签）——供向量路由语义召回。
-
-        与文档级向量互补：文档级管"注释/草案召回"，表级管"问题→表"定位，
-        标签覆盖率不足时由向量兜底。构建时算好，持久化进 artifact。
-        """
-        snap = self._schema.get(conn_id, {})
-        tables = snap.get("tables", [])
-        columns = snap.get("columns", [])
-        if not tables:
-            return
-        vecs: dict[str, list[float]] = {}
-        n = len(tables)
-        for i, t in enumerate(tables):
-            if on_progress and i % max(1, n // 4) == 0:
-                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n), None)
-            name = t.get("name", "")
-            if not name:
-                continue
-            cols = [c for c in columns if c.get("table") == name]
-            text = self._table_embed_text(conn_id, name, t, cols)
-            try:
-                vecs[name] = await self._emb.embed(text)
-            except Exception as e:
-                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, name, e)
-                vecs[name] = [0.0]
-        self._table_vec[conn_id] = vecs
-
-    async def _embed_docs(self, conn_id: str, docs: list[KnowledgeDoc],
-                          on_progress: Any | None = None, p0: int = 40, p1: int = 75) -> None:
-        vecs: dict[str, list[float]] = {}
-        text_by_id = {d.id: self._doc_text(d) for d in docs}
-        n = len(text_by_id)
-        for i, (did, text) in enumerate(text_by_id.items()):
-            if on_progress and i % max(1, n // 5) == 0:
-                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n), None)
-            try:
-                vecs[did] = await self._emb.embed(text)
-            except Exception as e:
-                logger.warning("[kb.embed] conn=%s 文档向量失败 doc=%s：%s", conn_id, did, e)
-                vecs[did] = [0.0]
-        self._vec[conn_id] = {**self._vec.get(conn_id, {}), **vecs}
-
-    # ---------- 统一向量索引（VectorStore，doc+table 归一） ----------
+    # ---------- 统一向量索引（VectorStore，单一表级 chunk 体系） ----------
     def _vector_store(self, conn_id: str) -> VectorStore:
         vs = self._vstore.get(conn_id)
         if vs is None:
@@ -920,10 +926,10 @@ class KnowledgeBase:
         return vs
 
     def _rebuild_vstore(self, conn_id: str) -> None:
-        """把 _vec（文档级）+ _table_vec（表级）归一为带 collection/metadata 的 chunk 索引。
+        """单体系重建：每表一条 VectorChunk（collection=table，一表一 chunk，spec §4）。
 
-        doc chunk:  collection=doc, metadata={source, status, kind} → 可过滤已确认/来源
-        table chunk: collection=table, metadata={table} → 问题→表路由
+        id=tbl-{name}；text=可读表描述；metadata={table} 过滤区；
+        payload=结构化信息（ddl/tags/layout/draft_count/updated_at）。
         向量维度统一对齐主维度（旧 artifact 可能有嵌入失败残留的 [0.0] 短向量）。
         """
         from collections import Counter
@@ -931,11 +937,10 @@ class KnowledgeBase:
         chunks: list[VectorChunk] = []
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         fp = self._artifact_fingerprint.get(conn_id, "")
+        tabs = self._tables.get(conn_id, {})
+        vecs = self._table_vec.get(conn_id, {})
         # 主维度：出现最多的向量长度（doubao=2048 / 哈希=256）
-        all_vecs = [
-            v for v in list(self._vec.get(conn_id, {}).values()) + list(self._table_vec.get(conn_id, {}).values())
-            if v
-        ]
+        all_vecs = [v for v in vecs.values() if v]
         main_dim = Counter(len(v) for v in all_vecs).most_common(1)[0][0] if all_vecs else 256
 
         def _aligned(vec: list[float]) -> list[float]:
@@ -943,48 +948,25 @@ class KnowledgeBase:
                 return vec
             return (vec[:main_dim] + [0.0] * main_dim)[:main_dim]
 
-        for d in self._docs(conn_id):
-            vec = self._vec.get(conn_id, {}).get(d.id)
+        for name, tk in tabs.items():
+            vec = vecs.get(name)
             if not vec:
                 continue
             chunks.append(VectorChunk(
-                id=d.id, collection="doc",
-                text=f"{d.title} {d.body}",
-                metadata={"source": d.source, "status": d.status, "kind": d.kind},
-                vector=_aligned(vec), fingerprint=fp, updated_at=d.updated_at or now,
-            ))
-        snap = self._schema.get(conn_id, {})
-        for tname, vec in self._table_vec.get(conn_id, {}).items():
-            cols = [c for c in snap.get("columns", []) if c.get("table") == tname]
-            col_txt = " ".join(f"{c.get('name', '')} {c.get('comment', '')}" for c in cols)
-            chunks.append(VectorChunk(
-                id=tname, collection="table",
-                text=f"{tname} {col_txt}",
-                metadata={"table": tname},
-                vector=_aligned(vec), fingerprint=fp, updated_at=now,
+                id=f"tbl-{name}", collection="table",
+                text=self._synthesize_table_text(conn_id, tk),
+                metadata={"table": name},
+                payload=self._table_payload(conn_id, tk),
+                vector=_aligned(vec), fingerprint=fp,
+                updated_at=self._synced_at.get(conn_id, "") or now,
             ))
         self._vstore[conn_id] = NumpyVectorStore()
         self._vstore[conn_id].set_chunks(chunks)
 
-    # ---------- 向量 ----------
-    @staticmethod
-    def _doc_text(d: KnowledgeDoc) -> str:
-        return f"{d.title or ''} {d.body or ''} {' '.join(d.tags or [])}"
-
-    async def _ensure_vectors(self, conn_id: str) -> dict[str, list[float]]:
-        vecs = self._vec.setdefault(conn_id, {})
-        missing = [d for d in self._docs(conn_id) if d.id not in vecs]
-        if missing:
-            await self._embed_docs(conn_id, missing)
-        return self._vec[conn_id]
-
     # ---------- 检索 ----------
     def _docs(self, conn_id: str) -> list[KnowledgeDoc]:
-        """全部活跃文档（过滤 archived——已删除表的归档文档不参与检索/向量/列表）。
-
-        v2 起无独立草稿文档：AI 注释在 TableKnowledge/ColumnInfo 上（Task 2 随
-        表级 chunk 统一进检索）；此处保留结构文档 + 用户手写笔记的桥接检索。
-        """
+        """全部活跃文档（过滤 archived）——仅剩结构文档 + 用户手写笔记（列表/审计用，
+        不再进向量检索；检索统一走表级知识卡）。"""
         return [
             d for d in (
                 self._auto.get(conn_id, [])
@@ -1008,74 +990,77 @@ class KnowledgeBase:
         if conn_id not in self._auto:
             self._load_conn(conn_id)
 
-    async def retrieve(self, conn_id: str, query: str = "", table: str | None = None, k: int = 10) -> list[KnowledgeDoc]:
+    async def retrieve(self, conn_id: str, query: str = "", table: str | None = None, k: int = 10) -> list[TableCard]:
+        """检索命中表知识卡（一表一卡，spec §4）：关键词 × 表级向量 × 图谱邻居扩散。
+
+        - 关键词词面命中 / 向量语义召回（同一 chunk 集）；
+        - 已确认（payload.draft_count=0）优先于 AI 草案；
+        - 图谱扩展：相邻表高分 → 本表加分（FK 边连通子图）；
+        - 零命中（空查询/无相关）回退全表排序，保证返回非空。
+        """
         if conn_id not in self._auto:
             self._load_conn(conn_id)  # 重启后未重新构建也能用上次的知识
         await self.reembed_if_needed(conn_id)  # 嵌入模型变化 → 向量重嵌（否则检索维度不匹配）
-        docs = self._docs(conn_id)
-        if not docs:
+        tabs = self._tables.get(conn_id, {})
+        if not tabs:
             return []
-        vecs = await self._ensure_vectors(conn_id)
         tokens = [t for t in re.split(r"[\s,，。；;：:、/\\|()（）]+", (query or "").lower()) if t]
         q = (query or "").lower()
         tgt = (table or "").lower()
         qvec = await self._emb.embed(query) if query else None
+        vec_scores = self._vector_store(conn_id).scores_all(qvec, collection="table") if qvec is not None else {}
 
-        def kw_score(d: KnowledgeDoc) -> float:
-            blob = (d.title + " " + d.body + " " + " ".join(d.tags)).lower()
+        texts: dict[str, str] = {}
+        payloads: dict[str, dict[str, Any]] = {}
+        for name, tk in tabs.items():
+            texts[name] = self._synthesize_table_text(conn_id, tk)
+            payloads[name] = self._table_payload(conn_id, tk)
+
+        base: dict[str, float] = {}
+        for name in tabs:
+            blob = texts[name].lower()
             s = float(sum(1 for t in tokens if t in blob))
             if q and q in blob:
                 s += 1.0
+            if qvec is not None:
+                s += 2.0 * vec_scores.get(f"tbl-{name}", 0.0)
             if tgt:
-                if d.table and d.table.lower() == tgt:
+                if name.lower() == tgt:
                     s += 3.0
                 elif tgt in blob:
                     s += 2.0
-            return s
-
-        vec_scores = self._vector_store(conn_id).scores_all(qvec) if qvec is not None else {}
-        base: dict[str, float] = {}
-        for d in docs:
-            s = kw_score(d)
-            if qvec is not None:
-                s += 2.0 * vec_scores.get(d.id, 0.0)
-            # 已确认（auto/user）优先于 AI 草案
-            if d.status == "confirmed":
+            # 已确认（无 draft）优先于 AI 草案
+            if payloads[name].get("draft_count", 0) == 0:
                 s += 1.5
-            base[d.id] = s
+            base[name] = s
 
-        # 图谱扩展：相邻表高分 → 本表加分（FK + 值重叠边）
+        # 图谱扩展：相邻表高分 → 本表加分（FK 边）
         neighbors = self._neighbors(conn_id)
-        by_table: dict[str, list[str]] = {}
-        for d in docs:
-            if d.table:
-                by_table.setdefault(d.table.lower(), []).append(d.id)
         final = dict(base)
-        for d in docs:
-            if not d.table:
-                continue
-            best = 0.0
-            for nt in neighbors.get(d.table.lower(), ()):
-                best = max(best, max((base.get(i, 0.0) for i in by_table.get(nt, ())), default=0.0))
+        for name in tabs:
+            best = max((base.get(nt, 0.0) for nt in neighbors.get(name.lower(), ())), default=0.0)
             if best > 0:
-                final[d.id] += 0.35 * best
+                final[name] += 0.35 * best
 
-        scored = sorted(docs, key=lambda d: final.get(d.id, 0.0), reverse=True)
-        if not any(final.get(d.id, 0.0) > 0 for d in docs):
-            scored = docs
+        scored = sorted(tabs.keys(), key=lambda n: final.get(n, 0.0), reverse=True)
+        if not any(final.get(n, 0.0) > 0 for n in tabs):
+            scored = list(tabs.keys())
         # 记录检索阶段的嵌入用量
         self._log_embedding_usage(conn_id, "retrieve")
-        return scored[:k]
+        return [
+            TableCard(table=n, text=texts[n], payload=payloads[n], score=round(final.get(n, 0.0), 4))
+            for n in scored[:max(1, k)]
+        ]
 
     async def to_context(self, conn_id: str, query: str = "", table: str | None = None, k: int = 8) -> str:
-        """转成给 AI 的上下文文本（结构+标注，无行数据）。"""
-        docs = await self.retrieve(conn_id, query, table, k)
-        if not docs:
+        """转成给 AI 的上下文文本（spec §4）：【知识库】段为命中表的完整知识卡列表。"""
+        cards = await self.retrieve(conn_id, query, table, k)
+        if not cards:
             return ""
         lines = ["【知识库】"]
-        for d in docs:
-            mark = "" if d.status == "confirmed" else "（AI 草案，待确认）"
-            lines.append(f"- [{d.kind}]{mark} {d.title}: {d.body}")
+        for c in cards:
+            mark = "" if c.payload.get("draft_count", 0) == 0 else "（AI 草案，待确认）"
+            lines.append(f"- [表]{mark} {c.text}")
         return "\n".join(lines)
 
     # ---------- AI 草案落库 + 人工确认（v2：写 TableKnowledge/ColumnInfo） ----------
@@ -1164,7 +1149,7 @@ class KnowledgeBase:
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
         for d in (self._auto, self._user, self._samples, self._graph,
-                  self._vec, self._tags, self._table_tags, self._tables, self._schema,
+                  self._tags, self._table_tags, self._tables, self._schema,
                   self._table_vec, self._artifact_fingerprint, self._vstore,
                   self._schema_fingerprint_map, self._edge_tombstones, self._synced_at,
                   self._llm_graph_edges, self._llm_edge_tombstones):
@@ -1177,9 +1162,11 @@ class KnowledgeBase:
 
     @staticmethod
     def _llm_edge_key(e: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
-        """LLM 边的去重键（用于墓碑对比）。"""
-        return (e.get("from_table", ""), e.get("to_table", ""),
-                e.get("from_col"), e.get("to_col"))
+        """LLM 边的去重/墓碑键（边 v2：字段对，方向无关，与 FK 墓碑同语义）。"""
+        a = (e.get("from_table", ""), e.get("from_col") or "")
+        b = (e.get("to_table", ""), e.get("to_col") or "")
+        x, y = sorted([a, b])
+        return (x[0], x[1], y[0], y[1])
 
     def confirm_graph_edges(self, conn_id: str, from_table: str | None = None) -> int:
         """确认 LLM draft 边 → 写入正式图谱（from_table=None 则确认全部）。
@@ -1204,7 +1191,7 @@ class KnowledgeBase:
             self._llm_edge_tombstones[conn_id] = [
                 t for t in tombstones if self._llm_edge_key(t) not in confirmed_keys
             ]
-        # 写入正式图谱
+        # 写入正式图谱（边 v2：kind=llm + cardinality + reason）
         edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
         existing = {(e["from"], e["to"], e.get("from_col"), e.get("to_col")) for e in edges}
         added = 0
@@ -1215,7 +1202,8 @@ class KnowledgeBase:
             edges.append({
                 "from": e["from_table"], "from_col": e.get("from_col"),
                 "to": e["to_table"], "to_col": e.get("to_col"),
-                "kind": "semantic", "weight": 1.0,
+                "kind": "llm", "weight": 1.0,
+                "cardinality": e.get("cardinality") or "n:1",
                 "reason": e.get("reason", ""),
             })
             added += 1
@@ -1405,32 +1393,28 @@ class KnowledgeBase:
         return picks
 
     async def vector_route_tables(self, conn_id: str, question: str, top_k: int = 6) -> list[tuple[str, float]]:
-        """向量通道：问题向量 × 表级文档向量 → top-K 表（语义召回，不依赖标签覆盖率）。
+        """向量通道：问题向量 × 表级 chunk（与 retrieve 同一 chunk 集）→ top-K 表。
 
-        离线 HashingEmbedder 只桥接表面重叠，因此叠加词面加权作为底线：
-        表名/注释/列名与问题同词 → 加分（配 API 真语义 embedder 时语义分数自动更强）。
+        语义召回不依赖标签覆盖率；离线 HashingEmbedder 只桥接表面重叠，
+        因此叠加词面加权作为底线：表名/字段/注释与问题同词 → 加分
+        （配 API 真语义 embedder 时语义分数自动更强）。
         """
         await self.reembed_if_needed(conn_id)  # 嵌入模型变化 → 向量重嵌（维度一致）
-        vecs = self._table_vec.get(conn_id, {})
-        if not vecs or not (question or "").strip():
+        tabs = self._tables.get(conn_id, {})
+        if not tabs or not (question or "").strip():
             return []
         try:
             qvec = await self._emb.embed(question)
         except Exception:
             qvec = None
         ql = (question or "").lower()
-        snap = self._schema.get(conn_id, {})
-        col_blob = {t.get("name", ""): " ".join(
-            f"{c.get('name', '')} {c.get('comment', '')}"
-            for c in snap.get("columns", []) if c.get("table") == t.get("name")
-        ) for t in snap.get("tables", [])}
         base_vec = self._vector_store(conn_id).scores_all(qvec, collection="table") if qvec is not None else {}
         scored: list[tuple[str, float]] = []
-        for table in vecs.keys():
-            score = base_vec.get(table, 0.0)
-            # 词面加权：表名 / 中文词 / 列名出现在问题或反之中
-            blob = f"{table} {col_blob.get(table, '')}".lower()
-            if table.lower() in ql:
+        for name, tk in tabs.items():
+            score = base_vec.get(f"tbl-{name}", 0.0)
+            # 词面加权：表名 / 中文词 / 字段名出现在问题或反之中
+            blob = self._synthesize_table_text(conn_id, tk).lower()
+            if name.lower() in ql:
                 score += 0.6
             for tok in re.findall(r"[\u4e00-\u9fff]{2,}", ql):
                 if tok in blob:
@@ -1439,7 +1423,7 @@ class KnowledgeBase:
                 if tok in blob:
                     score += 0.2
             if score > 0.1:
-                scored.append((table, round(score, 4)))
+                scored.append((name, round(score, 4)))
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 
@@ -1495,6 +1479,7 @@ class KnowledgeBase:
         return doc
 
     def list_docs(self, conn_id: str, table: str | None = None) -> list[KnowledgeDoc]:
+        self.ensure_loaded(conn_id)
         docs = self._docs(conn_id)
         if table:
             docs = [d for d in docs if d.table == table]
@@ -1513,6 +1498,28 @@ class KnowledgeBase:
         return False
 
     # ---------- 审查视图 ----------
+    def table_card(self, conn_id: str, table: str) -> dict[str, Any] | None:
+        """单表知识卡（kb_read 单表查询用）：{table, text, payload}。"""
+        self.ensure_loaded(conn_id)
+        tk = self._tables.get(conn_id, {}).get(table)
+        if tk is None:
+            return None
+        return {
+            "table": table,
+            "text": self._synthesize_table_text(conn_id, tk),
+            "payload": self._table_payload(conn_id, tk),
+        }
+
+    def table_cards(self, conn_id: str) -> list[dict[str, Any]]:
+        """全部表知识卡（kb_read 全量查询用）。"""
+        self.ensure_loaded(conn_id)
+        out: list[dict[str, Any]] = []
+        for name in self._tables.get(conn_id, {}):
+            card = self.table_card(conn_id, name)
+            if card:
+                out.append(card)
+        return out
+
     def overview(self, conn_id: str) -> dict[str, Any]:
         """人工审查页的数据（v2 按表组织）：表块含逐列注释/取值对照/示例与确认状态。"""
         snap = self._schema.get(conn_id, {})
@@ -1600,34 +1607,48 @@ class KnowledgeBase:
 
     def add_graph_edge(self, conn_id: str, frm: str, to: str, kind: str,
                        frm_col: str | None = None, to_col: str | None = None,
-                       weight: float | None = None) -> dict[str, Any]:
-        """新增一条图谱边（user 为用户手动连线；fk/overlap 为恢复结构/取值边）。"""
+                       weight: float | None = None,
+                       cardinality: str = "n:1") -> dict[str, Any]:
+        """新增一条图谱边（边 v2：字段级端点 + 基数；from 恒为多侧）。
+
+        kind ∈ fk|overlap|user（user=手动连线）；cardinality ∈ n:1|1:1（默认 n:1）。
+        去重按字段对（from/from_col/to/to_col/kind）全量匹配。
+        """
         if kind not in ("fk", "overlap", "user"):
             raise ValueError("kind 必须是 fk|overlap|user")
+        if cardinality not in ("n:1", "1:1"):
+            raise ValueError("cardinality 必须是 n:1|1:1")
         tables = {t["name"] for t in self._schema.get(conn_id, {}).get("tables", [])}
         if frm not in tables or to not in tables:
             raise ValueError("未知表名")
         edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
         existing = next((e for e in edges
-                        if e["from"] == frm and e["to"] == to and e.get("kind") == kind), None)
+                         if e["from"] == frm and e["to"] == to and e.get("kind") == kind
+                         and e.get("from_col") == frm_col and e.get("to_col") == to_col), None)
         if existing:
             return existing
         e = {"from": frm, "from_col": frm_col, "to": to, "to_col": to_col,
-             "kind": kind, "weight": weight, "shared": None}
+             "kind": kind, "weight": weight, "shared": None,
+             "cardinality": cardinality,
+             "reason": "" if kind != "user" else "人工连线"}
         edges.append(e)
         self._save_conn(conn_id)
         return e
 
     def remove_graph_edge(self, conn_id: str, frm: str, to: str, kind: str) -> int:
-        """删除一条图谱边。删除结构/取值派生边时记入 tombstone，避免重建复活。"""
+        """删除一条图谱边。删除结构/取值派生边时按字段对记入 tombstone，避免重建复活。"""
         edges = self._graph.get(conn_id, {"edges": []})["edges"]
-        before = len(edges)
+        removed_edges = [e for e in edges
+                         if e["from"] == frm and e["to"] == to and e.get("kind") == kind]
         edges[:] = [e for e in edges
                     if not (e["from"] == frm and e["to"] == to and e.get("kind") == kind)]
-        removed = before - len(edges)
+        removed = len(removed_edges)
         if removed and kind in ("overlap", "fk"):
-            self._edge_tombstones.setdefault(conn_id, []).append(
-                {"from": frm, "to": to, "kind": kind})
+            self._edge_tombstones.setdefault(conn_id, []).extend(
+                {"from": e["from"], "from_col": e.get("from_col") or "",
+                 "to": e["to"], "to_col": e.get("to_col") or ""}
+                for e in removed_edges
+            )
         if removed:
             self._save_conn(conn_id)
         return removed

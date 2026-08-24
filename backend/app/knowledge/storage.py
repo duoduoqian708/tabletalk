@@ -119,7 +119,11 @@ class JsonStorage:
                 snap.tables = data.get("tables", {})
                 snap.auto = data.get("auto", [])
                 snap.samples = data.get("samples", {})
-                snap.edges = data.get("graph", {}).get("edges", [])
+                edges = data.get("graph", {}).get("edges", [])
+                for e in edges:
+                    e.setdefault("cardinality", "n:1")  # 旧库边无基数 → 默认 n:1
+                    e.setdefault("reason", "")
+                snap.edges = edges
                 snap.vec = data.get("vec", {})
                 snap.table_vec = data.get("table_vec", {})
                 snap.tags = data.get("tags", {})
@@ -189,7 +193,8 @@ CREATE TABLE IF NOT EXISTS docs (
 );
 CREATE TABLE IF NOT EXISTS edges (
   from_table TEXT, from_col TEXT, to_table TEXT, to_col TEXT,
-  kind TEXT, weight REAL, shared INTEGER
+  kind TEXT, weight REAL, shared INTEGER,
+  cardinality TEXT, reason TEXT
 );
 CREATE TABLE IF NOT EXISTS tags (name TEXT PRIMARY KEY, description TEXT, status TEXT);
 CREATE TABLE IF NOT EXISTS table_tags (table_name TEXT PRIMARY KEY, tags TEXT);
@@ -251,6 +256,13 @@ class SqliteStorage:
         if "archived" not in cols:
             conn.execute("ALTER TABLE docs ADD COLUMN archived INTEGER DEFAULT 0")
             conn.commit()
+        # 旧库迁移：edges 表补 cardinality/reason 列（边 v2，已存在则跳过）
+        ecols = {row["name"] for row in conn.execute("PRAGMA table_info(edges)")}
+        for col in ("cardinality", "reason"):
+            if col not in ecols:
+                conn.execute(f"ALTER TABLE edges ADD COLUMN {col} TEXT")
+        if "cardinality" not in ecols or "reason" not in ecols:
+            conn.commit()
         if self._vec_ok:
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
@@ -294,6 +306,8 @@ class SqliteStorage:
                     e = dict(row)
                     e["from"] = e.pop("from_table")
                     e["to"] = e.pop("to_table")
+                    e.setdefault("cardinality", "n:1")  # 旧库边无基数 → 默认 n:1
+                    e.setdefault("reason", "")
                     snap.edges.append(e)
                 for row in conn.execute("SELECT name, description, status FROM tags"):
                     snap.tags[row["name"]] = {"description": row["description"] or "", "status": row["status"]}
@@ -353,9 +367,11 @@ class SqliteStorage:
                     )
                 for e in snap.edges:
                     conn.execute(
-                        "INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, shared) VALUES (?,?,?,?,?,?,?)",
+                        "INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, shared, cardinality, reason) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
                         (e.get("from"), e.get("from_col"), e.get("to"), e.get("to_col"),
-                         e.get("kind"), e.get("weight"), e.get("shared")),
+                         e.get("kind"), e.get("weight"), e.get("shared"),
+                         e.get("cardinality") or "n:1", e.get("reason") or ""),
                     )
                 for name, v in snap.tags.items():
                     conn.execute("INSERT INTO tags (name, description, status) VALUES (?,?,?)",
