@@ -500,6 +500,7 @@ export const enUS: Messages = {
     pillPendingReview: 'Pending review',
     dataConsent: 'Data consent',
     dataConsentDesc: 'Building sends table structure and sample values to the configured AI service to generate annotations and tags; uncheck to use structure info only.',
+    expandTitle: 'Expand progress',
     rebuildAll: 'Rebuild all',
     enumRejectHint: '✕ withdraws the whole column (including confirmed entries)',
     confirmFail: 'Confirm failed: {msg}',

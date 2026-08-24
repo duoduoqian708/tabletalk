@@ -48,11 +48,11 @@ async def test_build_rejects_bad_trigger(client, app_state, conn_id):
 
 
 async def test_build_default_trigger_is_init(client, app_state, conn_id):
-    """不带 body 的旧调用兼容：默认 trigger=init 且照常留痕。"""
+    """不带 body 的旧调用兼容：默认 trigger=init、include_samples=False（spec §3.8 默认不授权）且照常留痕。"""
     r = await client.post(f"/api/v1/knowledge/{conn_id}/build")
     assert r.status_code == 200
     entries = app_state.audit.list(connection=conn_id, origin="kb_build")
     assert len(entries) == 1
     assert entries[0]["trigger"] == "init"
-    assert entries[0]["include_samples"] is True
+    assert entries[0]["include_samples"] is False
     await _drain_build(app_state, conn_id)

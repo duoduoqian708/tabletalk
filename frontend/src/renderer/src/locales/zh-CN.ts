@@ -498,6 +498,7 @@ export const zhCN = {
     pillPendingReview: '待审查',
     dataConsent: '数据使用确认',
     dataConsentDesc: '构建会将表结构与字段样本取值发送给已配置的 AI 服务用于生成注释与标签；取消勾选则仅使用结构信息。',
+    expandTitle: '展开进度',
     rebuildAll: '全部重构',
     enumRejectHint: '✕ 会将整列枚举撤下（含已确认条目）',
     confirmFail: '确认失败：{msg}',

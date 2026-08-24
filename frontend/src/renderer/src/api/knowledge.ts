@@ -39,14 +39,6 @@ export function tags(connId: string): Promise<TagLibrary> {
   return request(`/api/v1/knowledge/${connId}/tags`)
 }
 
-export function annotateTags(connId: string): Promise<{ tables: number; descriptions: number; new_tags: number; library_size: number }> {
-  return request(`/api/v1/knowledge/${connId}/annotate-tags`, { method: 'POST' })
-}
-
-export function annotateEnums(connId: string): Promise<{ columns: number; entries: number }> {
-  return request(`/api/v1/knowledge/${connId}/annotate-enums`, { method: 'POST' })
-}
-
 export function confirmEnum(connId: string, table: string, column: string): Promise<{ confirmed: number }> {
   return request(`/api/v1/knowledge/${connId}/enums/confirm`, { method: 'POST', body: JSON.stringify({ table, column }) })
 }

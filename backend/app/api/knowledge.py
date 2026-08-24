@@ -89,7 +89,7 @@ class GraphExcludeRequest(BaseModel):
 
 
 class BuildRequest(BaseModel):
-    include_samples: bool = True
+    include_samples: bool = False   # spec §3.8：默认不勾，零实例数据出网需显式授权
     trigger: str = "init"   # init | rebuild
 
 
@@ -158,7 +158,7 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
             include_samples=include_samples,
         )
 
-    state.build_jobs.start(conn_id, _run)
+    state.build_jobs.start(conn_id, _run, include_samples=body.include_samples)
     return {"job_id": conn_id, "kb_status": "building", "stage": "排队中"}
 
 

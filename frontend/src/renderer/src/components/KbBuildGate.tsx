@@ -18,13 +18,10 @@ export function KbBuildGate(): React.JSX.Element | null {
   const list = useConnections((s) => s.list)
   const forceConnId = useKbGate((s) => s.forceConnId)
   const clearForce = useKbGate((s) => s.clearForce)
-  const buildTrigger = useKbGate((s) => s.buildTrigger)
-  const closeBuildDialog = useKbGate((s) => s.closeBuildDialog)
   const { t } = useI18n()
   const [status, setStatus] = useState<KbStatus | null>(null)
   /** 「稍后」后的常驻胶囊态（boolean）：切连接重置，ready 后随浮卡一起消失 */
   const [dismissed, setDismissed] = useState(false)
-  const [includeSamples, setIncludeSamples] = useState(true)
   /** 构建中最小化：缩到右下角胶囊（构建未完成不允许彻底关闭） */
   const [minimized, setMinimized] = useState(false)
   /** 停止构建二次确认 */
@@ -33,8 +30,9 @@ export function KbBuildGate(): React.JSX.Element | null {
   /* 构建状态直接来自 store（SSE 实时推送，无轮询） */
   const buildBusy = useKnowledge((s) => s.busy)
   const buildProgress = useKnowledge((s) => s.buildProgress)
-  const buildTask = useKnowledge((s) => s.buildTask)
   const reattachBuild = useKnowledge((s) => s.reattachBuild)
+  /** 审阅弹窗开→关沿：confirm-all 后 kb_status 变 ready，本地 status 需同步刷新 */
+  const reviewOpen = useKbGate((s) => s.reviewOpen)
 
   const conn = list.find((c) => c.id === currentId) ?? null
 
@@ -84,6 +82,19 @@ export function KbBuildGate(): React.JSX.Element | null {
     }
   }, [buildBusy, currentId])
 
+  // 审阅弹窗关闭沿 → 重新查一次状态（confirm-all 提交后 kb_status 变 ready，浮卡/胶囊随之消失）
+  const wasReviewOpen = useRef(false)
+  useEffect(() => {
+    if (reviewOpen) {
+      wasReviewOpen.current = true
+      return
+    }
+    if (wasReviewOpen.current && currentId) {
+      wasReviewOpen.current = false
+      kbStatus(currentId).then((s) => s && setStatus(s)).catch(() => undefined)
+    }
+  }, [reviewOpen, currentId])
+
   /* 构建中 = store busy + 有进度（SSE 已连接）；此时强制显示，无视 dismissed */
   const isBuilding = buildBusy && buildProgress !== null
   const needsBuild = status !== null && status.kb_status !== 'ready'
@@ -94,7 +105,6 @@ export function KbBuildGate(): React.JSX.Element | null {
 
   const st = isBuilding ? 'building' : (status?.kb_status ?? 'none')
   const progress = buildProgress
-  const trig = buildTrigger
 
   /* 构建中且被最小化 → 右下角胶囊（仍显示进度，点击展开；可停止） */
   if (st === 'building' && minimized) {
@@ -124,14 +134,6 @@ export function KbBuildGate(): React.JSX.Element | null {
         </span>
       </div>
     )
-  }
-
-  async function startBuild(samples = true, trigger: 'init' | 'rebuild' = 'init'): Promise<void> {
-    if (!currentId) return
-    setStatus((s) => (s ? { ...s, kb_status: 'building', building: true } : s))
-    await buildTask(currentId, undefined, { trigger, includeSamples: samples })
-    // buildTask 完成后已刷新 overview；这里再同步一次 kb_status 兜底
-    if (currentId) kbStatus(currentId).then((s) => s && setStatus(s)).catch(() => undefined)
   }
 
   async function cancelBuild(): Promise<void> {
@@ -250,31 +252,6 @@ export function KbBuildGate(): React.JSX.Element | null {
               <button className="btn ghost" onClick={() => setShowCancelConfirm(false)}>{t('kb.dialogCancel')}</button>
               <button className="btn danger" onClick={() => { setShowCancelConfirm(false); void cancelBuild() }}>
                 {t('kb.cancelBuild')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 构建入口统一受控确认弹窗：开关由 kbgate store 驱动（trigger 决定文案） */}
-      {buildTrigger !== null && (
-        <div className="kb-dialog-mask" onClick={() => closeBuildDialog()}>
-          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="kb-dialog-title">{trig === 'rebuild' ? t('kb.rebuildTitle2') : t('kb.dialogTitle')}</div>
-            <label className="kb-dialog-option">
-              <input
-                type="checkbox"
-                checked={includeSamples}
-                onChange={(e) => setIncludeSamples(e.target.checked)}
-              />
-              <span>{t('kb.dialogSampleHint')}</span>
-            </label>
-            <p className="kb-dialog-sub">{t('kb.dialogSampleDesc')}</p>
-            <div className="kb-dialog-actions">
-              <button className="btn ghost" onClick={() => closeBuildDialog()}>{t('kb.dialogCancel')}</button>
-              <button className="btn save" disabled={buildBusy}
-                onClick={() => { void startBuild(includeSamples, trig ?? 'init'); closeBuildDialog() }}>
-                {trig === 'rebuild' ? t('kb.rebuildAll') : t('kb.dialogStart')}
               </button>
             </div>
           </div>

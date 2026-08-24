@@ -10,6 +10,7 @@ import { previewTable } from '@renderer/api/schema'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
+import { KbBuildConfirmDialog } from './KbBuildConfirmDialog'
 import { KbReviewModal } from './KbReviewModal'
 import { Graph3D } from './Graph3D'
 import { GraphSearch } from './GraphSearch'
@@ -443,6 +444,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         onEditConnection={(id) => { setEditingConnId(id); setModalOpen(true) }}
       />
       <KbBuildGate />
+      <KbBuildConfirmDialog />
       <KbReviewModal />
       <LoginDialog
         open={showLogin}
