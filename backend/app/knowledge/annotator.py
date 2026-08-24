@@ -447,37 +447,37 @@ def _parse_enum_items(text: str) -> list[dict[str, Any]]:
     return out
 
 
-async def annotate_enums(state: "AppState", conn_id: str) -> dict[str, Any]:
-    """AI 生成列级枚举取值字典（draft），写入知识库待人工确认。
+async def annotate_enums_core(
+    state: "AppState",
+    conn_id: str,
+    schema: dict[str, Any],
+    samples: dict[str, dict[str, list[Any]]],
+) -> dict[str, Any]:
+    """枚举抽取核心：调用方已备好 schema/samples。
 
-    枚举型列判定：样本去重取值数 ∈ [2, ENUM_MAX_VALUES]。AI 需样本取值才能解释含义，
-    因此枚举抽取总是发送去重取值（不单独受 kb_ai_annotation_samples 门控——无意义）。
+    授权门控在调用方（build 流水线按 include_samples 决定是否调用本函数）。
+    枚举解释必须发送去重取值才有意义，因此发送前经 llm_safe_samples 出网裁剪
+    （去掉审计/租户等噪声列），候选列判定同样基于裁剪后的样本。
     mock 网关时生成确定性占位含义，保证无 key 也能跑通管线。
     """
-    schema = await get_schema(state, conn_id)
-    rt = state.runtime.get()
-    samples: dict[str, dict[str, list[Any]]] = {}
-    if rt.kb_sample_rows > 0:
-        for t in schema["tables"]:
-            try:
-                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-            except Exception:
-                samples[t["name"]] = {}
+    from app.knowledge.ddl_context import llm_safe_samples  # noqa: PLC0415
+    safe = llm_safe_samples(samples, schema.get("columns", []))
 
     enum_cols = [
-        c for c in schema["columns"]
-        if 2 <= len(_distinct_enum_values(samples, c["table"], c["name"])) <= ENUM_MAX_VALUES
+        c for c in schema.get("columns", [])
+        if 2 <= len(_distinct_enum_values(safe, c["table"], c["name"])) <= ENUM_MAX_VALUES
     ]
     if not enum_cols:
-        return {"columns": 0, "entries": 0}
+        return {"columns": 0, "entries": 0, "added": 0}
 
+    rt = state.runtime.get()
     provider_cfg = rt.provider_config()
     if gw.is_effective_mock(provider_cfg):
-        items = _mock_enums(schema, samples)
+        items = _mock_enums(schema, safe)
     else:
         col_lines = []
         for c in enum_cols:
-            distinct = _distinct_enum_values(samples, c["table"], c["name"])
+            distinct = _distinct_enum_values(safe, c["table"], c["name"])
             col_lines.append(f"- {c['table']}.{c['name']}（类型 {c.get('type','')}）取值样本: {distinct}")
         prompt = (
             "你是数据库知识构建助手。下面给出若干列及其出现的取值样本。请为【每个取值】给出简短中文业务含义。\n"
@@ -490,7 +490,21 @@ async def annotate_enums(state: "AppState", conn_id: str) -> dict[str, Any]:
         items = _parse_enum_items(resp.content or "")
 
     added = state.knowledge.annotate_enums(conn_id, items)
-    return {"columns": len(items), "entries": added, "samples_used": True}
+    return {"columns": len(items), "entries": added, "added": added}
+
+
+async def annotate_enums(state: "AppState", conn_id: str) -> dict[str, Any]:
+    """兼容包装：自行取 schema + 采样后调核心函数（供既有独立 API 端点使用）。"""
+    schema = await get_schema(state, conn_id)
+    rt = state.runtime.get()
+    samples: dict[str, dict[str, list[Any]]] = {}
+    if rt.kb_sample_rows > 0:
+        for t in schema["tables"]:
+            try:
+                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
+            except Exception:
+                samples[t["name"]] = {}
+    return await annotate_enums_core(state, conn_id, schema, samples)
 
 
 # ---------- LLM 图谱识别（两轮：全局扫描 + 候选验证） ----------

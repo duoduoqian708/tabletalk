@@ -18,11 +18,12 @@ from typing import Any, Awaitable, Callable
 
 STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向量化", "落盘"]
 
-# 三阶段进度条（同一弹窗内三条独立进度）
+# 四阶段进度条（同一弹窗内四条独立进度；enums 受数据授权门控，未授权时无进度更新属预期）
 PHASES = [
     {"key": "annotate", "label": "AI 正在处理"},
     {"key": "tags", "label": "AI 标签提取"},
     {"key": "graph", "label": "AI 关系识别"},
+    {"key": "enums", "label": "AI 枚举字典"},
 ]
 
 BuildFn = Callable[[Callable[[str, int, str | None, str | None], None]], Awaitable[dict]]

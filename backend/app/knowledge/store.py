@@ -310,6 +310,7 @@ class KnowledgeBase:
         # ---- AI 语义增强：逐表注释 + 全局标签 ----
         ai_docs_added = 0
         ai_tags_added = 0
+        ai_enums_added = 0
         if enable_ai_annotation:
             from app.knowledge.annotator import annotate_domain, annotate_tables
             from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all
@@ -369,6 +370,22 @@ class KnowledgeBase:
             if on_progress:
                 on_progress("AI 关系识别", 100, None, phase="graph")
 
+            # 阶段四：枚举字典（需数据授权；未授权跳过——枚举解释必须发送取值）
+            if include_samples:
+                if on_progress:
+                    on_progress("枚举字典", 0, None, phase="enums")
+                try:
+                    from app.knowledge.annotator import annotate_enums_core
+                    enum_result = await annotate_enums_core(
+                        _st, conn_id, self._schema[conn_id],
+                        self._samples.get(conn_id, {}),
+                    )
+                    ai_enums_added = enum_result.get("added", 0)
+                except Exception:
+                    pass
+                if on_progress:
+                    on_progress("枚举字典", 100, None, phase="enums")
+
         # ---- 构图（程序 FK 边） ----
         if on_progress:
             on_progress("构图", 40, None)
@@ -394,6 +411,7 @@ class KnowledgeBase:
             "docs": len(self._auto[conn_id]),
             "ai_docs_added": ai_docs_added,
             "ai_tags_added": ai_tags_added,
+            "enums_added": ai_enums_added,
             "graph_edges": len(self._graph.get(conn_id, {}).get("edges", [])),
             "sample_cols": sum(
                 len(cols) for cols in self._samples.get(conn_id, {}).values()
@@ -492,14 +510,19 @@ class KnowledgeBase:
     async def incremental_build(
         self, conn_id: str, new_schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
+        include_samples: bool | None = None,
     ) -> dict[str, Any]:
         """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。
 
         - 新增/变化表：重生成 auto 文档（draft/user 不动）+ 重嵌入 + 表级向量
         - 删除表：auto 文档 archived（保留可回溯），移除表级向量与相关边
         - 图：基于新 schema + 合并样本全量重构图（快；墓碑自动遵守）
+        - include_samples: 数据授权门控（None=沿用运行时设置 kb_ai_annotation_samples）；
+          未授权时变化表不重提枚举（枚举解释必须发送取值）
         - 返回 diff 摘要
         """
+        if include_samples is None:
+            include_samples = bool(self._runtime and self._runtime.get().kb_ai_annotation_samples)
         old_schema = self._schema.get(conn_id, {})
         diff = self.diff_schema(old_schema, new_schema)
         if self.diff_is_empty(diff):
@@ -579,6 +602,7 @@ class KnowledgeBase:
         # 4. 增量 AI 注释：只为新增/变化表生成 AI 注释（不重做全库）
         ai_docs_added = 0
         ai_tags_added = 0
+        ai_enums_added = 0
         if rebuild_tables:
             try:
                 from app.knowledge.annotator import annotate_domain, annotate_tables
@@ -605,6 +629,28 @@ class KnowledgeBase:
                     ai_tags_added = domain_result.get("new_tags", 0)
             except Exception:
                 pass
+            # 变化表枚举重提（数据授权门控；独立容错不影响注释/标签流程）。
+            # samples 用合并后的 all_samples；schema 用新 schema 的变化表子集（只重提变化表）。
+            if include_samples:
+                try:
+                    from app.knowledge.annotator import annotate_enums_core
+                    sub_schema = {
+                        "tables": [
+                            t for t in new_schema.get("tables", [])
+                            if t["name"] in rebuild_tables
+                        ],
+                        "columns": [
+                            c for c in self._schema[conn_id].get("columns", [])
+                            if c["table"] in rebuild_tables
+                        ],
+                        "foreign_keys": [],
+                    }
+                    enum_result = await annotate_enums_core(
+                        _st, conn_id, sub_schema, all_samples,
+                    )
+                    ai_enums_added = enum_result.get("added", 0)
+                except Exception:
+                    pass
             # 嵌入新增的 AI draft 文档
             if ai_docs_added:
                 try:
@@ -628,6 +674,7 @@ class KnowledgeBase:
             "tables_added": len(diff["added_tables"]),
             "tables_removed": len(diff["removed_tables"]),
             "tables_changed": len(rebuild_tables),
+            "enums_added": ai_enums_added,
             **diff,
         }
 
@@ -661,8 +708,9 @@ class KnowledgeBase:
     async def sync(
         self, conn_id: str, schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
+        include_samples: bool | None = None,
     ) -> dict[str, Any]:
-        """增量同步入口：指纹对比 → 无变化零副作用；有变化跑 incremental_build。"""
+        """增量同步入口：指纹对比 → 无变化零副作用；有变化走 incremental_build。"""
         self.ensure_loaded(conn_id)
         new_fp = self._schema_fingerprint(schema)
         old_fp = self._schema_fingerprint_map.get(conn_id, "")
@@ -670,8 +718,8 @@ class KnowledgeBase:
             return {"changed": False, "fingerprint": new_fp, "tables_added": 0, "tables_removed": 0, "tables_changed": 0}
         if not self._auto.get(conn_id):
             # 未构建过的连接不应走增量（调用方应保证 ready）；防御性直接全量
-            return await self.build(conn_id, schema, samples)
-        result = await self.incremental_build(conn_id, schema, samples)
+            return await self.build(conn_id, schema, samples, include_samples=bool(include_samples))
+        result = await self.incremental_build(conn_id, schema, samples, include_samples=include_samples)
         result["fingerprint"] = new_fp
         return result
 
