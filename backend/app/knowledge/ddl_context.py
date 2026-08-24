@@ -24,9 +24,47 @@ NOISE_COLUMNS: set[str] = {
 }
 
 
+# 出网噪声列模式（子串匹配）：审计/租户/版本等无解析价值字段
+_NOISE_PAT = ("created_", "updated_", "_by", "creator", "updater", "modifier",
+              "is_deleted", "deleted_at", "version", "tenant_")
+# 长文本/二进制类型前缀：样本值对表理解无价值且浪费 token
+_LONGTYPES = ("TEXT", "CLOB", "BLOB", "JSON", "LONGTEXT", "MEDIUMTEXT", "BYTEA")
+
+
+def is_noise_column(col_name: str, col_type: str = "") -> bool:
+    """出网噪声列判定：审计/租户等无解析价值字段 + 长文本类型。
+
+    合并原有 NOISE_COLUMNS 精确集合规则与新模式/类型规则。
+    """
+    n = (col_name or "").lower()
+    if n in NOISE_COLUMNS:
+        return True
+    if any(p in n for p in _NOISE_PAT):
+        return True
+    t = (col_type or "").upper()
+    return any(t.startswith(lt) for lt in _LONGTYPES)
+
+
 def _is_noise_column(col_name: str) -> bool:
-    """判断列名是否为噪音列（时间戳/审计人/软删除标记）。"""
-    return col_name.lower() in NOISE_COLUMNS
+    """兼容包装：转发到 is_noise_column（仅按列名判定），旧调用点行为不变。"""
+    return is_noise_column(col_name)
+
+
+def llm_safe_samples(
+    samples: dict[str, dict[str, list]],
+    schema_columns: list[dict],
+) -> dict[str, dict[str, list]]:
+    """出网裁剪：去掉噪声列/长文本列的样本值。仅作用于发往 LLM 的副本；
+    本地计算不受影响。schema 未覆盖的表原样保留（无判据不误杀）。"""
+    allow: dict[str, set[str]] = {}
+    for c in schema_columns:
+        if not is_noise_column(c.get("name", ""), c.get("type", "")):
+            allow.setdefault(c.get("table", ""), set()).add(c["name"])
+    out: dict[str, dict[str, list]] = {}
+    for tbl, cols in samples.items():
+        ok = allow.get(tbl)
+        out[tbl] = {k: v for k, v in cols.items() if ok is None or k in ok}
+    return out
 
 
 async def generate_ddl(state: "AppState", conn_id: str, table: str) -> str:
