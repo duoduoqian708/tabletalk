@@ -32,6 +32,22 @@ def test_llm_safe_samples_unknown_table_kept():
     assert out == {"other": {"a": [1]}}
 
 
+def test_llm_safe_samples_drop_longtext_false_keeps_text_drops_noise_names():
+    """枚举场景（drop_longtext=False）：豁免长文本类型过滤——TEXT 低基数列恰是
+    枚举字典主目标（SQLite/PG 的 status 常为 TEXT）；噪声列名模式仍然剔除，
+    误发风险由枚举基数护栏 [2,50] 与值级截断兜底。"""
+    samples = {
+        "t": {
+            "id": [1, 2],
+            "status": ["P", "R"],
+            "created_by": ["a"],
+            "remark": ["x" * 100],
+        }
+    }
+    out = llm_safe_samples(samples, SCHEMA_COLS, drop_longtext=False)
+    assert set(out["t"].keys()) == {"id", "status", "remark"}
+
+
 def test_llm_safe_samples_empty_input():
     assert llm_safe_samples({}, SCHEMA_COLS) == {}
 

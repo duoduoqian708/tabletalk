@@ -461,7 +461,14 @@ async def annotate_enums_core(
     mock 网关时生成确定性占位含义，保证无 key 也能跑通管线。
     """
     from app.knowledge.ddl_context import llm_safe_samples  # noqa: PLC0415
-    safe = llm_safe_samples(samples, schema.get("columns", []))
+    # 枚举场景豁免长文本类型过滤（TEXT 低基数列是枚举主目标），仅按噪声列名裁剪
+    safe = llm_safe_samples(samples, schema.get("columns", []), drop_longtext=False)
+    # 值级截断兜底：长句截到 60 字符，防止 TEXT 列长句撑爆载荷；
+    # 候选判定/mock 产出/prompt 取值/入库键共用同一截断副本，保证字典与发送内容一致
+    safe = {
+        t: {c: [str(v)[:60] for v in vals] for c, vals in cols.items()}
+        for t, cols in safe.items()
+    }
 
     enum_cols = [
         c for c in schema.get("columns", [])

@@ -74,6 +74,26 @@ async def test_build_runs_enum_phase_when_authorized(app_state):
     assert "enums" not in phases
 
 
+async def test_text_typed_low_cardinality_column_still_extracted(app_state):
+    """TEXT 型低基数列不被长文本过滤误杀（SQLite/PG status 常为 TEXT），
+    仍产出枚举草案；入库 value 为截断后的字符串，与发送内容一致。"""
+    st = app_state
+    schema = _schema()
+    schema["columns"][1]["type"] = "TEXT"  # status 改为 TEXT：命中裁剪器长文本规则
+    long_val = "已支付-等待发货-" + "很长的状态说明" * 20  # 远超 60 字符
+    samples = _samples()
+    samples["orders"]["status"] = [long_val, "S"]
+
+    stats = await st.knowledge.build("c-text", schema, samples, include_samples=True)
+
+    drafts = {d["column"]: d for d in st.knowledge.enum_drafts("c-text")}
+    assert "status" in drafts
+    vals = {e["value"] for e in drafts["status"]["entries"]}
+    assert long_val[:60] in vals   # 截断值入库（字典键 = 发送内容）
+    assert long_val not in vals    # 原始长句不入库
+    assert stats["enums_added"] > 0
+
+
 async def test_incremental_rebuild_respects_enum_gate(app_state):
     """增量同步：未授权时变化表不重提枚举（新取值 F 不入库）；授权时重提。"""
     st = app_state

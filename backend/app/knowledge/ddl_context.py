@@ -52,12 +52,21 @@ def is_noise_column(col_name: str, col_type: str = "") -> bool:
 def llm_safe_samples(
     samples: dict[str, dict[str, list]],
     schema_columns: list[dict],
+    drop_longtext: bool = True,
 ) -> dict[str, dict[str, list]]:
     """出网裁剪：去掉噪声列/长文本列的样本值。仅作用于发往 LLM 的副本；
-    本地计算不受影响。schema 未覆盖的表原样保留（无判据不误杀）。"""
+    本地计算不受影响。schema 未覆盖的表原样保留（无判据不误杀）。
+
+    drop_longtext=True（默认，注释/图谱阶段）：噪声列名模式 + 长文本类型都剔除——
+    长文本样本对表理解无价值且浪费 token。
+    drop_longtext=False（枚举抽取阶段）：跳过类型判据，仅按噪声列名模式过滤。
+    理由：低基数枚举列常声明为 TEXT（SQLite/PG 尤甚），恰是枚举字典主目标；
+    枚举自身有基数护栏 [2, ENUM_MAX_VALUES] 与值级截断兜底，长文本误发风险可控。
+    """
     allow: dict[str, set[str]] = {}
     for c in schema_columns:
-        if not is_noise_column(c.get("name", ""), c.get("type", "")):
+        col_type = c.get("type", "") if drop_longtext else ""
+        if not is_noise_column(c.get("name", ""), col_type):
             allow.setdefault(c.get("table", ""), set()).add(c.get("name", ""))
     out: dict[str, dict[str, list]] = {}
     for tbl, cols in samples.items():
