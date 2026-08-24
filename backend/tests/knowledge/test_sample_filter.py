@@ -39,9 +39,19 @@ def test_llm_safe_samples_empty_input():
 def test_is_noise_column_case_insensitive_and_patterns():
     assert is_noise_column("CREATED_BY")           # 审计人模式
     assert is_noise_column("tenant_id")            # 租户模式
-    assert is_noise_column("row_version")          # 版本模式
     assert not is_noise_column("user_name")
     assert not is_noise_column("status")
+
+
+def test_is_noise_column_version_token_level():
+    """version 仅词元级命中，防止误伤业务列。"""
+    assert is_noise_column("row_version")          # _version 结尾
+    assert is_noise_column("version")              # 整词
+    assert is_noise_column("version_flag")         # version_ 开头词元
+    assert is_noise_column("schema_version_log")   # 含 _version_ 词元
+    assert is_noise_column("Row_Version")          # 大小写归一
+    assert not is_noise_column("conversion_rate")  # 子串误伤回归样例
+    assert not is_noise_column("diversion_flag")   # 子串误伤回归样例
 
 
 def test_is_noise_column_legacy_exact_set_still_hits():
