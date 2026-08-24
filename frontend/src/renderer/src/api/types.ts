@@ -216,12 +216,15 @@ export interface GraphDraftEdge {
   status?: 'previously_rejected'
 }
 
+/** 2D 图布局坐标（表名 → 画布中心点；overview 回读 / 拖拽写回） */
+export type GraphLayout = Record<string, { x: number; y: number }>
+
 export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
   synced_at?: string
   tables: KbTableView[]
-  graph: { edges: GraphEdge[]; excluded?: string[]; llm_draft_edges?: GraphDraftEdge[] }
+  graph: { edges: GraphEdge[]; excluded?: string[]; llm_draft_edges?: GraphDraftEdge[]; layout?: GraphLayout }
   tags: { library: TagInfo[]; tables: Record<string, string[]> }
   /** 待确认草案数（表+列注释） */
   draft_count: number

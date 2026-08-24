@@ -38,9 +38,11 @@ interface KnowledgeState {
   saveNote: (connId: string, table: string, note: string) => Promise<void>
   confirmAll: (connId: string) => Promise<void>
   /** 图谱编辑（持久化到知识库） */
-  addEdge: (connId: string, edge: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }) => Promise<void>
+  addEdge: (connId: string, edge: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null; cardinality?: 'n:1' | '1:1' }) => Promise<void>
   removeEdge: (connId: string, edge: { from_table: string; to_table: string; kind: string }) => Promise<void>
   setExcluded: (connId: string, table: string, excluded: boolean) => Promise<void>
+  /** 2D 图布局持久化（拖拽松手全量快照 → payload.layout） */
+  saveLayout: (connId: string, layout: Record<string, { x: number; y: number }>) => Promise<void>
   /** LLM 图谱 draft 边确认/拒绝 */
   confirmGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
   rejectGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
@@ -177,6 +179,13 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     } : {})
   },
 
+  async saveLayout(connId, layout) {
+    const r = await api.putGraphLayout(connId, layout)
+    set((s) => s.overview ? {
+      overview: { ...s.overview, graph: { ...s.overview.graph, layout: r.layout } }
+    } : {})
+  },
+
   async setExcluded(connId, table, excluded) {
     const r = await api.setExcluded(connId, table, excluded)
     set((s) => s.overview ? {
@@ -189,7 +198,10 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     try {
       const r = await api.confirmGraphDrafts(connId, fromTable)
       set((s) => s.overview ? {
-        overview: { ...s.overview, graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges } }
+        overview: {
+          ...s.overview,
+          graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges, edges: r.edges },
+        }
       } : {})
     } finally {
       set({ busy: false })
@@ -201,7 +213,10 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     try {
       const r = await api.rejectGraphDrafts(connId, fromTable)
       set((s) => s.overview ? {
-        overview: { ...s.overview, graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges } }
+        overview: {
+          ...s.overview,
+          graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges, edges: r.edges },
+        }
       } : {})
     } finally {
       set({ busy: false })

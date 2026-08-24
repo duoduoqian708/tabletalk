@@ -5641,7 +5641,7 @@ tr.clickable.open { background: var(--accent-dim); }
   pointer-events: none;
 }
 
-/* ── 删除按钮 ── */
+/* ── 删除/确认按钮 ── */
 .trg2d-delbtn {
   position: absolute;
   transform: translate(-50%, -50%);
@@ -5660,6 +5660,69 @@ tr.clickable.open { background: var(--accent-dim); }
   padding: 0;
 }
 .trg2d-delbtn:hover { background: var(--red-dim); transform: translate(-50%, -50%) scale(1.12); }
+.trg2d-okbtn {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--green) 45%, transparent);
+  background: var(--void-2);
+  color: var(--green);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.trg2d-okbtn:hover { background: color-mix(in srgb, var(--green) 18%, transparent); transform: translate(-50%, -50%) scale(1.12); }
+
+/* ── 宿主1：审阅弹窗右栏（关系列表 → 2D 关系图，T5） ── */
+.krm-col-cap.is-flex { display: flex; align-items: center; gap: 8px; }
+.krm-graph-cnt { letter-spacing: 0; text-transform: none; color: var(--ink-dim); }
+.krm-graph-hint { font-size: 9.5px; letter-spacing: 0; text-transform: none; color: var(--ink-faint); }
+.krm-graph-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+/* ── 宿主2：知识库编辑页 浏览/2D 编辑 形态切换（T5） ── */
+.kb-right-cap .spacer { flex: 1; }
+.kb-mode-toggle {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  overflow: hidden;
+}
+.kb-mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 3px 12px;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.kb-mode-btn + .kb-mode-btn { border-left: 1px solid var(--line-strong); }
+.kb-mode-btn:hover { color: var(--ink); }
+.kb-mode-btn.on { background: var(--accent-dim); color: var(--accent-soft); }
+.kb-trg2d-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
 
 /* ── 连线面板 ── */
 .trg2d-panel {

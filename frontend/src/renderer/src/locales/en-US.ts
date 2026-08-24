@@ -426,6 +426,7 @@ export const enUS: Messages = {
     del: 'Delete this relation',
     noCols: '(no column info)',
     failed: 'Failed to create',
+    confirmEdge: 'Confirm this AI-discovered relation',
   },
   kb: {
     title: 'Knowledge',
@@ -501,6 +502,8 @@ export const enUS: Messages = {
     statsDraft: 'Pending',
     graphCap: 'Relation graph · editable',
     graphHint: 'Click a node: link / note / remove · click an edge to delete',
+    graphModeBrowse: 'Browse',
+    graphModeEdit2d: '2D edit',
     noMatch: 'No match (without embedding model, lexical + graph-neighbor only)',
     searchResults: 'Search results · {n}',
     linkedToast: 'Linked {from} → {to}',

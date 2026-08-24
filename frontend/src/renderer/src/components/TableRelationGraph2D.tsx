@@ -28,6 +28,8 @@ export interface Trg2dDeleteEdge {
   to_table: string
   to_col?: string
   kind: string
+  /** draft 边宿主据此分流（llm+draft → 拒绝/确认草案，其余 → 删边） */
+  status?: string
 }
 
 export type Trg2dPoint = { x: number; y: number }
@@ -41,6 +43,8 @@ interface Props {
   columnsByTable: Record<string, string[]>
   onAddEdge: (e: Trg2dAddEdge) => Promise<void>
   onDeleteEdge: (e: Trg2dDeleteEdge) => Promise<void>
+  /** 选中 draft 边的确认操作（宿主缺省不显示 ✓ 按钮） */
+  onConfirmEdge?: (e: Trg2dDeleteEdge) => Promise<void>
   /** 拖拽结束回调一次（宿主负责持久化）；值为全部表的最终坐标快照 */
   onLayoutChange: (layout: Trg2dLayout) => void
   /** 受控坐标（如 payload.layout 回读）；本地拖拽在其上做乐观覆盖 */
@@ -144,7 +148,7 @@ interface EdgeGeom {
 }
 
 export function TableRelationGraph2D({
-  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onLayoutChange, layout, getTagColor, className,
+  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, getTagColor, className,
 }: Props): React.JSX.Element {
   const { t } = useI18n()
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -457,7 +461,19 @@ export function TableRelationGraph2D({
     setSelKey(null)
     void Promise.resolve(onDeleteEdge({
       from_table: e.from, from_col: e.from_col ?? undefined,
-      to_table: e.to, to_col: e.to_col ?? undefined, kind: e.kind,
+      to_table: e.to, to_col: e.to_col ?? undefined, kind: e.kind, status: e.status,
+    })).catch(() => {})
+  }
+
+  /** draft 边确认（✓）：与删除按钮并排出现在选中边中点 */
+  const confirmSelected = (): void => {
+    const g = edgeGeoms.find((x) => x.key === selKey)
+    if (!g || !onConfirmEdge) return
+    const e = g.edge
+    setSelKey(null)
+    void Promise.resolve(onConfirmEdge({
+      from_table: e.from, from_col: e.from_col ?? undefined,
+      to_table: e.to, to_col: e.to_col ?? undefined, kind: e.kind, status: e.status,
     })).catch(() => {})
   }
 
@@ -559,10 +575,16 @@ export function TableRelationGraph2D({
       {/* ── 缩放指示 ── */}
       <div className="trg2d-zoom">{Math.round(v.k * 100)}%</div>
 
-      {/* ── 选中边的删除按钮 ── */}
+      {/* ── 选中边的操作按钮（draft 边多一个 ✓ 确认） ── */}
       {selGeom && delScreen && (
-        <button type="button" className="trg2d-delbtn" style={{ left: delScreen.x, top: delScreen.y }}
-          title={t('trg2d.del')} onClick={deleteSelected}>✕</button>
+        <>
+          {selGeom.draft && onConfirmEdge && (
+            <button type="button" className="trg2d-okbtn" style={{ left: delScreen.x - 15, top: delScreen.y }}
+              title={t('trg2d.confirmEdge')} onClick={confirmSelected}>✓</button>
+          )}
+          <button type="button" className="trg2d-delbtn" style={{ left: delScreen.x + (selGeom.draft && onConfirmEdge ? 15 : 0), top: delScreen.y }}
+            title={t('trg2d.del')} onClick={deleteSelected}>✕</button>
+        </>
       )}
 
       {/* ── 连线面板（松手落在目标表上弹出）── */}

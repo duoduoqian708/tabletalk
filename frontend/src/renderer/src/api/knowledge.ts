@@ -145,6 +145,14 @@ export function setExcluded(connId: string, table: string, excluded: boolean): P
   })
 }
 
+/** 持久化 2D 图布局坐标（拖拽松手回传全量快照 → 各表 payload.layout）。 */
+export function putGraphLayout(connId: string, layout: Record<string, { x: number; y: number }>): Promise<{ saved: number; layout: Record<string, { x: number; y: number }> }> {
+  return request(`/api/v1/knowledge/${connId}/graph/layout`, {
+    method: 'PUT',
+    body: JSON.stringify({ layout }),
+  })
+}
+
 export interface GraphDraftEdge {
   from_table: string
   from_col: string | null
@@ -154,8 +162,8 @@ export interface GraphDraftEdge {
   source: string
 }
 
-/** 确认 LLM draft 边 → 写入正式图谱（fromTable=null 确认全部）。 */
-export function confirmGraphDrafts(connId: string, fromTable?: string | null): Promise<{ confirmed: number; llm_draft_edges: GraphDraftEdge[] }> {
+/** 确认 LLM draft 边 → 写入正式图谱（fromTable=null 确认全部）。返回新正式边供图即时刷新。 */
+export function confirmGraphDrafts(connId: string, fromTable?: string | null): Promise<{ confirmed: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
   return request(`/api/v1/knowledge/${connId}/graph/confirm`, {
     method: 'POST',
     body: JSON.stringify({ from_table: fromTable ?? null }),
@@ -163,7 +171,7 @@ export function confirmGraphDrafts(connId: string, fromTable?: string | null): P
 }
 
 /** 拒绝 LLM draft 边（从 draft 列表移除）。 */
-export function rejectGraphDrafts(connId: string, fromTable?: string | null): Promise<{ rejected: number; llm_draft_edges: GraphDraftEdge[] }> {
+export function rejectGraphDrafts(connId: string, fromTable?: string | null): Promise<{ rejected: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
   return request(`/api/v1/knowledge/${connId}/graph/reject`, {
     method: 'POST',
     body: JSON.stringify({ from_table: fromTable ?? null }),

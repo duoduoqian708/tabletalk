@@ -1570,6 +1570,7 @@ class KnowledgeBase:
                 "edges": self._graph.get(conn_id, {"edges": []}).get("edges", []),
                 "excluded": sorted(excluded),
                 "llm_draft_edges": self._llm_graph_edges.get(conn_id, []),
+                "layout": self.graph_layout(conn_id),
             },
             "tags": self.tags(conn_id),
             "draft_count": draft_count,
@@ -1604,6 +1605,35 @@ class KnowledgeBase:
         else:
             s.discard(table)
         self._save_conn(conn_id)
+
+    def graph_layout(self, conn_id: str) -> dict[str, dict[str, Any]]:
+        """2D 图布局坐标回读（表名 → {x,y}；仅含有坐标的表）。"""
+        return {
+            name: dict(tk.layout)
+            for name, tk in self._tables.get(conn_id, {}).items() if tk.layout
+        }
+
+    def set_layout(self, conn_id: str, layout: dict[str, Any]) -> int:
+        """写入 2D 图布局坐标（前端拖拽回传全量快照，spec §4 payload.layout）。
+
+        仅接受已知表名与 {x,y} 数值点；未知表忽略。只改 TableKnowledge.layout
+        并落盘快照——不动嵌入指纹，不触发重嵌（布局纯渲染态）。
+        返回实际写入的表数。
+        """
+        tabs = self._tables.get(conn_id, {})
+        n = 0
+        for name, pos in (layout or {}).items():
+            tk = tabs.get(name)
+            if tk is None or not isinstance(pos, dict):
+                continue
+            try:
+                tk.layout = {"x": float(pos.get("x", 0)), "y": float(pos.get("y", 0))}
+            except (TypeError, ValueError):
+                continue
+            n += 1
+        if n:
+            self._save_conn(conn_id)
+        return n
 
     def add_graph_edge(self, conn_id: str, frm: str, to: str, kind: str,
                        frm_col: str | None = None, to_col: str | None = None,

@@ -343,3 +343,41 @@ async def test_add_graph_edge_cardinality_and_field_dedup(tmp_path):
         raise AssertionError("非法基数应抛错")
     except ValueError:
         pass
+
+
+# ---------- T5：2D 图布局持久化（spec §4 payload.layout / §6 拖拽写回） ----------
+
+
+async def test_set_layout_roundtrip_and_overview(tmp_path):
+    """set_layout 写入已知表坐标 → overview.graph.layout 回读；未知表/坏点忽略。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    n = kb.set_layout("c1", {
+        "orders": {"x": 120.5, "y": 80},
+        "customers": {"x": 300, "y": 40},
+        "ghost_table": {"x": 1, "y": 1},   # 未知表忽略
+        "orders_bad": None,                 # 非法条目忽略（不存在的表）
+    })
+    assert n == 2
+    lay = kb.overview("c1")["graph"]["layout"]
+    assert lay["orders"] == {"x": 120.5, "y": 80}
+    assert lay["customers"] == {"x": 300, "y": 40}
+    assert "ghost_table" not in lay
+    # 坐标进 chunk payload.layout（spec §4）
+    tk = kb._tables["c1"]["orders"]
+    assert kb._table_payload("c1", tk)["layout"] == {"x": 120.5, "y": 80}
+
+
+async def test_layout_persists_across_instances_without_reembed(tmp_path):
+    """布局落盘跨实例保留；写入不动嵌入指纹（不触发重嵌）。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), _samples(), enable_ai_annotation=False)
+    fp = kb._artifact_fingerprint.get("c1", "")
+    assert kb.set_layout("c1", {"orders": {"x": 42, "y": 7}}) == 1
+    assert kb._artifact_fingerprint.get("c1", "") == fp  # 指纹未变
+    assert await kb.reembed_if_needed("c1") is False     # 不触发重嵌
+
+    kb2 = KnowledgeBase(tmp_path)
+    kb2.ensure_loaded("c1")
+    lay = kb2.overview("c1")["graph"]["layout"]
+    assert lay["orders"] == {"x": 42, "y": 7}

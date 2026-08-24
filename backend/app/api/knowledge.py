@@ -93,6 +93,11 @@ class GraphExcludeRequest(BaseModel):
     excluded: bool = True
 
 
+class GraphLayoutRequest(BaseModel):
+    """2D 图布局坐标快照（表名 → {x,y}），透传存入各表 payload.layout。"""
+    layout: dict[str, dict]
+
+
 class BuildRequest(BaseModel):
     include_samples: bool = False   # spec §3.8：默认不勾，零实例数据出网需显式授权
     trigger: str = "init"   # init | rebuild
@@ -344,6 +349,18 @@ async def exclude_table(conn_id: str, body: GraphExcludeRequest) -> dict:
     return {"excluded": state.knowledge.excluded_tables(conn_id)}
 
 
+@router.put("/{conn_id}/graph/layout")
+async def save_graph_layout(conn_id: str, body: GraphLayoutRequest) -> dict:
+    """持久化 2D 关系图布局坐标（写各表 tk.layout 并落盘；不动嵌入指纹、不触发重嵌）。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    saved = state.knowledge.set_layout(conn_id, body.layout)
+    return {"saved": saved, "layout": state.knowledge.graph_layout(conn_id)}
+
+
 class GraphConfirmRequest(BaseModel):
     from_table: str | None = None   # None = 确认全部
 
@@ -358,7 +375,9 @@ async def confirm_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = 
     state.knowledge.ensure_loaded(conn_id)
     ft = body.from_table if body else None
     added = state.knowledge.confirm_graph_edges(conn_id, from_table=ft)
-    return {"confirmed": added, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id)}
+    # 一并回传最新正式边：确认后的 llm 边立即可见（前端图无需整页刷新）
+    return {"confirmed": added, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id),
+            "edges": state.knowledge.graph(conn_id)["edges"]}
 
 
 @router.post("/{conn_id}/graph/reject")
@@ -371,7 +390,8 @@ async def reject_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = N
     state.knowledge.ensure_loaded(conn_id)
     ft = body.from_table if body else None
     removed = state.knowledge.reject_graph_edges(conn_id, from_table=ft)
-    return {"rejected": removed, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id)}
+    return {"rejected": removed, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id),
+            "edges": state.knowledge.graph(conn_id)["edges"]}
 
 
 @router.get("/{conn_id}/retrieve")

@@ -424,6 +424,7 @@ export const zhCN = {
     del: '删除这条关系',
     noCols: '（无字段信息）',
     failed: '创建失败',
+    confirmEdge: '确认这条 AI 发现的关系',
   },
   kb: {
     title: '知识库',
@@ -499,6 +500,8 @@ export const zhCN = {
     statsDraft: '待确认',
     graphCap: '关系图谱 · 可编辑',
     graphHint: '点击节点：连线 / 备注 / 移出 · 点击连线删除',
+    graphModeBrowse: '浏览图谱',
+    graphModeEdit2d: '2D 编辑',
     noMatch: '无匹配（未配置嵌入模型时仅词面+图谱邻居检索）',
     searchResults: '检索结果 · {n} 条',
     linkedToast: '已连线 {from} → {to}',

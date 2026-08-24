@@ -6,12 +6,15 @@ import { useKnowledge } from '@renderer/store/knowledge'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
+import { getTagColor } from '@renderer/utils/tagColors'
 import { GraphEditor } from './GraphEditor'
+import { TableRelationGraph2D } from './TableRelationGraph2D'
+import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hooks/useTrg2d'
 
 /* ═══════════════════════════════════════════════
    知识库主页（左右布局）
    左：tabs（审阅/文档/标签）+ 搜索 + 列表
-   右：关系图谱（GraphEditor）
+   右：关系图谱（GraphEditor 浏览 / TableRelationGraph2D 编辑 双形态切换）
    审核流程在 KbReviewModal（构建完成后弹出的审核弹窗）
    ═══════════════════════════════════════════════ */
 
@@ -68,6 +71,9 @@ export function KnowledgeReview(): React.JSX.Element {
   const [searching, setSearching] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  /** 右栏图谱形态：editor=原 3D 浏览（GraphEditor 不动）| 2d=TableRelationGraph2D 编辑 */
+  const [graphMode, setGraphMode] = useState<'editor' | '2d'>('editor')
+  const trg2dActions = useTrg2dActions(currentId)
 
   const totalPending = (overview?.draft_count ?? 0)
     + (overview?.tag_draft_count ?? 0)
@@ -492,25 +498,58 @@ export function KnowledgeReview(): React.JSX.Element {
               </div>
             </section>
 
-            {/* ============ 右：关系图谱（58%） ============ */}
+            {/* ============ 右：关系图谱（58%，浏览/2D 编辑双形态） ============ */}
             <section className="kb-right">
               <div className="kb-right-cap mono">
                 {t('kb.graphCap')}
                 <span className="kb-rc-hint">{t('kb.graphHint')}</span>
+                <span className="spacer" />
+                <span className="kb-mode-toggle" role="tablist">
+                  <button
+                    type="button"
+                    className={`kb-mode-btn${graphMode === 'editor' ? ' on' : ''}`}
+                    onClick={() => setGraphMode('editor')}
+                  >
+                    {t('kb.graphModeBrowse')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`kb-mode-btn${graphMode === '2d' ? ' on' : ''}`}
+                    onClick={() => setGraphMode('2d')}
+                  >
+                    {t('kb.graphModeEdit2d')}
+                  </button>
+                </span>
               </div>
-              <GraphEditor
-                tables={overview.tables.map((t) => ({
-                  name: t.name,
-                  row_count: t.column_count,
-                  column_count: t.column_count,
-                }))}
-                edges={overview.graph.edges}
-                excluded={overview.graph.excluded ?? []}
-                onAddEdge={(from, to) => void handleAddEdge(from, to)}
-                onDeleteEdge={(e) => void handleDeleteEdge(e)}
-                onExcludeNode={(name) => void handleExclude(name)}
-                onEditNode={(name) => focusEditNode(name)}
-              />
+              {graphMode === '2d' ? (
+                <div className="kb-trg2d-wrap">
+                  <TableRelationGraph2D
+                    tables={trgTables(overview)}
+                    edges={trgEdges(overview)}
+                    columnsByTable={trgColumns(overview)}
+                    layout={overview.graph.layout}
+                    getTagColor={(tag) => getTagColor(tag)}
+                    onAddEdge={(e) => trg2dActions.onAddEdge(e)}
+                    onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
+                    onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}
+                    onLayoutChange={trg2dActions.onLayoutChange}
+                  />
+                </div>
+              ) : (
+                <GraphEditor
+                  tables={overview.tables.map((t) => ({
+                    name: t.name,
+                    row_count: t.column_count,
+                    column_count: t.column_count,
+                  }))}
+                  edges={overview.graph.edges}
+                  excluded={overview.graph.excluded ?? []}
+                  onAddEdge={(from, to) => void handleAddEdge(from, to)}
+                  onDeleteEdge={(e) => void handleDeleteEdge(e)}
+                  onExcludeNode={(name) => void handleExclude(name)}
+                  onEditNode={(name) => focusEditNode(name)}
+                />
+              )}
             </section>
           </div>
         </>

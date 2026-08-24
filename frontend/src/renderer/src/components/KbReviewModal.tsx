@@ -6,16 +6,18 @@ import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
+import { getTagColor, loadColorMap, saveColorMap, TAG_COLORS } from '@renderer/utils/tagColors'
+import { TableRelationGraph2D } from './TableRelationGraph2D'
+import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hooks/useTrg2d'
 
 /* ═══════════════════════════════════════════════
    知识库审核弹窗（三栏审核 + 底部确认大按钮）
    不再由 kb_status===pending_review 自动弹出，
    经 kbgate.reviewOpen 受控开启（浮卡「去审查」/常驻胶囊）；
    确认提交成功自动关闭 → 进入知识库主页（左右布局）
+   右栏：TableRelationGraph2D 可编辑关系图（spec §6）
    ═══════════════════════════════════════════════ */
 
-/* ── 8 色标签色板 ── */
-const TAG_COLORS = ['#35d99a', '#63c8ff', '#ffb454', '#b18cff', '#ff6b81', '#2ee6a8', '#f472b6', '#fbbf24']
 const GRAY = '#5a6a7e'
 
 function bandColor(hex: string): string {
@@ -26,31 +28,17 @@ function tintBg(hex: string): string {
   const n = parseInt(hex.slice(1), 16)
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0.14)`
 }
-function loadColorMap(): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem('tabletalk-tag-colors') || '{}')
-  } catch {
-    return {}
-  }
-}
-function saveColorMap(m: Record<string, string>): void {
-  try {
-    localStorage.setItem('tabletalk-tag-colors', JSON.stringify(m))
-  } catch { /* ignore */ }
-}
 
 export function KbReviewModal(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, load, confirmComment, rejectComment,
-    confirmTag, rejectTag, saveNote, confirmAll, confirmGraphDraft, rejectGraphDraft } = useKnowledge()
+    confirmTag, rejectTag, saveNote, confirmAll } = useKnowledge()
 
   /* ── UI state ── */
   const [selTag, setSelTag] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [openCard, setOpenCard] = useState<string | null>(null)
-  const [relSrc, setRelSrc] = useState<'all' | 'fk' | 'llm' | 'user'>('all')
-  const [relSt, setRelSt] = useState<'all' | 'draft' | 'confirmed'>('all')
   const [noteEditing, setNoteEditing] = useState<string | null>(null)
   const [noteText, setNoteText] = useState('')
   const [creating, setCreating] = useState(false)
@@ -69,12 +57,12 @@ export function KbReviewModal(): React.JSX.Element | null {
   useEffect(() => { if (currentId) void load(currentId) }, [currentId, load])
   useEffect(() => { closeReview() }, [currentId])
 
-  const tagColor = (name: string): string =>
-    colorMap[name] ?? TAG_COLORS[Math.abs(hashStr(name)) % TAG_COLORS.length]
+  const tagColor = (name: string): string => getTagColor(name, colorMap)
 
   const { t } = useI18n()
   const reviewOpen = useKbGate((s) => s.reviewOpen)
   const closeReview = useKbGate((s) => s.closeReview)
+  const trg2dActions = useTrg2dActions(currentId)
 
   const tagRows = (overview?.tags.library ?? []).map(tg => ({
     ...tg,
@@ -101,29 +89,6 @@ export function KbReviewModal(): React.JSX.Element | null {
     }
     return ts
   }, [overview, selTag, search])
-
-  const allRelations = useMemo(() => {
-    if (!overview) return []
-    const edges = (overview.graph.edges ?? []).map(e => ({
-      key: `${e.from}>${e.to}>${e.kind}`,
-      from: e.from, fcol: e.from_col ?? '', to: e.to, tcol: e.to_col ?? '',
-      src: (e.kind === 'fk' ? 'fk' : e.kind === 'user' ? 'user' : 'llm') as 'fk' | 'llm' | 'user',
-      status: 'confirmed' as const,
-      reason: e.kind === 'overlap' ? '值分布重叠推断' : '',
-    }))
-    const drafts = (overview.graph.llm_draft_edges ?? []).map(e => ({
-      key: `d-${e.from_table}>${e.to_table}`,
-      from: e.from_table, fcol: e.from_col ?? '', to: e.to_table, tcol: e.to_col ?? '',
-      src: 'llm' as const,
-      status: e.status === 'previously_rejected' ? ('rejected' as const) : ('draft' as const),
-      reason: e.reason ?? '',
-    }))
-    return [...edges, ...drafts]
-  }, [overview])
-
-  const filteredRels = useMemo(() => allRelations.filter(r =>
-    (relSrc === 'all' || r.src === relSrc) &&
-    (relSt === 'all' || r.status === relSt)), [allRelations, relSrc, relSt])
 
   const totalPending = (overview?.draft_count ?? 0) + (overview?.tag_draft_count ?? 0)
     + (overview?.graph?.llm_draft_edges?.length ?? 0)
@@ -364,51 +329,28 @@ export function KbReviewModal(): React.JSX.Element | null {
             </div>
           </section>
 
-          {/* 右：关系 */}
+          {/* 右：2D 可编辑关系图（spec §6：拖拽持久化 · 拖线增删 · draft 边 ✓✕） */}
           <aside className="krm-col krm-rels">
-            <div className="krm-col-cap">关系 · {filteredRels.length}</div>
-            <div className="krm-rel-filters">
-              {(['all', 'fk', 'llm', 'user'] as const).map(s => (
-                <button key={s} onClick={() => setRelSrc(s)} className={`krm-fchip${relSrc === s ? ' on' : ''}`}>
-                  {s === 'all' ? '全部' : s === 'fk' ? 'FK' : s === 'llm' ? 'AI 发现' : '用户添加'}
-                </button>
-              ))}
-              <span style={{ width: '100%', height: 3 }} />
-              {(['all', 'draft', 'confirmed'] as const).map(s => (
-                <button key={s} onClick={() => setRelSt(s)} className={`krm-fchip${relSt === s ? ' on' : ''}`}>
-                  {s === 'all' ? '全部状态' : s === 'draft' ? '待确认' : '已确认'}
-                </button>
-              ))}
+            <div className="krm-col-cap is-flex">
+              关系图
+              <span className="krm-graph-cnt mono">
+                {overview.graph.edges.length} + {overview.graph.llm_draft_edges?.length ?? 0} 草案
+              </span>
+              <span className="krm-spacer" />
+              <span className="krm-graph-hint">拖边缘连线 · 点边选中</span>
             </div>
-            <div className="krm-rellist">
-              {filteredRels.length === 0 && <div className="krm-empty">没有匹配的关系</div>}
-              {filteredRels.map(r => {
-                const isDraft = r.status === 'draft'
-                const srcStyle = r.src === 'fk' ? 'fk' : r.src === 'llm' ? 'llm' : 'user'
-                return (
-                  <div key={r.key} className={`krm-rel${isDraft ? ' draft' : ''}`} style={{ opacity: r.status === 'rejected' ? 0.42 : 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, flexWrap: 'wrap' }}>
-                      <span className="krm-rname">{r.from}</span>
-                      {r.fcol && <span className="krm-rcol">.{r.fcol}</span>}
-                      <span className="krm-rarrow">→</span>
-                      <span className="krm-rname">{r.to}</span>
-                      {r.tcol && <span className="krm-rcol">.{r.tcol}</span>}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 5 }}>
-                      <span className={`krm-rsrc ${srcStyle}`}>{srcStyle === 'fk' ? 'FK' : srcStyle === 'llm' ? 'AI 发现' : '用户添加'}</span>
-                      {r.reason && <span className="krm-rreason" title={r.reason}>{r.reason}</span>}
-                      {isDraft ? (
-                        <span style={{ display: 'flex', gap: 3, marginLeft: 'auto' }}>
-                          <button className="krm-mini ok" onClick={() => void confirmGraphDraft(currentId, r.from)}>✓</button>
-                          <button className="krm-mini no" onClick={() => void rejectGraphDraft(currentId, r.from)}>✕</button>
-                        </span>
-                      ) : r.status === 'confirmed' ? (
-                        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--green)' }}>✓</span>
-                      ) : null}
-                    </div>
-                  </div>
-                )
-              })}
+            <div className="krm-graph-wrap">
+              <TableRelationGraph2D
+                tables={trgTables(overview)}
+                edges={trgEdges(overview)}
+                columnsByTable={trgColumns(overview)}
+                layout={overview.graph.layout}
+                getTagColor={tagColor}
+                onAddEdge={(e) => trg2dActions.onAddEdge(e)}
+                onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
+                onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}
+                onLayoutChange={trg2dActions.onLayoutChange}
+              />
             </div>
           </aside>
         </div>
@@ -480,10 +422,4 @@ export function KbReviewModal(): React.JSX.Element | null {
       )}
     </div>
   )
-}
-
-function hashStr(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
-  return h
 }
