@@ -880,6 +880,26 @@ class KnowledgeBase:
                 cur.pop(t, None)
             self._table_vec[conn_id] = {**cur, **vecs}
 
+    async def _reembed_tables(self, conn_id: str, table_names: list[str]) -> None:
+        """确认/撤下后受影响表即时重嵌：合成文本随确认状态变化，向量必须跟上。
+
+        只重算指定表的向量 + 一次 vstore 重建 + 一次落盘（调用方先收集表集合，
+        避免 N×全量重建）。失败 warning 不抛——状态变更本身不受影响，
+        下次 retrieve 的 reembed_if_needed 仍可兜底。
+        """
+        tabs = self._tables.get(conn_id, {})
+        names = [t for t in dict.fromkeys(table_names or []) if t in tabs]
+        if not names:
+            return
+        try:
+            self._emb = self._embedder()  # 与 reembed_if_needed 同款：先用当前配置重建嵌入器
+            await self._embed_tables(conn_id, set(names))
+            self._rebuild_vstore(conn_id)
+            self._save_conn(conn_id)
+            logger.info("[kb.store] conn=%s 确认/撤下后重嵌完成：tables=%s", conn_id, ",".join(names))
+        except Exception as e:
+            logger.warning("[kb.store] conn=%s 确认/撤下后重嵌失败 tables=%s：%s", conn_id, names, e)
+
     def needs_sync(self, conn_id: str, schema: dict[str, Any]) -> bool:
         """指纹对比：schema 是否有变化（周期任务/手动检查的零开销预判）。"""
         self.ensure_loaded(conn_id)
@@ -1103,43 +1123,57 @@ class KnowledgeBase:
             self._save_conn(conn_id)
         return applied
 
-    def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
+    async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
         """人工确认草案 → 权威（v2：状态机 none/draft → confirmed）。
 
         column 指定 → 单列（仅 draft 计数）；只给 table → 该表注释及其全部列；
         都不给 → 全库。表级 none（无 AI 注释的空内容表）同样定稿但不计数——
         确认闸后全库无残留草案。
+        确认改变合成文本（注释/取值/示例入文）→ 收集受影响表一次性重嵌，
+        避免向量停留纯结构文本。
         """
         tabs = self._tables.get(conn_id, {})
         targets = [tabs[table]] if table and table in tabs else (
             [] if table else list(tabs.values())
         )
         n = 0
+        affected: list[str] = []
         for tk in targets:
+            changed = False
             if column:
                 ci = tk.columns.get(column)
                 if ci and ci.status == "draft":
                     ci.status = "confirmed"
                     n += 1
+                    changed = True
+                if changed:
+                    affected.append(tk.name)
                 continue
             if tk.status == "draft":
                 n += 1
+                changed = True
             tk.status = "confirmed"  # none=空内容直接定稿；draft=草案确认
             for ci in tk.columns.values():
                 if ci.status == "draft":
                     ci.status = "confirmed"
                     n += 1
+                    changed = True
+            if changed:
+                affected.append(tk.name)
         if n:
             self._save_conn(conn_id)
+        if affected:
+            await self._reembed_tables(conn_id, affected)
         return n
 
-    def confirm_all(self, conn_id: str) -> dict[str, int]:
+    async def confirm_all(self, conn_id: str) -> dict[str, int]:
         """确认闸（构建后一键启用）：批量确认全部草案注释（表+列）+ 全部 draft 标签。
 
         标签确认后才参与"问题→选表"路由；注释确认后进入权威知识卡。
+        注释确认会改变合成文本 → confirm 内部收集受影响表集合一次重嵌（不逐表重建）。
         kb_status → ready 由调用方（api 层）负责。
         """
-        n_docs = self.confirm(conn_id)
+        n_docs = await self.confirm(conn_id)
         n_tags = 0
         for name in list(self._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
@@ -1253,8 +1287,11 @@ class KnowledgeBase:
             "llm_graph_draft": len(self._llm_graph_edges.get(conn_id, [])),
         }
 
-    def reject_comment(self, conn_id: str, table: str, column: str | None = None) -> int:
-        """拒绝草案注释（审查页逐列 ✕）：AI 内容整条撤下回 none。"""
+    async def reject_comment(self, conn_id: str, table: str, column: str | None = None) -> int:
+        """拒绝草案注释（审查页逐列 ✕）：AI 内容整条撤下回 none。
+
+        撤下同样改变合成文本（confirmed 注释/取值出文，draft_count 变化）→ 该表即时重嵌。
+        """
         tk = self._tables.get(conn_id, {}).get(table)
         if tk is None:
             return 0
@@ -1273,11 +1310,12 @@ class KnowledgeBase:
             n += 1
         if n:
             self._save_conn(conn_id)
+            await self._reembed_tables(conn_id, [table])
         return n
 
-    def reject(self, conn_id: str, table: str, column: str | None = None) -> int:
+    async def reject(self, conn_id: str, table: str, column: str | None = None) -> int:
         """拒绝草案注释（v2：按表/列撤下；旧 doc_id 版本随草稿文档退役）。"""
-        return self.reject_comment(conn_id, table, column)
+        return await self.reject_comment(conn_id, table, column)
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
     def upsert_tags(self, conn_id: str, tags: list[dict[str, Any]]) -> int:

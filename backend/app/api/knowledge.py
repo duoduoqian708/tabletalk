@@ -272,7 +272,7 @@ async def confirm_all(conn_id: str) -> dict:
     """确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。"""
     _have(conn_id)
     state = get_state()
-    n = state.knowledge.confirm_all(conn_id)
+    n = await state.knowledge.confirm_all(conn_id)
     state.connections.set_kb_status(conn_id, "ready")
     return {**n, "kb_status": "ready"}
 
@@ -444,7 +444,7 @@ async def confirm(conn_id: str, body: ConfirmRequest) -> dict:
     """人工确认草案为权威（确认后检索优先）。"""
     _have(conn_id)
     state = get_state()
-    n = state.knowledge.confirm(conn_id, body.table, body.column)
+    n = await state.knowledge.confirm(conn_id, body.table, body.column)
     return {"confirmed": n}
 
 
@@ -453,7 +453,7 @@ async def reject(conn_id: str, body: RejectRequest) -> dict:
     """拒绝草案注释（按表/列撤下：AI 内容清空回 none）。"""
     _have(conn_id)
     state = get_state()
-    n = state.knowledge.reject(conn_id, body.table, body.column)
+    n = await state.knowledge.reject(conn_id, body.table, body.column)
     return {"rejected": n}
 
 
@@ -462,7 +462,7 @@ async def reject_comment(conn_id: str, body: RejectCommentRequest) -> dict:
     """拒绝草案注释（审查页逐列 ✕）。"""
     _have(conn_id)
     state = get_state()
-    n = state.knowledge.reject_comment(conn_id, body.table, body.column)
+    n = await state.knowledge.reject_comment(conn_id, body.table, body.column)
     return {"rejected": n}
 
 

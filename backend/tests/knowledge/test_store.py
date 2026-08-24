@@ -74,7 +74,7 @@ async def test_ai_draft_then_confirm_new_model(tmp_path):
     ci = tk.columns["status"]
     assert ci.comment == "订单状态草稿" and ci.status == "draft"
     # 确认单列
-    assert kb.confirm("c1", "orders", "status") == 1
+    assert await kb.confirm("c1", "orders", "status") == 1
     assert ci.status == "confirmed"
     # 再注释不覆盖已确认内容
     kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "覆盖尝试"}])
@@ -90,11 +90,11 @@ async def test_table_level_annotation_and_confirm_all(tmp_path):
         {"table": "orders", "column": "id", "comment": "订单ID"},
         {"table": "customers", "column": "name", "comment": "客户姓名"},
     ])
-    assert kb.confirm("c1", "orders") == 2  # 表注释 + id 列
+    assert await kb.confirm("c1", "orders") == 2  # 表注释 + id 列
     tk = kb._tables["c1"]["orders"]
     assert tk.status == "confirmed" and tk.columns["id"].status == "confirmed"
     assert kb.pending_counts("c1")["draft_docs"] == 1
-    counts = kb.confirm_all("c1")
+    counts = await kb.confirm_all("c1")
     assert counts["docs"] == 1 and counts["tags"] >= 0
     assert all(t.status == "confirmed" for t in kb._tables["c1"].values())
     assert kb.pending_counts("c1")["draft_docs"] == 0
@@ -108,12 +108,12 @@ async def test_reject_clears_annotation(tmp_path):
         "table": "orders", "column": "status",
         "comment": "会被撤下的注释", "values": "P=待付款", "example": "P",
     }])
-    assert kb.reject("c1", "orders", "status") == 1
+    assert await kb.reject("c1", "orders", "status") == 1
     ci = kb._tables["c1"]["orders"].columns["status"]
     assert ci.status == "none" and ci.comment == "" and ci.values == "" and ci.example == ""
     # 表级撤下
     kb.annotate_drafts("c1", [{"table": "orders", "comment": "表注释"}])
-    assert kb.reject_comment("c1", "orders") == 1
+    assert await kb.reject_comment("c1", "orders") == 1
     assert kb._tables["c1"]["orders"].comment == ""
 
 
@@ -121,7 +121,7 @@ async def test_artifact_persists_across_instances(tmp_path):
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
     kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "订单状态草稿"}])
-    kb.confirm("c1", "orders", "status")
+    await kb.confirm("c1", "orders", "status")
 
     kb2 = KnowledgeBase(tmp_path)
     assert kb2.is_built("c1")  # artifact 存在 → 无需重采样即可检索
@@ -245,7 +245,7 @@ async def test_synthesize_text_confirmed_priority(tmp_path):
     payload = kb._table_payload("c1", tk)
     assert payload["draft_count"] == 2 and payload["ddl"] == tk.ddl
     # 确认后：confirmed 内容入文，draft_count 归零
-    kb.confirm("c1", "orders")
+    await kb.confirm("c1", "orders")
     text2 = kb._synthesize_table_text("c1", kb._tables["c1"]["orders"])
     assert text2.startswith("orders，订单主表草案。字段有：")
     assert "订单状态" in text2 and "P=待付款；S=已发货" in text2 and "示例为P" in text2
@@ -275,7 +275,7 @@ async def test_retrieve_returns_table_cards(tmp_path):
         {"table": "orders", "comment": "订单主表"},
         {"table": "orders", "column": "status", "comment": "订单状态", "values": "P=待付款", "example": "P"},
     ])
-    kb.confirm("c1", "orders")
+    await kb.confirm("c1", "orders")
     cards = await kb.retrieve("c1", query="订单", k=10)
     assert cards and cards[0].table == "orders"
     assert "订单状态" in cards[0].text and "P=待付款" in cards[0].text
@@ -381,3 +381,80 @@ async def test_layout_persists_across_instances_without_reembed(tmp_path):
     kb2.ensure_loaded("c1")
     lay = kb2.overview("c1")["graph"]["layout"]
     assert lay["orders"] == {"x": 42, "y": 7}
+
+
+# ---------- 修复回归：确认/撤下后受影响表即时重嵌 ----------
+
+
+async def test_confirm_reembeds_chunk_text_and_vector(tmp_path):
+    """confirm 前 chunk 停留纯结构文本；确认后富知识（业务注释/可选值/示例）进 chunk，向量同步变化。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "comment": "订单主表"},
+        {"table": "orders", "column": "status", "comment": "订单状态",
+         "values": "P=待付款；S=已发货", "example": "P"},
+    ])
+    before = kb._vector_store("c1")._chunks["tbl-orders"]
+    # 确认前：草案不入文 → chunk 无业务注释/取值
+    assert "订单主表" not in before.text
+    assert "订单状态" not in before.text and "待付款" not in before.text and "可选值" not in before.text
+    before_vec = list(before.vector)
+
+    assert await kb.confirm("c1", "orders") == 2
+
+    after = kb._vector_store("c1")._chunks["tbl-orders"]
+    assert "订单主表" in after.text
+    assert "可选值：P=待付款；S=已发货" in after.text and "示例为P" in after.text
+    assert after.vector != before_vec  # 文本变 → HashingEmbedder 确定性向量必变
+    assert after.payload["draft_count"] == 0
+
+
+async def test_confirm_all_batches_single_reembed(tmp_path):
+    """confirm_all 多表草案 → 收集表集合一次性重嵌（_reembed_tables/_rebuild_vstore 各恰一次）。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "column": "status", "comment": "订单状态"},
+        {"table": "customers", "column": "name", "comment": "客户姓名"},
+    ])
+    reembed_calls: list[list[str]] = []
+    rebuild_calls = 0
+    orig_reembed, orig_rebuild = kb._reembed_tables, kb._rebuild_vstore
+
+    async def spy_reembed(conn_id: str, table_names: list[str]) -> None:
+        reembed_calls.append(list(table_names))
+        await orig_reembed(conn_id, table_names)
+
+    def spy_rebuild(conn_id: str) -> None:
+        nonlocal rebuild_calls
+        rebuild_calls += 1
+        orig_rebuild(conn_id)
+
+    kb._reembed_tables = spy_reembed
+    kb._rebuild_vstore = spy_rebuild
+    counts = await kb.confirm_all("c1")
+    assert counts["docs"] == 2
+    assert len(reembed_calls) == 1                      # 一次批量，不逐表重嵌
+    assert set(reembed_calls[0]) == {"orders", "customers"}
+    assert rebuild_calls == 1                           # 一次 vstore 重建，非 N×全量
+
+
+async def test_reject_reverts_chunk_rich_text(tmp_path):
+    """撤下已确认内容 → chunk 富知识出文回结构壳，向量同步回退（与确认前一致）。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    structural_vec = list(kb._vector_store("c1")._chunks["tbl-orders"].vector)
+    kb.annotate_drafts("c1", [{
+        "table": "orders", "column": "status",
+        "comment": "订单状态", "values": "P=待付款", "example": "P",
+    }])
+    await kb.confirm("c1", "orders", "status")
+    rich = kb._vector_store("c1")._chunks["tbl-orders"]
+    assert "可选值：P=待付款" in rich.text and "订单状态" in rich.text
+
+    assert await kb.reject_comment("c1", "orders", "status") == 1
+
+    after = kb._vector_store("c1")._chunks["tbl-orders"]
+    assert "订单状态" not in after.text and "待付款" not in after.text and "可选值" not in after.text
+    assert after.vector == structural_vec  # 文本回到同一结构壳 → 确定性向量一致
