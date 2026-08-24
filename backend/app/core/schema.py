@@ -100,22 +100,27 @@ async def preview_table(state: "AppState", conn_id: str, table: str, limit: int 
 
 
 async def sample_values(state: "AppState", conn_id: str, table: str, per_column: int = 10) -> dict[str, list[Any]]:
-    """每列取前 K 个不同的样本值（只读，本地）。供图谱值重叠边与 AI 注释使用。"""
+    """整行主键倒序抽样（只读，本地）：SELECT * ORDER BY <pk> DESC LIMIT n。
+    无主键表退化为不排序 LIMIT n。返回 {列名: [该列各行值]}。
+    供图谱值重叠边与 AI 注释使用。"""
     from app.core.query import serialize_value
 
     def _work(adapter, conn):
         async def inner():
             quote = adapter.quote_ident
             cols = await adapter.list_columns(conn, table)
-            out: dict[str, list[Any]] = {}
-            for c in cols:
-                try:
-                    raw = await adapter.execute(
-                        conn, f"SELECT DISTINCT {quote(c.name)} FROM {quote(table)} LIMIT {per_column}"
-                    )
-                    out[c.name] = [serialize_value(r[0]) for r in raw.rows] if raw.rows else []
-                except Exception:
-                    out[c.name] = []
+            pk_cols = [c.name for c in cols if getattr(c, "is_pk", False)]
+            order = ""
+            if pk_cols:
+                order = " ORDER BY " + ", ".join(f"{quote(c)} DESC" for c in pk_cols)
+            raw = await adapter.execute(
+                conn, f"SELECT * FROM {quote(table)}{order} LIMIT {int(per_column)}"
+            )
+            names = list(raw.columns) if raw.columns else [c.name for c in cols]
+            out: dict[str, list[Any]] = {n: [] for n in names}
+            for row in raw.rows or []:
+                for n, v in zip(names, row):
+                    out[n].append(serialize_value(v))
             return out
 
         return inner()
