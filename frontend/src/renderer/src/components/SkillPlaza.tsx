@@ -3,12 +3,20 @@ import { createSkill, listSkills, removeSkill, updateSkill, type SkillCatalog, t
 import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
 
+const FLOOR = new Set(['query', 'refusal'])
+
 const TOOL_HINT: Record<string, string> = {
   get_schema: 'skill.tool.get_schema',
-  describe_table: 'skill.tool.describe_table',
   run_query: 'skill.tool.run_query',
   run_dml: 'skill.tool.run_dml',
   draft_ddl: 'skill.tool.draft_ddl',
+  query_audit: 'skill.tool.query_audit',
+  ai_review: 'skill.tool.ai_review',
+  kb_read: 'skill.tool.kb_read',
+  kb_write: 'skill.tool.kb_write',
+  graph_read: 'skill.tool.graph_read',
+  graph_write: 'skill.tool.graph_write',
+  manage_task: 'skill.tool.manage_task',
 }
 
 /** 技能广场：技能清单 + 启用/禁用 + 工具组合 + 自建简单技能。 */
@@ -44,6 +52,12 @@ export function SkillPlaza(): React.JSX.Element {
     try {
       await updateSkill(id, p)
       await reload()
+      const target = cat?.skills.find((s) => s.id === id)
+      if (p.enabled !== undefined && target) {
+        toastMsg(t('skill.toggleOk', { name: target.name, enabled: p.enabled ? 'true' : 'false' }))
+      } else {
+        toastMsg(t('settings.saveSuccess'))
+      }
     } catch (e) {
       toastMsg(t('skill.saveFail', { msg: (e as Error).message }))
     } finally {
@@ -124,11 +138,11 @@ export function SkillPlaza(): React.JSX.Element {
             {!s.enabled && <span className="sp-badge off">{t('skill.disabled')}</span>}
             <span className="sp-desc">{s.description}</span>
             <span className="spacer" />
-            <label className="sp-toggle" title={s.enabled ? t('skill.disableTitle') : t('skill.enableTitle')}>
+            <label className={`sp-toggle${FLOOR.has(s.id) ? ' floor' : ''}`} title={FLOOR.has(s.id) ? t('skill.floorHint') : s.enabled ? t('skill.disableTitle') : t('skill.enableTitle')}>
               <input
                 type="checkbox"
                 checked={s.enabled}
-                disabled={busy}
+                disabled={busy || FLOOR.has(s.id)}
                 onChange={(e) => void patch(s.id, { enabled: e.target.checked })}
               />
               <span className="tg-track"><span className="tg-knob" /></span>

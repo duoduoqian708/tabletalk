@@ -1,7 +1,11 @@
 """知识库路由：构建（采样+图谱+向量）/ 审查视图 / 图谱 / 检索 / AI 自动注释 / 确认工作流。"""
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.schema import get_schema, sample_values
@@ -32,6 +36,17 @@ class AutoAnnotateRequest(BaseModel):
 
 class TagNameRequest(BaseModel):
     name: str
+
+
+class TagCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+class TagUpdateRequest(BaseModel):
+    name: str
+    new_name: str | None = None
+    description: str | None = None
 
 
 class AssignTagsRequest(BaseModel):
@@ -73,6 +88,10 @@ class GraphExcludeRequest(BaseModel):
     excluded: bool = True
 
 
+class BuildRequest(BaseModel):
+    include_samples: bool = True
+
+
 class EnumConfirmRequest(BaseModel):
     table: str
     column: str
@@ -94,12 +113,13 @@ def _have(conn_id: str) -> None:
 
 
 @router.post("/{conn_id}/build")
-async def build_index(conn_id: str) -> dict:
+async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
     """启动后台构建任务（接入流程强制步骤）。返回后立即轮询 /build/progress。"""
     _have(conn_id)
     state = get_state()
     if state.build_jobs.is_running(conn_id):
         raise HTTPException(status_code=409, detail="构建已在运行")
+    include_samples = (body.include_samples if body else True)
     state.connections.set_kb_status(conn_id, "building")
 
     async def _run(report):
@@ -116,7 +136,10 @@ async def build_index(conn_id: str) -> dict:
                     samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
                 except Exception:
                     samples[t["name"]] = {}
-        return await state.knowledge.build(conn_id, schema, samples, on_progress=report)
+        return await state.knowledge.build(
+            conn_id, schema, samples, on_progress=report,
+            include_samples=include_samples,
+        )
 
     state.build_jobs.start(conn_id, _run)
     return {"job_id": conn_id, "kb_status": "building", "stage": "排队中"}
@@ -133,6 +156,35 @@ async def build_progress(conn_id: str) -> dict:
         return {"stage": "idle", "percent": 0, "done": True, "error": None, "kb_status": cfg.kb_status}
     p["kb_status"] = cfg.kb_status
     return p
+
+
+@router.get("/{conn_id}/build/events")
+async def build_events(conn_id: str) -> StreamingResponse:
+    """SSE 进度推送：构建开始时连接，进度变化实时推送，任务结束推送 done 后关闭。
+
+    与轮询端点互补：前端发起构建后走这里拿实时进度，无需 500ms 轮询。
+    """
+    _have(conn_id)
+    state = get_state()
+    job = state.build_jobs.get(conn_id)
+
+    async def _stream():
+        # 任务不存在（未发起/已结束）→ 推一条当前状态后关闭
+        if job is None:
+            yield "data: " + json.dumps({"stage": "idle", "percent": 0, "done": True, "error": None}) + "\n\n"
+            return
+        while True:
+            try:
+                await job.event.wait()
+            except asyncio.CancelledError:
+                break
+            job.event.clear()
+            yield "data: " + json.dumps(dict(job.progress)) + "\n\n"
+            if job.progress.get("done"):
+                break
+
+    return StreamingResponse(_stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/{conn_id}/build/cancel")
@@ -271,6 +323,35 @@ async def exclude_table(conn_id: str, body: GraphExcludeRequest) -> dict:
     return {"excluded": state.knowledge.excluded_tables(conn_id)}
 
 
+class GraphConfirmRequest(BaseModel):
+    from_table: str | None = None   # None = 确认全部
+
+
+@router.post("/{conn_id}/graph/confirm")
+async def confirm_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = None) -> dict:
+    """确认 LLM 发现的 draft 边 → 写入正式图谱（from_table=None 则确认全部）。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    ft = body.from_table if body else None
+    added = state.knowledge.confirm_graph_edges(conn_id, from_table=ft)
+    return {"confirmed": added, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id)}
+
+
+@router.post("/{conn_id}/graph/reject")
+async def reject_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = None) -> dict:
+    """拒绝 LLM 发现的 draft 边（从 draft 列表移除）。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    ft = body.from_table if body else None
+    removed = state.knowledge.reject_graph_edges(conn_id, from_table=ft)
+    return {"rejected": removed, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id)}
+
 
 @router.get("/{conn_id}/retrieve")
 async def retrieve(conn_id: str, q: str = "", table: str | None = None, k: int = 10) -> dict:
@@ -286,6 +367,17 @@ async def list_docs(conn_id: str, table: str | None = None) -> dict:
     state = get_state()
     docs = state.knowledge.list_docs(conn_id, table)
     return {"count": len(docs), "docs": [d.to_dict() for d in docs]}
+
+
+@router.delete("/{conn_id}/docs/{doc_id}")
+async def delete_doc(conn_id: str, doc_id: str) -> dict:
+    """删除一条用户手写笔记（usr- 前缀）。"""
+    _have(conn_id)
+    state = get_state()
+    n = state.knowledge.delete_user_doc(conn_id, doc_id)
+    if not n:
+        raise HTTPException(status_code=404, detail="文档不存在或不可删除")
+    return {"deleted": True}
 
 
 @router.put("/{conn_id}/docs", status_code=201)
@@ -390,6 +482,32 @@ async def confirm_tag(conn_id: str, body: TagNameRequest) -> dict:
     _have(conn_id)
     state = get_state()
     return {"confirmed": state.knowledge.confirm_tag(conn_id, body.name)}
+
+
+@router.post("/{conn_id}/tags/create")
+async def create_tag(conn_id: str, body: TagCreateRequest) -> dict:
+    """人工新建标签（直接 confirmed，立即可路由）。"""
+    _have(conn_id)
+    state = get_state()
+    ok = state.knowledge.create_tag(conn_id, body.name, body.description)
+    if not ok:
+        raise HTTPException(status_code=409, detail=f"标签 {body.name} 已存在或名称为空")
+    return {"created": True}
+
+
+@router.post("/{conn_id}/tags/update")
+async def update_tag(conn_id: str, body: TagUpdateRequest) -> dict:
+    """人工编辑标签（改名同步表绑定 / 改描述）。"""
+    _have(conn_id)
+    state = get_state()
+    try:
+        ok = state.knowledge.update_tag(conn_id, body.name, new_name=body.new_name,
+                                        description=body.description)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"标签 {body.name} 不存在")
+    return {"updated": True}
 
 
 @router.post("/{conn_id}/tags/reject")

@@ -23,6 +23,7 @@ class ToolCall:
 class ChatResponse:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: dict[str, int] | None = None  # OpenAI 兼容: {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
 
 
 @dataclass
@@ -35,6 +36,20 @@ class StreamChunk:
 
 def build_provider(cfg: dict) -> "LLMGateway":
     return LLMGateway(cfg)
+
+
+def _sanitize_payload(payload: dict) -> dict:
+    """精简请求 payload 用于日志：截断 messages 内容，移除 api_key 等敏感字段。"""
+    import copy
+    out = copy.deepcopy(payload)
+    # 截断每条 message 的 content（防超大上下文撑爆磁盘，保留前2KB）
+    for m in out.get("messages", []):
+        if isinstance(m.get("content"), str) and len(m["content"]) > 2048:
+            m["content"] = m["content"][:2048] + f"...(truncated, total {len(m['content'])} chars)"
+    # 工具列表只保留名字
+    if "tools" in out:
+        out["tools"] = [t.get("function", {}).get("name", "?") for t in out["tools"]]
+    return out
 
 
 def is_effective_mock(cfg: dict) -> bool:
@@ -59,6 +74,8 @@ class LLMGateway:
             raise ValueError("AI 网关未配置 base_url（provider 非 mock 时必填）")
         url = self.base_url + "/chat/completions"
         payload: dict = {"messages": messages, "temperature": self.temperature, "stream": stream}
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
         if self.model:
             payload["model"] = self.model
         if tools:
@@ -109,7 +126,14 @@ class LLMGateway:
                     arguments=args,
                 )
             )
-        return ChatResponse(content=content, tool_calls=tool_calls)
+        usage = data.get("usage")
+        # 存 last_meta 供调用方写 LLM 日志（请求 payload + 响应用量）
+        self.last_meta: dict = {
+            "request_payload": _sanitize_payload(payload),
+            "response_usage": usage,
+            "response_model": data.get("model", self.model),
+        }
+        return ChatResponse(content=content, tool_calls=tool_calls, usage=usage)
 
     async def chat_stream(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True) -> "AsyncIterator[StreamChunk]":
         """SSE 流式：逐 token 产出 StreamChunk(delta)；工具调用在流末一次性产出。"""
@@ -122,6 +146,7 @@ class LLMGateway:
             return
         url, payload, headers = self._request(messages, tools, stream=True)
         acc: dict[int, dict] = {}
+        _stream_usage: dict | None = None
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             async with client.stream("POST", url, json=payload, headers=headers) as r:
                 r.raise_for_status()
@@ -135,6 +160,10 @@ class LLMGateway:
                         obj = json.loads(data)
                     except Exception:
                         continue
+                    # OpenAI 兼容：stream_options.include_usage=True 时，usage 在最后一条 chunk
+                    chunk_usage = obj.get("usage")
+                    if chunk_usage:
+                        _stream_usage = chunk_usage
                     choice = (obj.get("choices") or [{}])[0]
                     delta = choice.get("delta", {})
                     for t in delta.get("tool_calls") or []:
@@ -149,6 +178,12 @@ class LLMGateway:
                     text = delta.get("content")
                     if text:
                         yield StreamChunk(delta=text)
+        # 流结束后存 last_meta（铁律：流完成再写，不丢信息）
+        self.last_meta = {
+            "request_payload": _sanitize_payload(payload),
+            "response_usage": _stream_usage,
+            "response_model": _stream_usage.get("model") if _stream_usage else self.model,
+        }
         if acc:
             calls: list[ToolCall] = []
             for i in sorted(acc):

@@ -315,8 +315,8 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     _pf = getattr(req, "_preflight", None)
     _pf_tags = getattr(_pf, "tags", None) if _pf else None
     _followup_tables = getattr(_pf, "followup_tables", None) if _pf else None
-    # T2.2 schema 结构问答：跳过检索管线（零向量召回），只给结构摘要；工具白名单自然保证零 SQL 卡
-    _skip_retrieval = getattr(_pf, "intent", None) == "schema"
+    # skip_retrieval：结构问答/审计类意图跳过向量检索管线（由 preflight.skip_retrieval 控制）
+    _skip_retrieval = getattr(_pf, "skip_retrieval", False)
     context, context_meta = await assemble_context_full(
         state, conn_id, req.table, user_text, tags=_pf_tags,
         followup_tables=_followup_tables, skip_retrieval=_skip_retrieval,
@@ -361,19 +361,16 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         pass
 
     yield {"type": "turn_start", "connection": conn_id}
-    # 四步展示的阶段元数据：意图 + 候选表（始终下发，未命中路由则如实空态——结构恒可见、零定制）
-    # WS1：intent 来自 preflight（若有），否则回退到 context_meta
     _pf_intent = getattr(getattr(req, "_preflight", None), "intent", None)
-    # 将 preflight intent 回填到 context_meta 供前端与审计
     if _pf_intent and not context_meta.get("intent"):
         context_meta["intent"] = [_pf_intent]
     elif _pf_intent:
-        # 保证 intent 字段为 preflight 的单值（供 T1.4 审计对比）
         context_meta["preflight_intent"] = _pf_intent
     yield {"type": "stage", "stage": "intent", "value": context_meta.get("intent", [])}
     yield {"type": "stage", "stage": "retrieval", "tables": context_meta.get("candidate_tables", []),
            "vec_tables": context_meta.get("vec_tables", [])}
     yield {"type": "manifest", "manifest": manifest}
+    yield {"type": "scene_start", "scene": getattr(req, "skill_id", None) or "query", "intent": _pf_intent, "skill_id": getattr(req, "skill_id", None)}
     # T1.4/T1.5 度量：记录实际工具与最终表集合
     _tools_used: list[str] = []
     _executed_sqls: list[str] = []
@@ -387,6 +384,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     _scoped_names = {t["function"]["name"] for t in skill_tool_schemas(req.skill_id)}
     for _ in range(MAX_TURNS):
         tool_calls: list = []
+        _t0_turn = time.monotonic()
         async for chunk in provider.chat_stream(messages, skill_tool_schemas(req.skill_id)):
             # B3 还原：叙述文本中的代号还原为真名（展示层）
             def _dec_text(t: str) -> str:
@@ -402,12 +400,44 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 yield {"type": "text", "content": _dec_text(chunk.content)}
             elif chunk.tool_calls:
                 tool_calls = chunk.tool_calls
+        # 铁律：流完成后写 LLM 日志（request JSON + response JSON + usage）
+        _turn_elapsed = int((time.monotonic() - _t0_turn) * 1000)
+        try:
+            _meta = getattr(provider, "last_meta", None)
+            if _meta:
+                from app.ai.llm_log import LlmCallLog
+                from app.config import get_env as _genv_ll
+                _prov_cfg = resolve_provider_cfg(state, req)
+                _usage = _meta.get("response_usage") or {}
+                LlmCallLog(_genv_ll().data_dir).log(
+                    conn_id=conn_id, skill=getattr(req, "skill_id", None),
+                    session_id=getattr(req, "session_id", None),
+                    model=_meta.get("response_model"), provider=_prov_cfg.get("provider"),
+                    request_json=_meta.get("request_payload"),
+                    response_json=_meta.get("response_usage"),
+                    input_tokens=_usage.get("prompt_tokens", 0),
+                    output_tokens=_usage.get("completion_tokens", 0),
+                    elapsed_ms=_turn_elapsed,
+                )
+                # 同步写 cost_log（成本仪表盘聚合用）
+                from app.ai.cost_tracker import CostTracker
+                CostTracker(_genv_ll().data_dir).log(
+                    connection=conn_id, skill=getattr(req, "skill_id", None),
+                    model=_meta.get("response_model"), provider=_prov_cfg.get("provider"),
+                    input_tokens=_usage.get("prompt_tokens", 0),
+                    output_tokens=_usage.get("completion_tokens", 0),
+                    elapsed_ms=_turn_elapsed,
+                )
+        except Exception:
+            pass
         if not tool_calls:
             break
         for tc in tool_calls:
-            # 越权工具：不在本技能工具集内 → 拒绝执行，回给模型"不可用"（禁止靠缺席）
             if tc.name not in _scoped_names:
+                _blk_id = f"st_{len(_tools_used)+1}_{tc.name}_blocked"
+                yield {"type": "subtask_start", "id": _blk_id, "tool": tc.name, "label": tc.name, "status": "running"}
                 yield {"type": "think", "text": f"拒绝调用 {tc.name}（不在技能 {req.skill_id or '默认'} 工具集内）"}
+                yield {"type": "subtask_done", "id": _blk_id, "tool": tc.name, "status": "error", "detail": "工具不在技能白名单，已拒绝"}
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -416,13 +446,27 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 })
                 continue
             _tools_used.append(tc.name)
+            _sub_id = f"st_{len(_tools_used)}_{tc.name}"
+            yield {"type": "subtask_start", "id": _sub_id, "tool": tc.name, "label": tc.name, "status": "running"}
+            try:
+                from app.safety.gate import sqlglot_dialect_for as _gdf
+                _dia = _gdf(state.connections.get(conn_id).dialect)
+            except Exception:
+                _dia = "sqlite"
+            try:
+                _sql_preview = (tc.arguments or {}).get("sql", "")
+                if _sql_preview:
+                    yield {"type": "block", "id": _sub_id, "block": {"kind": "sql_editor", "sql": _sql_preview, "dialect": _dia}}
+            except Exception:
+                pass
             yield {"type": "think", "text": f"调用 {tc.name}"}
-            # T3.3：工具执行期间暴露当前会话（load_result 按 session 隔离工件）
+            yield {"type": "subtask_progress", "id": _sub_id, "tool": tc.name, "delta": f"执行 {tc.name} ..."}
             _sess_tok = _set_active_session(req.session_id)
             try:
                 outcome = await execute_tool(state, tc.name, tc.arguments, conn_id, include_data=req.include_data)
             finally:
                 _reset_active_session(_sess_tok)
+            yield {"type": "subtask_progress", "id": _sub_id, "tool": tc.name, "delta": outcome.think or f"{tc.name} 完成"}
             # 收集执行过的 SQL 供覆盖率
             try:
                 _sql = None
@@ -484,10 +528,22 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 except Exception:
                     pass
             if outcome.card:
-                # WS3 T3.2：每张 sql_card 落 result_id（引用寻址；API 层据此写 artifact）
                 if "result_id" not in outcome.card:
                     outcome.card["result_id"] = f"r{uuid.uuid4().hex[:10]}"
                 yield {"type": "sql_card", "card": outcome.card}
+            try:
+                if outcome.result and outcome.result.get("rows") is not None:
+                    cols = outcome.result.get("columns") or []
+                    rows = outcome.result.get("rows") or []
+                    if cols and rows is not None:
+                        yield {"type": "block", "id": _sub_id, "block": {"kind": "table", "columns": cols, "rows": rows[:20], "title": f"{tc.name} 结果"}}
+                        if tc.name in ("run_query", "db_read") and rows:
+                            yield {"type": "block", "id": _sub_id, "block": {"kind": "chart", "chartType": "bar", "title": "自动图表", "data": rows[:10], "columns": cols}}
+                if outcome.card and outcome.card.get("needs_confirm"):
+                    yield {"type": "block", "id": _sub_id, "block": {"kind": "confirm", "prompt": f"确认执行 {tc.name}？", "confirmLabel": "确认", "cancelLabel": "取消"}}
+            except Exception:
+                pass
+            yield {"type": "subtask_done", "id": _sub_id, "tool": tc.name, "status": "done", "detail": outcome.think or ""}
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -567,4 +623,5 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
             pass
     except Exception:
         pass
+    yield {"type": "scene_done", "scene": getattr(req, "skill_id", None) or "query"}
     yield {"type": "done", "context_meta": context_meta}

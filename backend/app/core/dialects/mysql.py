@@ -31,10 +31,12 @@ class MySQLAdapter(DialectAdapter):
             connect_timeout=cfg.timeout,
             autocommit=True,
         )
-        if cfg.read_only:
+        return conn
+
+    async def set_read_only(self, conn: Any, flag: bool) -> None:
+        if flag:
             async with conn.cursor() as cur:
                 await cur.execute("SET SESSION TRANSACTION READ ONLY")
-        return conn
 
     async def close(self, conn: Any) -> None:
         try:

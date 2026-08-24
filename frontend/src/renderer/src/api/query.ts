@@ -6,6 +6,8 @@ export interface RunQueryParams {
   sql: string
   origin?: 'manual' | 'ai'
   confirm?: boolean
+  confirm_token?: string | null
+  session_id?: string | null
   limit?: number
   offset?: number
   countTotal?: boolean
@@ -19,10 +21,19 @@ export function runQuery(p: RunQueryParams): Promise<QueryResponse> {
       sql: p.sql,
       origin: p.origin ?? 'manual',
       confirm: p.confirm ?? false,
+      confirm_token: p.confirm_token ?? null,
+      session_id: p.session_id ?? null,
       limit: p.limit,
       offset: p.offset,
       count_total: p.countTotal ?? false
     })
+  })
+}
+
+export function cancelDml(sessionId: string, confirmToken: string): Promise<{ ok: boolean }> {
+  return request('/api/v1/ai/dml/cancel', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, confirm_token: confirmToken })
   })
 }
 

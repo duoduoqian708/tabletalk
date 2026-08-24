@@ -53,6 +53,8 @@ class KbSnapshot:
     edge_tombstones: list[dict] = field(default_factory=list)  # 用户删除的 overlap 边（不复活）
     excluded: list[str] = field(default_factory=list)          # 图谱视图中移出的表（不影响审查页）
     synced_at: str = ""                   # 最近一次增量同步时间
+    llm_graph_edges: list[dict] = field(default_factory=list)  # LLM 发现的 draft 边（待人工确认）
+    llm_edge_tombstones: list[dict] = field(default_factory=list)  # 用户拒绝过的 LLM 边（重建不复活）
 
 
 class KbStorage(Protocol):
@@ -114,6 +116,8 @@ class JsonStorage:
                 snap.edge_tombstones = data.get("edge_tombstones", [])
                 snap.excluded = data.get("excluded", [])
                 snap.synced_at = data.get("synced_at", "")
+                snap.llm_graph_edges = data.get("llm_graph_edges", [])
+                snap.llm_edge_tombstones = data.get("llm_edge_tombstones", [])
             except Exception:
                 pass
         return snap
@@ -146,6 +150,8 @@ class JsonStorage:
                 "edge_tombstones": snap.edge_tombstones,
                 "excluded": snap.excluded,
                 "synced_at": snap.synced_at,
+                "llm_graph_edges": snap.llm_graph_edges,
+                "llm_edge_tombstones": snap.llm_edge_tombstones,
             }, ensure_ascii=False),
             encoding="utf-8",
         )
@@ -296,6 +302,12 @@ class SqliteStorage:
                 samples_json = self._meta(conn, "samples")
                 if samples_json:
                     snap.samples = json.loads(samples_json)
+                llm_edges_json = self._meta(conn, "llm_graph_edges")
+                if llm_edges_json:
+                    snap.llm_graph_edges = json.loads(llm_edges_json)
+                llm_tombstones_json = self._meta(conn, "llm_edge_tombstones")
+                if llm_tombstones_json:
+                    snap.llm_edge_tombstones = json.loads(llm_tombstones_json)
             finally:
                 conn.close()
         except Exception:
@@ -353,6 +365,10 @@ class SqliteStorage:
                              (json.dumps(snap.edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('excluded_tables', ?)",
                              (json.dumps(snap.excluded, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('llm_graph_edges', ?)",
+                             (json.dumps(snap.llm_graph_edges, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('llm_edge_tombstones', ?)",
+                             (json.dumps(snap.llm_edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('enums', ?)", (json.dumps(snap.enums, ensure_ascii=False),))

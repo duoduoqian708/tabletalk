@@ -17,13 +17,13 @@ from app.ai.loop import chat_stream
     ("统计每个产品的销量", "query"),
     ("生成月度销售报告", "report"),
     ("出一份趋势分析", "report"),
-    ("有哪些表", "schema"),
-    ("这个库有哪些表结构", "schema"),
+    ("有哪些表", "query"),
+    ("这个库有哪些表结构", "query"),
     ("删掉测试订单", "write"),
     ("把价格改成100", "write"),
     ("给库存为 0 的产品涨价 10%", "write"),  # mock 写示例：涨价/提价路由 write 技能（query 只读后）
-    ("加一列备注字段", "ddl"),
-    ("建个索引在 order_date 上", "ddl"),
+    ("加一列备注字段", "write"),
+    ("建个索引在 order_date 上", "write"),
     ("今天天气怎么样", "offtopic"),
     ("你好", "offtopic"),
 ])

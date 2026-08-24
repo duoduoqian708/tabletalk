@@ -26,6 +26,7 @@
   /* ── 品牌：磷光信号绿（= 安全 = 信任） ── */
   --accent: #2ee6a8;
   --accent-bright: #79f2c4;
+  --accent-deep: #12a87e;
   --accent-dim: rgba(46, 230, 168, 0.12);
   --accent-soft: #a6f4d6;
   --accent-ink: #03130c;
@@ -35,6 +36,7 @@
   --green: #35d99a;
   --green-dim: rgba(53, 217, 154, 0.13);
   --amber: #ffb454;
+  --amber-deep: #e08e2e;
   --amber-dim: rgba(255, 180, 84, 0.13);
   --red: #ff6b81;
   --red-dim: rgba(255, 107, 129, 0.13);
@@ -106,6 +108,14 @@
   --g-edge-build: #63c8ff;
   --g-edge-pending: rgba(255, 180, 84, 0.6);
   --g-node-build-fill: rgba(99, 200, 255, 0.1);
+
+  /* ── 图谱画布（Graph3D JS 烘焙用，深色=现状值） ── */
+  --g3d-bg-0: #0c1322;
+  --g3d-bg-1: #070b13;
+  --g3d-bg-2: #04060b;
+  --g3d-star-core: #c8dcff;
+  --g3d-star-fade: rgba(200, 220, 255, 0);
+  --g3d-grid: rgba(110, 150, 190, 0.09);
 }
 
 :root[data-theme='light'] {
@@ -128,6 +138,7 @@
 
   --accent: #0d9e6c;
   --accent-bright: #0f7d58;
+  --accent-deep: #087a55;
   --accent-dim: rgba(13, 158, 108, 0.12);
   --accent-soft: #0b6b4c;
   --accent-ink: #ffffff;
@@ -136,6 +147,7 @@
   --green: #0f9d6e;
   --green-dim: rgba(15, 157, 110, 0.12);
   --amber: #b26a00;
+  --amber-deep: #8a5200;
   --amber-dim: rgba(178, 106, 0, 0.12);
   --red: #d64545;
   --red-dim: rgba(214, 69, 69, 0.12);
@@ -166,6 +178,14 @@
   --g-edge-build: #2b7fd4;
   --g-edge-pending: rgba(178, 106, 0, 0.55);
   --g-node-build-fill: rgba(43, 127, 212, 0.1);
+
+  /* ── 图谱画布（Graph3D JS 烘焙用；日光下星点用可读的雾蓝） ── */
+  --g3d-bg-0: #ffffff;
+  --g3d-bg-1: #f7f9fc;
+  --g3d-bg-2: #eef1f6;
+  --g3d-star-core: #8fb3dc;
+  --g3d-star-fade: rgba(143, 179, 220, 0);
+  --g3d-grid: rgba(70, 100, 150, 0.1);
 }
 
 * {
@@ -199,6 +219,16 @@ body {
   overflow: hidden;
   user-select: none;
   transition: background-color 200ms var(--ease), color 200ms var(--ease);
+}
+
+/* 日光图纸底纹：深色噪点 + 蓝图网格 + 柔和品牌辉光（替代深色调底纹） */
+:root[data-theme='light'] body {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.16 0 0 0 0 0.2 0 0 0 0 0.28 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E"),
+    linear-gradient(rgba(24, 30, 42, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24, 30, 42, 0.05) 1px, transparent 1px),
+    radial-gradient(1100px 520px at 82% -12%, rgba(13, 158, 108, 0.05), transparent 60%),
+    radial-gradient(900px 500px at -8% 108%, rgba(43, 127, 212, 0.04), transparent 55%);
 }
 
 ::selection {

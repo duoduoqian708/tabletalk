@@ -18,18 +18,36 @@ from typing import Any, Awaitable, Callable
 
 STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向量化", "落盘"]
 
-BuildFn = Callable[[Callable[[str, int], None]], Awaitable[dict]]
+# 三阶段进度条（同一弹窗内三条独立进度）
+PHASES = [
+    {"key": "annotate", "label": "AI 正在处理"},
+    {"key": "tags", "label": "AI 标签提取"},
+    {"key": "graph", "label": "AI 关系识别"},
+]
+
+BuildFn = Callable[[Callable[[str, int, str | None, str | None], None]], Awaitable[dict]]
+
+
+def _new_progress() -> dict[str, Any]:
+    return {
+        "stage": "排队中", "percent": 0, "done": False, "error": None, "detail": None,
+        "phases": [
+            {"key": p["key"], "label": p["label"], "percent": 0, "detail": None}
+            for p in PHASES
+        ],
+    }
 
 
 class BuildJob:
-    __slots__ = ("conn_id", "task", "progress", "started_at", "cancelled")
+    __slots__ = ("conn_id", "task", "progress", "started_at", "cancelled", "event")
 
     def __init__(self, conn_id: str, task: asyncio.Task) -> None:
         self.conn_id = conn_id
         self.task = task
-        self.progress: dict[str, Any] = {"stage": "排队中", "percent": 0, "done": False, "error": None}
+        self.progress = _new_progress()
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.cancelled = False
+        self.event = asyncio.Event()  # 进度更新通知（SSE 推送用）
 
 
 class BuildJobManager:
@@ -45,6 +63,9 @@ class BuildJobManager:
         self._jobs[conn_id] = job
         job.task = asyncio.create_task(run_build_job(job, build_fn))
         return job
+
+    def get(self, conn_id: str) -> BuildJob | None:
+        return self._jobs.get(conn_id)
 
     def progress(self, conn_id: str) -> dict[str, Any] | None:
         job = self._jobs.get(conn_id)
@@ -86,13 +107,26 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
 
     try:
         # 进度上报 + 协作取消检查点（安全点：无 live DB 句柄）
-        def report(stage: str, percent: int) -> None:
+        # phase: None=全局 stage；'annotate'/'tags'/'graph'=更新对应独立阶段进度
+        def report(stage: str, percent: int, detail: str | None = None,
+                   phase: str | None = None) -> None:
             if job.cancelled:
                 raise asyncio.CancelledError()
-            job.progress.update({"stage": stage, "percent": min(100, max(0, int(percent)))})
+            job.progress.update({"stage": stage, "percent": min(100, max(0, int(percent))), "detail": detail})
+            if phase:
+                for p in job.progress.get("phases", []):
+                    if p["key"] == phase:
+                        p["percent"] = min(100, max(0, int(percent)))
+                        p["detail"] = detail
+                        p["stage"] = stage
+                        break
+            job.event.set()  # 唤醒 SSE 订阅者
 
         stats = await build_fn(report)
         job.progress.update({"stage": "完成", "percent": 100, "done": True, "error": None})
+        for p in job.progress.get("phases", []):
+            p["percent"] = 100
+        job.event.set()
         if _is_current():
             state.connections.set_kb_status(conn_id, "pending_review")
         return stats
@@ -102,11 +136,13 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
             state.knowledge.clear(conn_id)
             state.connections.set_kb_status(conn_id, "none")
         job.progress.update({"stage": "已取消", "percent": 0, "done": True, "error": "cancelled"})
+        job.event.set()
         raise
     except Exception as e:  # noqa: BLE001
         if _is_current():
             state.connections.set_kb_status(conn_id, "none")
         job.progress.update({"stage": "失败", "percent": 0, "done": True, "error": str(e)})
+        job.event.set()
         raise
 
 

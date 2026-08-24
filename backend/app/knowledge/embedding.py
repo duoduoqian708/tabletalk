@@ -47,6 +47,8 @@ class ApiEmbedder:
         self.base_url = base_url.rstrip("/")
         self.model = model or "bge-m3"
         self.api_key = api_key
+        self.last_usage: dict[str, int] | None = None  # 每次调用后的 usage（OpenAI 兼容）
+        self.total_usage: dict[str, int] = {"prompt_tokens": 0, "total_tokens": 0}  # 累计
 
     async def embed(self, text: str) -> list[float]:
         headers = {"Content-Type": "application/json"}
@@ -61,6 +63,17 @@ class ApiEmbedder:
             resp.raise_for_status()
             data = resp.json()
         vec = data["data"][0]["embedding"]
+        # 解析 usage（OpenAI 兼容 /embeddings 响应含 usage 字段）
+        usage = data.get("usage")
+        if usage and isinstance(usage, dict):
+            self.last_usage = {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "total_tokens": usage.get("total_tokens", usage.get("prompt_tokens", 0)),
+            }
+            self.total_usage["prompt_tokens"] += self.last_usage["prompt_tokens"]
+            self.total_usage["total_tokens"] += self.last_usage["total_tokens"]
+        else:
+            self.last_usage = None
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { testConnection } from '@renderer/api/connections'
 import { toastMsg } from '@renderer/utils/toast'
@@ -18,7 +18,6 @@ interface Props {
 
 const SECTIONS = [
   { key: 'dsm', ic: '⛁', labelKey: 'settings.section.dsm' },
-  { key: 'theme', ic: '◐', labelKey: 'settings.section.theme' },
   { key: 'llm', ic: '◎', labelKey: 'settings.section.llm' },
   { key: 'skills', ic: '✦', labelKey: 'settings.section.skills' },
   { key: 'safety', ic: '▣', labelKey: 'settings.section.safety' },
@@ -204,19 +203,10 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
   const [maxRows, setMaxRows] = useState<number>(1000)
   const [poolSize, setPoolSize] = useState<number>(3)
   const [privacyMode, setPrivacyMode] = useState<string>('standard')
-  const [runtime, setRuntime] = useState<{ data_dir: string; port: number; auth: string } | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [alwaysShowSql, setAlwaysShowSql] = useState<boolean>(() => {
-    try { return localStorage.getItem('tabletalk-sql-fold') === '0' } catch { return false }
-  })
-  const toggleAlwaysShowSql = (v: boolean): void => {
-    setAlwaysShowSql(v)
-    try { localStorage.setItem('tabletalk-sql-fold', v ? '0' : '1') } catch {}
-  }
   const privacyDesc: Record<string, string> = {
-    strict: '严格：仅结构（敏感表代号化），可完全离线，mock 全链路',
-    standard: '标准：结构 + 脱敏聚合（默认，企业日常）',
-    open: '开放：逐查询授权明文，个人/低敏场景',
+    strict: t('settings.privacyTier.strictDesc'),
+    standard: t('settings.privacyTier.standardDesc'),
+    open: t('settings.privacyTier.openDesc'),
   }
   async function persistPrivacy(mode: string): Promise<void> {
     try {
@@ -244,7 +234,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
   useEffect(() => {
     if (!open) return
     let alive = true
-    setLoading(true)
     void getSettings()
       .then((s) => {
         if (!alive) return
@@ -256,10 +245,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
         setMaxRows(s.query_max_rows ?? 1000)
         setPoolSize(s.pool_size ?? 3)
         setPrivacyMode(s.privacy_mode ?? 'standard')
-        setRuntime(s.runtime ?? null)
       })
       .catch(() => undefined)
-      .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [open])
 
@@ -267,7 +254,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
     setEditingChat('new')
     setEditing({
       id: uid('llm'),
-      name: '新模型',
+      name: t('settings.model.newModel'),
       provider: 'cloud',
       base_url: '',
       api_key: '',
@@ -289,7 +276,7 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
     setEditingEmb('new')
     setEditing({
       id: uid('emb'),
-      name: '新嵌入模型',
+      name: t('settings.model.newEmbModel'),
       provider: 'api',
       base_url: '',
       api_key: '',
@@ -440,6 +427,95 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
     persist(undefined, undefined, next, nextDefault)
   }
 
+  // 编辑面板：attached=贴在对应卡片下方（编辑态），缺省=列表尾部独立展开（新建态）
+  const chatEditPanel = (mod?: string): React.JSX.Element => (
+    <div className={`model-edit${mod ? ` ${mod}` : ''}`}>
+      <div className="me-row">
+        <label>Provider</label>
+        <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholder')} />
+      </div>
+      {editing.provider !== 'mock' && (
+        <>
+          <div className="me-row">
+            <label>Base URL</label>
+            <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
+          </div>
+          <div className="me-row">
+            <label>{t('settings.model.modelId')}</label>
+            <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="gpt-4o / claude-sonnet-4.5" />
+          </div>
+          <div className="me-row">
+            <label>API Key</label>
+            <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
+          </div>
+        </>
+      )}
+      <div className="me-row">
+        <label>{t('settings.model.temperature')}</label>
+        <input type="range" className="temp-slider" min="0" max="2" step="0.05" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) })} />
+        <span className="temp-val mono">{((editing as Partial<AiModelConfig>).temperature ?? 0.2).toFixed(2)}</span>
+        <span className="hint" style={{ flex: 1 }}>{t('settings.model.tempHint')}</span>
+      </div>
+      <div className="me-row">
+        <label>{t('settings.model.reasoningLabel')}</label>
+        <span className={`re-status${(editing as Partial<AiModelConfig>).reasoning == null ? '' : ((editing as Partial<AiModelConfig>).reasoning ? ' on' : ' off')}`}>
+          {(editing as Partial<AiModelConfig>).reasoning == null
+            ? t('settings.model.untested')
+            : ((editing as Partial<AiModelConfig>).reasoning ? t('settings.model.reasoningOn') : t('settings.model.reasoningOff'))}
+        </span>
+      </div>
+      <div className="me-actions">
+        <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
+          {testing ? t('conn.modal.testing') : t('conn.modal.test')}
+        </button>
+        <span className="spacer" />
+        <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
+        <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? t('settings.model.add') : t('common.save')}</button>
+      </div>
+      {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
+    </div>
+  )
+
+  const embEditPanel = (mod?: string): React.JSX.Element => (
+    <div className={`model-edit${mod ? ` ${mod}` : ''}`}>
+      <div className="me-row">
+        <label>{t('settings.model.name')}</label>
+        <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholderEmb')} />
+      </div>
+      <div className="me-row">
+        <label>Provider</label>
+        <select value={editing.provider ?? 'api'} onChange={(e) => setEditing({ ...editing, provider: e.target.value })}>
+          <option value="api">{t('settings.model.apiProvider')}</option>
+        </select>
+      </div>
+      {editing.provider !== 'hash' && (
+        <>
+          <div className="me-row">
+            <label>Base URL</label>
+            <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
+          </div>
+          <div className="me-row">
+            <label>{t('settings.model.modelId')}</label>
+            <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="text-embedding-3-small / bge-m3" />
+          </div>
+          <div className="me-row">
+            <label>API Key</label>
+            <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })}                               placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
+          </div>
+        </>
+      )}
+      <div className="me-actions">
+        <button className="btn tl" disabled={testing || (editing.provider !== 'hash' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
+          {testing ? t('conn.modal.testing') : t('conn.modal.test')}
+        </button>
+        <span className="spacer" />
+        <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
+        <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? t('settings.model.add') : t('common.save')}</button>
+      </div>
+      {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
+    </div>
+  )
+
   if (!open) return null
 
   return (
@@ -484,34 +560,6 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
               </section>
             )}
 
-            {sec === 'theme' && (
-              <section className="set-sec">
-                <div className="sec-h">{t('settings.section.theme')}<span className="sec-s mono">{t('settings.theme.sub')}</span></div>
-                <div className="sec-d">{t('settings.theme.desc')}</div>
-                <div className="theme-row">
-                  {(['light', 'dark'] as const).map((th) => (
-                    <button
-                      key={th}
-                      className={`theme-opt${theme === th ? ' on' : ''}`}
-                      onClick={() => applyTheme(th)}
-                    >
-                      <span className="theme-opt-swatch" style={{ background: th === 'light' ? '#f4f5f7' : '#08090d' }} />
-                      <span className="theme-opt-name">{th === 'light' ? t('settings.theme.light') : t('settings.theme.dark')}</span>
-                      {theme === th && <span className="theme-opt-check mono">✓</span>}
-                    </button>
-                  ))}
-                </div>
-                <div className="set-row">
-                  <label>{t('settings.language')}</label>
-                  <div className="seg">
-                    <button className={`seg-b${locale === 'zh-CN' ? ' on' : ''}`} onClick={() => setLocale('zh-CN')}>中文</button>
-                    <button className={`seg-b${locale === 'en-US' ? ' on' : ''}`} onClick={() => setLocale('en-US')}>English</button>
-                  </div>
-                  <span className="set-hint">{t('settings.languageHint')}</span>
-                </div>
-              </section>
-            )}
-
             {sec === 'llm' && (
               <section className="set-sec">
                 <div className="sec-h">{t('settings.section.llm')}<span className="sec-s mono">{t('settings.llm.sub')}</span></div>
@@ -530,7 +578,8 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                   <>
                     <div className="model-list">
                       {aiModels.map((m) => (
-                        <div key={m.id} className={`model-item${m.id === defaultAi ? ' cur' : ''}`}>
+                        <Fragment key={m.id}>
+                          <div className={`model-item${m.id === defaultAi ? ' cur' : ''}`}>
                             <div className="mi-head">
                               <span className="mi-name">{m.name}</span>
                               <span className="mi-model">{m.model || '—'}</span>
@@ -547,58 +596,14 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                           <div className="mi-cap">
                             <CapBadges caps={m.last_test?.capabilities} />
                           </div>
-                        </div>
+                          </div>
+                          {editingChat === m.id && chatEditPanel('attached')}
+                        </Fragment>
                       ))}
                       {aiModels.length === 0 && <div className="model-empty">{t('settings.llm.emptyChat')}</div>}
                     </div>
 
-                    {editingChat && (
-                      <div className="model-edit">
-                        <div className="me-row">
-                          <label>Provider</label>
-                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholder')} />
-                        </div>
-                        {editing.provider !== 'mock' && (
-                          <>
-                            <div className="me-row">
-                              <label>Base URL</label>
-                              <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
-                            </div>
-                            <div className="me-row">
-                              <label>{t('settings.model.modelId')}</label>
-                              <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="gpt-4o / claude-sonnet-4.5" />
-                            </div>
-                            <div className="me-row">
-                              <label>API Key</label>
-                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })} placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
-                            </div>
-                          </>
-                        )}
-                        <div className="me-row">
-                          <label>{t('settings.model.temperature')}</label>
-                          <input type="range" className="temp-slider" min="0" max="2" step="0.05" value={(editing as Partial<AiModelConfig>).temperature ?? 0.2} onChange={(e) => setEditing({ ...(editing as Partial<AiModelConfig>), temperature: parseFloat(e.target.value) })} />
-                          <span className="temp-val mono">{((editing as Partial<AiModelConfig>).temperature ?? 0.2).toFixed(2)}</span>
-                          <span className="hint" style={{ flex: 1 }}>{t('settings.model.tempHint')}</span>
-                        </div>
-                        <div className="me-row">
-                          <label>{t('settings.model.reasoningLabel')}</label>
-                          <span className={`re-status${(editing as Partial<AiModelConfig>).reasoning == null ? '' : ((editing as Partial<AiModelConfig>).reasoning ? ' on' : ' off')}`}>
-                            {(editing as Partial<AiModelConfig>).reasoning == null
-                              ? t('settings.model.untested')
-                              : ((editing as Partial<AiModelConfig>).reasoning ? t('settings.model.reasoningOn') : t('settings.model.reasoningOff'))}
-                          </span>
-                        </div>
-                        <div className="me-actions">
-                          <button className="btn tl" disabled={testing || (editing.provider !== 'mock' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
-                            {testing ? t('conn.modal.testing') : t('conn.modal.test')}
-                          </button>
-                          <span className="spacer" />
-                          <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
-                          <button className="btn save" onClick={saveEdit}>{editingChat === 'new' ? t('settings.model.add') : t('common.save')}</button>
-                        </div>
-                        {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
-                      </div>
-                    )}
+                    {editingChat === 'new' && chatEditPanel()}
 
                     {!editingChat && (
                       <button className="model-add" onClick={startNewChat}>＋ {t('settings.llm.addChat')}</button>
@@ -610,77 +615,42 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                   <>
                     <div className="model-list">
                       {embModels.map((m) => (
-                        <div key={m.id} className={`model-item${m.id === defaultEmb ? ' cur' : ''}`}>
-                          <div className="mi-head">
-                            <span className="mi-name">{m.name}</span>
-                            <span className="mi-provider">{m.provider}</span>
-                            <span className="mi-model">{m.model || '—'}</span>
-                            <div className="mi-actions">
-                              <button className={`mini-btn set${m.id === defaultEmb ? ' cur' : ''}`} onClick={() => { setDefaultEmb(m.id); persist(undefined, undefined, embModels, m.id) }}>
-                                {m.id === defaultEmb ? t('settings.model.current') : t('settings.model.setDefault')}
-                              </button>
-                              <button className="mini-btn" onClick={() => startEditEmb(m)}>{t('settings.model.edit')}</button>
-                              {embModels.length > 1 && (
-                                <button className="mini-btn dang" onClick={() => removeEmbModel(m.id)}>{t('common.delete')}</button>
-                              )}
+                        <Fragment key={m.id}>
+                          <div className={`model-item${m.id === defaultEmb ? ' cur' : ''}`}>
+                            <div className="mi-head">
+                              <span className="mi-name">{m.name}</span>
+                              <span className="mi-provider">{m.provider}</span>
+                              <span className="mi-model">{m.model || '—'}</span>
+                              <div className="mi-actions">
+                                <button className={`mini-btn set${m.id === defaultEmb ? ' cur' : ''}`} onClick={() => { setDefaultEmb(m.id); persist(undefined, undefined, embModels, m.id) }}>
+                                  {m.id === defaultEmb ? t('settings.model.current') : t('settings.model.setDefault')}
+                                </button>
+                                <button className="mini-btn" onClick={() => startEditEmb(m)}>{t('settings.model.edit')}</button>
+                                {embModels.length > 1 && (
+                                  <button className="mini-btn dang" onClick={() => removeEmbModel(m.id)}>{t('common.delete')}</button>
+                                )}
+                              </div>
+                            </div>
+                            <div className="mi-cap">
+                              <div className="mi-badges">
+                                {m.last_test?.ok ? (
+                                  <span className="cap-badge ok">{t('settings.cap.dims', { n: m.last_test.dimensions ?? '?' })}</span>
+                                ) : (
+                                  <span className="cap-badge no">{t('settings.model.untested')}</span>
+                                )}
+                                {m.last_test?.latency_ms !== undefined && (
+                                  <span className="cap-badge">{m.last_test.latency_ms}ms</span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <div className="mi-cap">
-                            <div className="mi-badges">
-                              {m.last_test?.ok ? (
-                                <span className="cap-badge ok">{t('settings.cap.dims', { n: m.last_test.dimensions ?? '?' })}</span>
-                              ) : (
-                                <span className="cap-badge no">{t('settings.model.untested')}</span>
-                              )}
-                              {m.last_test?.latency_ms !== undefined && (
-                                <span className="cap-badge">{m.last_test.latency_ms}ms</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
+                          {editingEmb === m.id && embEditPanel('attached')}
+                        </Fragment>
                       ))}
                       {embModels.length === 0 && <div className="model-empty">{t('settings.llm.emptyEmb')}</div>}
                     </div>
 
-                    {editingEmb && (
-                      <div className="model-edit">
-                        <div className="me-row">
-                          <label>{t('settings.model.name')}</label>
-                          <input value={editing.name ?? ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder={t('settings.model.namePlaceholderEmb')} />
-                        </div>
-                        <div className="me-row">
-                          <label>Provider</label>
-                          <select value={editing.provider ?? 'api'} onChange={(e) => setEditing({ ...editing, provider: e.target.value })}>
-                            <option value="api">{t('settings.model.apiProvider')}</option>
-                          </select>
-                        </div>
-                        {editing.provider !== 'hash' && (
-                          <>
-                            <div className="me-row">
-                              <label>Base URL</label>
-                              <input value={editing.base_url ?? ''} onChange={(e) => setEditing({ ...editing, base_url: e.target.value })} placeholder="https://api.example.com/v1" />
-                            </div>
-                            <div className="me-row">
-                              <label>{t('settings.model.modelId')}</label>
-                              <input value={editing.model ?? ''} onChange={(e) => setEditing({ ...editing, model: e.target.value })} placeholder="text-embedding-3-small / bge-m3" />
-                            </div>
-                            <div className="me-row">
-                              <label>API Key</label>
-                              <input type="password" value={isMaskedKey(editing.api_key) ? '' : (editing.api_key ?? '')} onChange={(e) => setEditing({ ...editing, api_key: e.target.value })}                               placeholder={isMaskedKey(editing.api_key) ? t('settings.model.keySaved', { key: editing.api_key ?? '' }) : t('settings.model.keyNew')} />
-                            </div>
-                          </>
-                        )}
-                        <div className="me-actions">
-                          <button className="btn tl" disabled={testing || (editing.provider !== 'hash' && !editing.base_url?.trim())} onClick={() => void handleTest()}>
-                            {testing ? t('conn.modal.testing') : t('conn.modal.test')}
-                          </button>
-                          <span className="spacer" />
-                          <button className="mini-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
-                          <button className="btn save" onClick={saveEdit}>{editingEmb === 'new' ? t('settings.model.add') : t('common.save')}</button>
-                        </div>
-                        {testMsg && <div className={`me-test${testOk ? ' ok' : ' bad'}`}>{testMsg}</div>}
-                      </div>
-                    )}
+                    {editingEmb === 'new' && embEditPanel()}
 
                     {!editingEmb && (
                       <button className="model-add" onClick={startNewEmb}>＋ {t('settings.llm.addEmb')}</button>
@@ -709,19 +679,19 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                 <div className="sec-h">{t('settings.section.privacy')}<span className="sec-s mono">{t('settings.privacy.sub')}</span></div>
                 <div className="sec-d">{t('settings.privacy.desc')}</div>
                 <div className="panel">
-                  <div className="p-h">三档隐私<span className="p-s mono">strict / standard / open</span></div>
+                  <div className="p-h">{t('settings.privacyTier.title')}<span className="p-s mono">strict / standard / open</span></div>
                   <div className="p-b">
                     <div className="set-row">
-                      <label className="sr-l">隐私模式</label>
+                      <label className="sr-l">{t('settings.privacyTier.label')}</label>
                       <select value={privacyMode} onChange={(e) => { setPrivacyMode(e.target.value); void persistPrivacy(e.target.value) }}>
-                        <option value="strict">严格（纯结构，可离线）</option>
-                        <option value="standard">标准（脱敏聚合）</option>
-                        <option value="open">开放（明文，需逐查询授权）</option>
+                        <option value="strict">{t('settings.privacyTier.strict')}</option>
+                        <option value="standard">{t('settings.privacyTier.standard')}</option>
+                        <option value="open">{t('settings.privacyTier.open')}</option>
                       </select>
                     </div>
                     <div className="hint" style={{ marginTop: 8 }}>{privacyDesc[privacyMode]}</div>
                     {privacyMode === 'strict' && (
-                      <div className="hint" style={{ marginTop: 8, color: 'var(--amber)' }}>严格档：一键离线（自动切 mock，禁用云端），销售演示 30 秒离线可用</div>
+                      <div className="hint" style={{ marginTop: 8, color: 'var(--amber)' }}>{t('settings.privacyTier.strictHint')}</div>
                     )}
                   </div>
                 </div>
@@ -740,29 +710,32 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                 <div className="sec-h">{t('settings.section.general')}<span className="sec-s mono">{t('settings.general.sub')}</span></div>
                 <div className="sec-d">{t('settings.general.desc')}</div>
                 <div className="panel">
-                  <div className="p-h">{t('settings.general.service')}<span className="p-s mono">{t('settings.general.serviceSub')}</span></div>
+                  <div className="p-h">{t('settings.section.theme')}<span className="p-s mono">{t('settings.theme.sub')}</span></div>
                   <div className="p-b">
-                    {loading || !runtime ? (
-                      <div className="sd-hint">{t('common.loading')}</div>
-                    ) : (
-                      <>
-                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.dataDir')}</span><input type="text" value={runtime.data_dir} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.port')}</span><input type="text" value={String(runtime.port)} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.auth')}</span><input type="text" value={runtime.auth} readOnly /></div>
-                        <div className="set-row readonly inline"><span className="sr-l">{t('settings.general.maxConn')}</span><input type="text" value={String(poolSize)} readOnly /></div>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="panel" style={{ marginTop: 12 }}>
-                  <div className="p-h">SQL 显示<span className="p-s mono">开发者视角</span></div>
-                  <div className="p-b">
-                    <div className="set-row inline">
-                      <span className="sr-l">始终显示 SQL</span>
-                      <label className="tg" style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={alwaysShowSql} onChange={(e) => toggleAlwaysShowSql(e.target.checked)} style={{ marginRight: 6 }} />
-                        <span>{alwaysShowSql ? '已开启（默认展开）' : '默认折叠为“显示查询”'}</span>
-                      </label>
+                    <div className="theme-row">
+                      {(['light', 'dark'] as const).map((th) => (
+                        <button
+                          key={th}
+                          className={`theme-opt${theme === th ? ' on' : ''}`}
+                          onClick={() => applyTheme(th)}
+                        >
+                          <span className="theme-opt-swatch" style={{ background: th === 'light' ? '#f4f5f7' : '#08090d' }} />
+                          <span className="theme-opt-name">{th === 'light' ? t('settings.theme.light') : t('settings.theme.dark')}</span>
+                          {theme === th && <span className="theme-opt-check mono">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="set-row">
+                      <label>{t('settings.language')}</label>
+                      <div className="seg">
+                        <button className={`seg-b${locale === 'zh-CN' ? ' on' : ''}`} onClick={() => setLocale('zh-CN')}>
+                          <span className="seg-tag">中</span>{t('settings.lang.zh')}
+                        </button>
+                        <button className={`seg-b${locale === 'en-US' ? ' on' : ''}`} onClick={() => setLocale('en-US')}>
+                          <span className="seg-tag">EN</span>{t('settings.lang.en')}
+                        </button>
+                      </div>
+                      <span className="set-hint">{t('settings.languageHint')}</span>
                     </div>
                   </div>
                 </div>

@@ -1,0 +1,167 @@
+"""ai_review 工具：对 SQL 进行语义级安全审查，返回风险评估和建议。
+
+trust=readonly, confirm=none（只出意见，不具放行权）。
+本地规则引擎（app/safety/gate.py）始终在线强制拦截，本工具是额外的语义增强层。
+自身是 LLM 调用，走单管道（脱敏→清单→审计），source=egress-review。
+"""
+from __future__ import annotations
+
+import json
+import time
+from typing import TYPE_CHECKING, Any
+
+from app.ai.tools.registry import ToolOutcome, register_tool
+
+if TYPE_CHECKING:
+    from app.state import AppState
+
+
+_REVIEW_PROMPT = """你是一个数据库安全审查专家。请对以下 SQL 语句进行语义级安全审查。
+
+SQL：
+```sql
+{sql}
+```
+
+{context_section}
+
+审查要点：
+1. 是否缺少 WHERE 条件（可能导致全表操作）
+2. 是否涉及敏感字段（密码、密钥、个人信息等）
+3. 操作影响范围是否过大（批量删除/更新）
+4. 是否有潜在的注入风险
+5. DML 操作是否有明确的业务意图
+
+请返回 JSON 格式：
+{{
+  "verdict": "safe|risky|dangerous",
+  "reasons": ["原因1", "原因2"],
+  "suggestions": ["建议1", "建议2"]
+}}
+
+只返回 JSON，不要其他内容。"""
+
+
+async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, include_data: bool = False) -> ToolOutcome:
+    sql = (args or {}).get("sql", "").strip()
+    context = (args or {}).get("context", "").strip()
+
+    if not sql:
+        return ToolOutcome(
+            result={"ok": False, "error": "缺少 sql 参数"},
+            think="ai_review 缺少 SQL。",
+        )
+
+    # 构建 prompt
+    context_section = f"业务上下文：{context}" if context else ""
+    prompt = _REVIEW_PROMPT.format(sql=sql, context_section=context_section)
+
+    # 铁律3：LLM 调用前构建清单 + 调用后写审计（source=egress-review）
+    try:
+        from app.ai.provider_cfg import resolve_provider_cfg
+        class _Req:
+            pass
+        provider_cfg = resolve_provider_cfg(state, _Req())
+    except Exception:
+        provider_cfg = {"provider": "mock", "model": "mock"}
+
+    manifest: dict[str, Any] = {
+        "tables": [], "kb_docs": 0, "history_turns": 0,
+        "include_data": False, "mode": "ai_review",
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "model": provider_cfg.get("model", ""), "provider": provider_cfg.get("provider", "mock"),
+        "source": "egress-review",
+    }
+
+    # 调 LLM 做语义审查
+    try:
+        from app.ai import gateway as gw
+        from app.ai.provider_cfg import resolve_provider_cfg
+
+        class _Req:
+            pass
+        _req = _Req()
+        provider_cfg = resolve_provider_cfg(state, _req)
+        provider = gw.build_provider(provider_cfg)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        # 写 LLM 日志
+        try:
+            _meta_ar = getattr(provider, "last_meta", None)
+            if _meta_ar:
+                from app.ai.llm_log import LlmCallLog
+                from app.config import get_env as _ge_ar
+                _usage_ar = _meta_ar.get("response_usage") or {}
+                LlmCallLog(_ge_ar().data_dir).log(
+                    conn_id=conn_id, skill="ai_review",
+                    model=_meta_ar.get("response_model"), provider=provider_cfg.get("provider"),
+                    request_json=_meta_ar.get("request_payload"),
+                    response_json=_meta_ar.get("response_usage"),
+                    input_tokens=_usage_ar.get("prompt_tokens", 0),
+                    output_tokens=_usage_ar.get("completion_tokens", 0),
+                )
+        except Exception:
+            pass
+        text = (getattr(resp, "content", "") or "").strip()
+
+        # 更新 manifest 中的模型信息
+        manifest["model"] = provider_cfg.get("model", "")
+        manifest["provider"] = provider_cfg.get("provider", "mock")
+
+        # 解析 JSON 响应
+        text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        result = json.loads(text)
+        verdict = result.get("verdict", "safe")
+        reasons = result.get("reasons", [])
+        suggestions = result.get("suggestions", [])
+    except json.JSONDecodeError:
+        verdict = "safe"
+        reasons = ["审查结果解析失败，默认safe"]
+        suggestions = []
+    except Exception:
+        verdict = "safe"
+        reasons = ["审查服务暂时不可用，默认safe"]
+        suggestions = []
+
+    # 铁律3：审计写入（egress-review，含清单）
+    try:
+        cname = conn_id or "__ai_review__"
+        try:
+            cname = state.connections.get(conn_id).name
+        except Exception:
+            pass
+        state.audit.log(
+            connection=cname,
+            origin="ai",
+            tier="read",
+            verdict="egress",
+            status="egress-review",
+            sql=f"[ai_review] {sql[:60]}",
+            source="egress",
+            manifest=manifest,
+        )
+    except Exception:
+        pass
+
+    return ToolOutcome(
+        result={
+            "ok": True,
+            "verdict": verdict,
+            "reasons": reasons,
+            "suggestions": suggestions,
+        },
+        think=f"AI安全审查结果：{verdict}",
+    )
+
+
+def register() -> None:
+    register_tool(
+        "ai_review",
+        "对SQL语句进行语义级安全审查，返回风险评估(verdict)和建议。只出意见，不具放行权。",
+        {
+            "sql": {"type": "string", "description": "待审查的SQL语句"},
+            "context": {"type": "string", "description": "业务上下文说明（可选）"},
+        },
+        ["sql"],
+        _ai_review,
+        trust="readonly",
+    )

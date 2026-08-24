@@ -67,7 +67,7 @@ export default function App(): React.JSX.Element {
     if (currentId) void loadSchema(currentId)
   }, [currentId, loadSchema])
 
-  if (!rt) return <Boot title="connecting to tabletalk" hint={t('bootstrap.connectingHint')} />
-  if (!health) return <Boot title="waiting for service" hint={t('bootstrap.readyHint')} />
+  if (!rt) return <Boot title={t('bootstrap.connecting')} hint={t('bootstrap.connectingHint')} />
+  if (!health) return <Boot title={t('bootstrap.ready')} hint={t('bootstrap.readyHint')} />
   return <AppLayout health={health} />
 }

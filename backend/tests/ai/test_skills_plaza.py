@@ -78,7 +78,7 @@ def test_skill_tool_schemas_filtering():
     all_names = {t["function"]["name"] for t in skill_tool_schemas(None)}
     assert "run_dml" in all_names
     ro = skill_tool_schemas("report")
-    assert {t["function"]["name"] for t in ro} == {"get_schema", "describe_table", "run_query", "load_result"}
+    assert {t["function"]["name"] for t in ro} == {"get_schema", "run_query"}
     # 未知技能回退全量
     assert len(skill_tool_schemas("nope")) == len(all_names)
 

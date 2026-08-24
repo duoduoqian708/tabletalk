@@ -3,7 +3,7 @@ import { useConnections } from '@renderer/store/connections'
 import { useSchema } from '@renderer/store/schema'
 import { useResults } from '@renderer/store/results'
 import { useUi } from '@renderer/store/ui'
-import { runQuery, formatSql } from '@renderer/api/query'
+import { runQuery, cancelDml, formatSql } from '@renderer/api/query'
 import type { QueryResponse } from '@renderer/api/types'
 import {
   chatStream,
@@ -12,11 +12,10 @@ import {
   type AiCard,
   type AiEvent,
   type Manifest,
-  type ReportSectionResult,
-  type ReasoningEffort
+  type ReportSectionResult
 } from '@renderer/api/ai'
 import { toastMsg } from '@renderer/utils/toast'
-import { useChat, generateTitle, relTime, type TrustLevel, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
+import { useChat, generateTitle, relTime, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
 import { listSkills } from '@renderer/api/skills'
@@ -54,7 +53,7 @@ const GATE_LABEL: Record<string, string> = {
 /* 推理步骤：默认收成一行轻量指示，点击展开细节（真实事件驱动，无 mock 播放） */
 function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   const [openStep, setOpenStep] = useState<Set<string>>(new Set())
   const running = steps.some((s) => s.status === 'running')
   const doneCount = steps.filter((s) => s.status === 'done').length
@@ -124,27 +123,79 @@ function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
   )
 }
 
+function BlockRenderer({ block }: { block: import('@renderer/api/ai').Block }): React.JSX.Element {
+  const { t } = useI18n()
+  if (block.kind === 'sql_editor') {
+    return <div className="blk-code mono"><div className="blk-label">SQL</div><pre>{block.sql}</pre></div>
+  }
+  if (block.kind === 'table') {
+    return <div className="blk-table"><div className="blk-label">{block.title || t('aiRail.blockTable')}</div><div className="mono" style={{ fontSize: '11px' }}>{block.columns.join(' | ')} — {t('aiRail.blockRows', { n: block.rows.length })}</div></div>
+  }
+  if (block.kind === 'chart') {
+    return <div className="blk-chart"><div className="blk-label">{t('aiRail.blockChart', { type: block.chartType })}</div><div className="mono" style={{ fontSize: '11px' }}>{block.title || ''} — {t('aiRail.blockPlaceholder')}</div></div>
+  }
+  if (block.kind === 'confirm') {
+    return <div className="blk-confirm"><span className="mono">{block.prompt}</span><button className="btn pri" style={{ marginLeft: 8 }}>{block.confirmLabel || t('common.confirm')}</button><button className="btn gho" style={{ marginLeft: 6 }}>{block.cancelLabel || t('common.cancel')}</button></div>
+  }
+  if (block.kind === 'choice') {
+    return <div className="blk-choice"><div className="mono">{block.prompt}</div><div style={{ marginTop: 6 }}>{block.options.map((o) => <label key={o.value} className="mono" style={{ marginRight: 12 }}><input type={block.multiple ? 'checkbox' : 'radio'} name="choice" value={o.value} /> {o.label}</label>)}</div></div>
+  }
+  return <div className="blk-text mono">{(block as { text: string }).text}</div>
+}
+
+function SubtaskPanel({ subtasks, scene }: { subtasks: import('@renderer/store/chat').Subtask[]; scene?: string }): React.JSX.Element {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(true)
+  if (!subtasks || subtasks.length === 0) return <></>
+  const running = subtasks.some((s) => s.status === 'running')
+  const doneCount = subtasks.filter((s) => s.status === 'done').length
+  return (
+    <div className="think-panel">
+      <div className="think-line" onClick={() => setOpen((o) => !o)}>
+        {running ? <><span className="spin" /><span>{scene ? `${scene} · ${t('ws.thinking')}` : t('ws.thinking')}</span></> : <><span className="ok">✓</span><span>{t('ws.evalSteps', { n: doneCount })}</span></>}
+        <span className="spacer" />
+        <span className="step-arrow">{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div className="steps">
+          {subtasks.map((s) => (
+            <div className={`step ${s.status}`} key={s.id}>
+              <div className="step-h">
+                <span className="step-ic">{s.status === 'done' && <span className="ok">✓</span>}{s.status === 'running' && <span className="spin" />}{s.status === 'error' && <span className="ok">✗</span>}</span>
+                <span className="step-label">{s.label || s.tool}</span>
+                <span className="mono" style={{ fontSize: '10px', opacity: 0.6 }}>{s.tool}</span>
+              </div>
+              <div className="step-detail open">
+                {s.details.length === 0 && s.blocks.length === 0 ? <div className="sd-empty mono">{s.status === 'running' ? t('ws.thinking') : '—'}</div> : null}
+                {s.details.map((d, di) => <div key={di} className="sd-line mono">{d}</div>)}
+                {s.blocks.map((b, bi) => <BlockRenderer key={bi} block={b} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /* ---------- 出网清单（B1） ---------- */
 function ManifestView({ manifest }: { manifest: Manifest }): React.JSX.Element {
-  const { locale } = useI18n()
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const human = (() => {
     const nTables = manifest.tables.length
     const kb = manifest.kb_docs
     const hist = manifest.history_turns
-    const rows = manifest.include_data ? (locale.startsWith('zh') ? '含聚合行数据' : 'with rows') : (locale.startsWith('zh') ? '无行数据' : 'no rows')
-    const modeMap: Record<string, string> = locale.startsWith('zh') ? { strict: '严格', standard: '标准', open: '开放' } : { strict: 'strict', standard: 'standard', open: 'open' }
+    const rows = manifest.include_data ? t('aiRail.withRows') : t('aiRail.noRows')
+    const modeMap: Record<string, string> = { strict: t('aiRail.modeStrict'), standard: t('aiRail.modeStandard'), open: t('aiRail.modeOpen') }
     const mode = modeMap[manifest.mode] ?? manifest.mode
-    if (locale.startsWith('zh')) {
-      return `${nTables} 张表结构 · ${kb} 条知识库注释 · ${hist} 轮历史 · ${rows} · ${mode}模式`
-    }
-    return `${nTables} tables · ${kb} KB docs · ${hist} turns · ${rows} · ${mode}`
+    return t('aiRail.manifestSummary', { nTables, kb, hist, rows, mode })
   })()
   return (
     <div className={`manifest ${open ? 'open' : ''}`}>
       <div className="manifest-head" onClick={() => setOpen((o) => !o)}>
         <span className="manifest-ic">◈</span>
-        <span className="manifest-title">{locale.startsWith('zh') ? '出网清单' : 'Egress Manifest'}</span>
+        <span className="manifest-title">{t('aiRail.manifestTitle')}</span>
         <span className="manifest-human mono">{human}</span>
         <span className="spacer" />
         <span className="manifest-arrow">{open ? '▾' : '▸'}</span>
@@ -167,7 +218,7 @@ function ManifestView({ manifest }: { manifest: Manifest }): React.JSX.Element {
 
 /* ---------- 爆炸半径（A3） ---------- */
 function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): React.JSX.Element {
-  const { locale } = useI18n()
+  const { t } = useI18n()
   const [open, setOpen] = useState(true)
   if (!blast) return <></>
   const hasCascade = blast.cascade.length > 0
@@ -175,10 +226,10 @@ function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): Reac
     <div className={`blast ${open ? 'open' : ''}`}>
       <div className="blast-head" onClick={() => setOpen((o) => !o)}>
         <span className="blast-ic">◎</span>
-        <span className="blast-title">{locale.startsWith('zh') ? '爆炸半径' : 'Blast Radius'}</span>
+        <span className="blast-title">{t('aiRail.blastTitle')}</span>
         <span className="blast-human mono">
-          {blast.direct.map((d) => `${d.table}${d.estimated_rows != null ? `≈${d.estimated_rows}行` : ''}`).join(', ')}
-          {hasCascade ? ` → ${blast.cascade.map((c) => c.table).join(', ')}` : locale.startsWith('zh') ? ' · 无级联' : ' · no cascade'}
+          {blast.direct.map((d) => `${d.table}${d.estimated_rows != null ? t('aiRail.estRows', { n: d.estimated_rows }) : ''}`).join(', ')}
+          {hasCascade ? ` → ${blast.cascade.map((c) => c.table).join(', ')}` : t('aiRail.noCascade')}
         </span>
         <span className="spacer" />
         <span className="blast-arrow">{open ? '▾' : '▸'}</span>
@@ -198,7 +249,7 @@ function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): Reac
           </div>
           {hasCascade ? (
             <div className="blast-sec">
-              <div className="blast-label mono">cascade · FK 2跳</div>
+              <div className="blast-label mono">{t('aiRail.cascadeLabel')}</div>
               <div className="blast-path">
                 {blast.cascade.map((c, idx) => (
                   <span key={c.table} className="blast-hop">
@@ -210,7 +261,7 @@ function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): Reac
               </div>
             </div>
           ) : (
-            <div className="blast-sec"><span className="blast-empty mono">{locale.startsWith('zh') ? '无 FK 级联' : 'no FK cascade'}</span></div>
+            <div className="blast-sec"><span className="blast-empty mono">{t('aiRail.noFkCascade')}</span></div>
           )}
           {blast.constraints.length > 0 && (
             <div className="blast-sec">
@@ -225,14 +276,14 @@ function BlastView({ blast }: { blast: import('@renderer/api/ai').Blast }): Reac
 }
 
 function RollbackView({ rollback }: { rollback: any }): React.JSX.Element {
-  const { locale } = useI18n()
+  const { t } = useI18n()
   const [open, setOpen] = useState(true)
   if (!rollback) return <></>
   return (
     <div className={`rollback ${open ? 'open' : ''}`}>
       <div className="rollback-head" onClick={() => setOpen((o) => !o)}>
         <span className="rollback-ic">↩</span>
-        <span className="rollback-title">{locale.startsWith('zh') ? '回滚剧本' : 'Rollback'}</span>
+        <span className="rollback-title">{t('aiRail.rollbackTitle')}</span>
         <span className="rollback-note mono">{rollback.note}</span>
         <span className="spacer" />
         <span className="rollback-arrow">{open ? '▾' : '▸'}</span>
@@ -241,15 +292,15 @@ function RollbackView({ rollback }: { rollback: any }): React.JSX.Element {
         <div className="rollback-body mono">
           {rollback.backup_sql && (
             <div className="rollback-sec">
-              <div className="rollback-label">备份导出</div>
+              <div className="rollback-label">{t('aiRail.backupExport')}</div>
               <pre className="rollback-code">{rollback.backup_sql}</pre>
-              <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.backup_sql)}>复制</button>
+              <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.backup_sql)}>{t('aiRail.copy')}</button>
             </div>
           )}
           <div className="rollback-sec">
-            <div className="rollback-label">回滚语句</div>
+            <div className="rollback-label">{t('aiRail.rollbackSql')}</div>
             <pre className="rollback-code">{rollback.rollback_sql}</pre>
-            <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.rollback_sql)}>复制</button>
+            <button className="mini-btn" onClick={() => navigator.clipboard.writeText(rollback.rollback_sql)}>{t('aiRail.copy')}</button>
           </div>
         </div>
       )}
@@ -326,7 +377,7 @@ void highlightSql
 void SqlEditor
 
 /* ---------- SQL 卡片（常驻可编辑编辑器） ---------- */
-function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, onConfirm, onAnalyze }: {
+function SqlCard({ card, question, busy, pending, dialect, connectionId, sessionId, onRun, onConfirm, onAnalyze }: {
   card: AiCard
   question: string
   busy: boolean
@@ -334,8 +385,9 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
   pending: boolean
   dialect: string
   connectionId: string | null
+  sessionId: string | null
   onRun: (sql: string) => void
-  onConfirm: (sql: string) => void
+  onConfirm: (sql: string, card?: AiCard) => void
   onAnalyze: (kind: 'explain' | 'optimize' | 'risk', sql: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -412,9 +464,9 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
   const followUps: string[] = (() => {
     const tbl = traceTables[0] || ''
     const arr: string[] = []
-    if (tbl) arr.push(`按周统计${tbl}呢？`)
-    arr.push('只看最近7天的呢？')
-    arr.push('加个同比对比呢？')
+    if (tbl) arr.push(t('aiRail.followWeekly', { tbl }))
+    arr.push(t('aiRail.followRecent7d'))
+    arr.push(t('aiRail.followYoY'))
     return arr.slice(0, 3)
   })()
 
@@ -430,13 +482,13 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
           ))}
         </span>
         <span className="st">{card.sub ?? ''}</span>
-        <button className="fold-toggle mono" onClick={toggleFold} title={collapsed ? '展开 SQL' : '折叠 SQL'}>
-          {collapsed ? '显示查询' : '收起'}
+        <button className="fold-toggle mono" onClick={toggleFold} title={collapsed ? t('aiRail.unfoldSqlTitle') : t('aiRail.foldSqlTitle')}>
+          {collapsed ? t('aiRail.showQuery') : t('aiRail.collapse')}
         </button>
       </div>
 
       {!collapsed && (
-        <Suspense fallback={<div className="cm-loading mono">加载编辑器…</div>}>
+        <Suspense fallback={<div className="cm-loading mono">{t('aiRail.loadingEditor')}</div>}>
           <CmEditor
             value={draft}
             onChange={setDraft}
@@ -446,17 +498,17 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
         </Suspense>
       )}
       {collapsed && (
-        <div className="sql-folded mono" onClick={toggleFold} title="点击展开 SQL">
-          显示查询 · {draft.split('\n')[0].slice(0, 42)}…
+        <div className="sql-folded mono" onClick={toggleFold} title={t('aiRail.clickToExpand')}>
+          {t('aiRail.showQueryPrefix')}{draft.split('\n')[0].slice(0, 42)}…
         </div>
       )}
       {/* C5 可追溯 */}
       {traceTables.length > 0 && (
         <div className="trace-row">
-          <span className="trace-label mono">引用表</span>
+          <span className="trace-label mono">{t('aiRail.refTables')}</span>
           <span className="trace-chips">
             {traceTables.map((tbl) => (
-              <button key={tbl} className="trace-chip mono" title="跳至星图定位" onClick={() => {
+              <button key={tbl} className="trace-chip mono" title={t('aiRail.locateInGraph')} onClick={() => {
                 // 触发星图定位：通过全局事件或直接操作？简化：派发自定义事件
                 window.dispatchEvent(new CustomEvent('tabletalk:locate', { detail: { table: tbl } }))
               }}>{tbl}</button>
@@ -466,7 +518,51 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
       )}
 
       <div className="c-f">
-        {card.verdict === 'review' && !card.executed && (
+        {card.question_library && (
+          <div className="risk-panel ql-hit">
+            <div className="rp-title">{t('ws.qlHit')}</div>
+            <div className="rp-line mono">{t('ws.qlDesc')}</div>
+            <div className="rp-line">
+              <button className="btn pri" disabled={busy || !draft.trim()} onClick={() => onRun(draft)}>{t('ws.qlExec')}</button>
+              <span className="rp-hint mono">{t('ws.confirmExpiredTip')}</span>
+            </div>
+          </div>
+        )}
+        {card.needs_confirm && !card.executed && !card.question_library && (
+          <div className="risk-panel">
+            <div className="rp-title">{t('ws.riskTitle')}</div>
+            <div className="rp-line mono">{card.expires_in != null && card.expires_in <= 0 ? t('ws.confirmExpired') : t('ws.confirmExecWithRows', { n: card.preview_rows ?? '?' })}</div>
+            {card.blast && <BlastView blast={card.blast as unknown as import('@renderer/api/ai').Blast} />}
+            {(card as unknown as { rollback: any }).rollback && <RollbackView rollback={(card as unknown as { rollback: any }).rollback} />}
+            {(card.reasons && card.reasons.length > 0 ? card.reasons : card.reason ? [{ rule_id: 'legacy', message: card.reason, message_en: card.reason, objects: [] }] : []).map((r, idx) => {
+              const { locale } = useI18n.getState()
+              const tr = t(`gate.rule.${(r as any).rule_id}`)
+              const msg = tr !== `gate.rule.${(r as any).rule_id}` ? tr : (locale === 'en-US' && (r as any).message_en ? (r as any).message_en : (r as any).message)
+              const objs = (r as any).objects as string[] | undefined
+              return (
+                <div key={idx} className="rp-line rp-reason">
+                  <span className="rp-rule mono">{(r as any).rule_id}</span>
+                  <span className="rp-msg">{msg}</span>
+                  {objs && objs.length > 0 && <span className="rp-objs mono">· {objs.join(', ')}</span>}
+                </div>
+              )
+            })}
+            <div className="rp-line">
+              <button className="mini-btn" onClick={async () => {
+                const rt = getRuntime()
+                if (!rt?.token || !connectionId) return
+                const r = await fetch(`/api/v1/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token }, body: JSON.stringify({ connection_id: connectionId, sql: draft }) })
+                if (r.ok) alert(t('aiRail.sentToApproval'))
+                else {
+                  const j = await r.json().catch(()=>({detail:'failed'}))
+                  alert(j.detail || t('aiRail.toApprovalFail'))
+                }
+              }}>{t('aiRail.toApproval')}</button>
+            </div>
+            <div className="rp-line dim">{card.expires_in != null && card.expires_in <= 0 ? t('ws.confirmExpiredTip') : t('ws.riskNote')}</div>
+          </div>
+        )}
+        {card.verdict === 'review' && !card.executed && !card.needs_confirm && !card.question_library && (
           <div className="risk-panel">
             <div className="rp-title">{t('ws.riskTitle')}</div>
             <div className="rp-line mono">{t('ws.riskScope', { n: card.preview_rows ?? '?' })}</div>
@@ -490,12 +586,12 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
                 const rt = getRuntime()
                 if (!rt?.token || !connectionId) return
                 const r = await fetch(`/api/v1/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token }, body: JSON.stringify({ connection_id: connectionId, sql: draft }) })
-                if (r.ok) alert('已转审批')
+                if (r.ok) alert(t('aiRail.sentToApproval'))
                 else {
                   const j = await r.json().catch(()=>({detail:'failed'}))
-                  alert(j.detail || '转审批失败（仅团队模式）')
+                  alert(j.detail || t('aiRail.toApprovalFail'))
                 }
-              }}>转审批</button>
+              }}>{t('aiRail.toApproval')}</button>
             </div>
             <div className="rp-line dim">{t('ws.riskNote')}</div>
           </div>
@@ -534,7 +630,18 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
         ) : card.verdict === 'allow' ? (
           <button className="btn pri" disabled={busy || !draft.trim()} onClick={() => onRun(draft)}>{t('ws.run')}</button>
         ) : card.verdict === 'review' ? (
-          <button className="btn warn" disabled={busy || !draft.trim()} onClick={() => onConfirm(draft)}>{t('ws.confirmExec')}</button>
+          card.needs_confirm ? (
+            card.expires_in != null && card.expires_in <= 0 ? (
+              <span className="c-r">{t('ws.confirmExpired')}</span>
+            ) : (
+              <>
+                <button className="btn warn" disabled={busy || !draft.trim()} onClick={() => onConfirm(draft, card)}>{card.preview_rows != null ? t('ws.confirmExecWithRows', { n: card.preview_rows }) : t('ws.confirmExec')}</button>
+                <button className="btn gho" disabled={busy} onClick={async () => { if (!card.confirm_token || !sessionId) return; try { await cancelDml(sessionId, card.confirm_token); toastMsg(t('ws.confirmCancelled')) } catch {} }}>{t('ws.confirmCancel')}</button>
+              </>
+            )
+          ) : (
+            <button className="btn warn" disabled={busy || !draft.trim()} onClick={() => onConfirm(draft, card)}>{t('ws.confirmExec')}</button>
+          )
         ) : blocked ? (
           <span className="c-r">{t('ws.ddlBlock')}</span>
         ) : (
@@ -549,14 +656,12 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, onRun, 
           ))}
         </div>
         <button className={`save-chip ${saved ? 'saved' : ''}`} onClick={() => void handleSave()} disabled={saved}>
-          {saved ? '✓ 已保存' : '☆ 保存为常用问题'}
+          {saved ? t('aiRail.savedChip') : t('aiRail.saveQuestion')}
         </button>
       </div>
     </div>
   )
 }
-
-const STEP_MS = 1500      // 每步停留时长
 
 /* 欢迎区推荐问题（演示库场景；点击直接发送） */
 const SUGGESTIONS: string[] = [
@@ -574,7 +679,7 @@ const SUGGESTIONS: string[] = [
 function buildSuggestions(
   confirmed: string[],
   tableForTag: Record<string, string>,
-  isZh: boolean,
+  t: (key: string, vars?: Record<string, string | number>) => string,
   enabledIds: Set<string>
 ): string[] {
   const sugs: string[] = []
@@ -582,22 +687,20 @@ function buildSuggestions(
   if (enabledIds.has('query')) {
     for (const tg of confirmed.slice(0, 5)) {
       const tbl = tableForTag[tg] || ''
-      sugs.push(isZh
-        ? (tbl ? `按月统计${tg}的${tbl}数量` : `查询${tg}相关的数据`)
-        : (tbl ? `Monthly count of ${tbl} for ${tg}` : `Query ${tg} data`))
+      sugs.push(tbl ? t('aiRail.sugMonthlyCount', { tag: tg, tbl }) : t('aiRail.sugQueryTag', { tag: tg }))
     }
   }
   if (enabledIds.has('schema') && confirmed.length) {
-    sugs.push(isZh ? '这个库有哪些表结构？' : 'What tables does this database have?')
+    sugs.push(t('aiRail.sugSchemaList'))
   }
   if (enabledIds.has('report') && confirmed.length) {
-    sugs.push(isZh ? `出一份关于${confirmed[0]}的分析报告` : `Produce a report on ${confirmed[0]}`)
+    sugs.push(t('aiRail.sugReportOn', { tag: confirmed[0] }))
   }
   // query 常开兜底：补齐到至少 3 条
   if (enabledIds.has('query') && confirmed.length) {
     let i = 0
     while (sugs.length < 3) {
-      sugs.push(isZh ? `统计${confirmed[i % confirmed.length]}的趋势` : `Trend of ${confirmed[i % confirmed.length]}`)
+      sugs.push(t('aiRail.sugTrendOf', { tag: confirmed[i % confirmed.length] }))
       i++
     }
   }
@@ -605,7 +708,7 @@ function buildSuggestions(
 }
 
 /* ---------- 主组件 ---------- */
-export function AiRail({ providerName, modelLabel }: { providerName?: string | null; modelLabel?: string | null }): React.JSX.Element {
+export function AiRail(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const { t } = useI18n()
   const connDialect = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.dialect ?? 'sqlite')
@@ -620,6 +723,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
   const [busy, setBusy] = useState(false)
   const [input, setInput] = useState('')
   const [histOpen, setHistOpen] = useState(false)
+  const [secPolicyOpen, setSecPolicyOpen] = useState(false)
   const [sugs, setSugs] = useState<string[]>([])
   // 对话面板：底部命令中心聚焦/发送时向上弹出
   const [panelOpen, setPanelOpen] = useState(false)
@@ -638,7 +742,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     void getSettings().then((s) => alive && setSettings(s)).catch(() => undefined)
     return () => { alive = false }
   }, [])
-  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>('off')
   // 按对话选模型：跟随默认模型（可通过设置切换）
   const modelId = settings?.default_ai_model ?? null
   // 图谱"问 AI 这张表"→ 预填输入并聚焦
@@ -681,18 +784,12 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             if (confirmed.includes(tg) && !tableForTag[tg]) tableForTag[tg] = tbl
           }
         }
-        const isZh = useI18n.getState().locale.startsWith('zh')
-        const sugs = buildSuggestions(confirmed, tableForTag, isZh, enabledSkills)
+        const sugs = buildSuggestions(confirmed, tableForTag, useI18n.getState().t, enabledSkills)
         if (alive) setDynamicSugs(sugs)
       } catch {}
     })()
     return () => { alive = false }
   }, [currentId, enabledSkills])
-  // 思考强度控件显隐：以「当前生效模型」(对话级覆盖或默认) 的推理能力为准
-  const effectiveModel = settings?.ai_models.find(
-    (m) => m.id === (modelId ?? settings.default_ai_model),
-  )
-  const supportsReasoning = !!effectiveModel?.reasoning
   // 输入框自动增高
   const inputRef = useRef<HTMLTextAreaElement>(null)
   function autoGrow(): void {
@@ -712,6 +809,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
   const userCountRef = useRef(0)
   const firstQRef = useRef('')
   const histDdRef = useRef<HTMLDivElement>(null)
+  const secPolicyDdRef = useRef<HTMLDivElement>(null)
   const streamDoneRef = useRef(false)
   const gateDoneRef = useRef(false)
   const autoRanRef = useRef(false)
@@ -719,10 +817,11 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
 
   const activeConv = conversations.find((c) => c.id === activeId) ?? null
 
-  // 点击外部关闭历史对话下拉
+  // 点击外部关闭下拉（历史对话 / 安全策略）
   useEffect(() => {
     const onDoc = (e: MouseEvent): void => {
       if (histDdRef.current && !histDdRef.current.contains(e.target as Node)) setHistOpen(false)
+      if (secPolicyDdRef.current && !secPolicyDdRef.current.contains(e.target as Node)) setSecPolicyOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -812,17 +911,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     stepTimers.current = []
   }
 
-  /** 推进某一步的状态（running/done）。 */
-  function setStepStatus(idx: number, status: StepStatus): void {
-    setTurns((t) => {
-      const n = [...t]
-      const last = n[n.length - 1]
-      if (last.role !== 'ai' || !last.steps) return n
-      last.steps = last.steps.map((s, i) => (i === idx ? { ...s, status } : s))
-      return n
-    })
-  }
-
   /** 将暂存的卡片挂到当前 turn（安全评估未完成时 pending=true）。
    *  仅当 SQL 生成步已完成（播放器走到）或流已结束时挂载，避免卡片早于步骤出现。 */
   function attachCards(): void {
@@ -887,27 +975,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     maybeAutoRun(card)
   }
 
-  /** 逐步播放：每步 running → 停留 → done → 下一步（detail 由真实 stage/think/sql/gate 事件填充） */
-  function playSteps(question: string): void {
-    clearStepTimers()
-    const sqlIdx = STEP_DEFS.length - 2   // SQL 生成
-    const gateIdx = STEP_DEFS.length - 1  // 安全评估
-
-    for (let idx = 0; idx < STEP_DEFS.length; idx++) {
-      const stepStart = idx * STEP_MS
-      // 步骤开始：mark running（前一步已 done 由前一轮完成）
-      stepTimers.current.push(setTimeout(() => setStepStatus(idx, 'running'), stepStart))
-      // 步骤完成
-      stepTimers.current.push(setTimeout(() => {
-        setStepStatus(idx, 'done')
-        // SQL 生成完成 → 卡片此刻才出现（安全评估未完成，pending）
-        if (idx === sqlIdx) attachCards()
-        // 安全评估完成 → 判定落地
-        if (idx === gateIdx) finishGate()
-      }, stepStart + STEP_MS))
-    }
-  }
-
   async function send(inputText?: string, opts?: { mode?: 'query' | 'report' }): Promise<void> {
     const q = (inputText ?? input).trim()
     if (!q || !currentId) return
@@ -929,20 +996,19 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     autoRanRef.current = false
     loopResultRef.current = null
     // 上下文联动：当前选中表自动附加到提问（用户已可见上下文筹码，可移除）
-    const ctx = ctxTable && !q.includes(`@${ctxTable}`) && !q.includes(ctxTable) ? `（上下文：${ctxTable} 表）` : ''
+    const ctx = ctxTable && !q.includes(`@${ctxTable}`) && !q.includes(ctxTable) ? t('aiRail.ctxSuffix', { tbl: ctxTable }) : ''
     histRef.current.push({ role: 'user', content: `${q}${ctx}` })
     const cur = histRef.current
     const reportTitle = q.replace(/[？?。.!！\s]+$/, '').slice(0, 24)
     // 报告模式：turn 标记 isReport，不走 query 模式步骤动画
     if (mode === 'report') {
       setTurns((t) => [...t, { role: 'user', text: q }])
-      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true }])
+      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true, sessionId: reqSid }])
     } else {
       setTurns((t) => [...t, { role: 'user', text: q }])
-      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], steps: makeSteps(), running: true }])
+      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], steps: makeSteps(), subtasks: [], running: true, sessionId: reqSid }])
     }
     cardsRef.current = []
-    if (mode !== 'report') playSteps(q)
     // 提问刷新会话更新时间（查看历史不刷新）
     if (reqSid) touch(reqSid)
 
@@ -955,7 +1021,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
           session_id: reqSid,
           title: convForReq?.title ?? null,
           mode: mode ?? null,
-          reasoning: supportsReasoning ? reasoningEffort : null,
           model_id: modelId ?? undefined,
         },
         (ev: AiEvent) => {
@@ -1094,10 +1159,68 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
               }
               return n
             })
+          } else if ((ev as unknown as { type: string }).type === 'scene_start') {
+            const se = ev as unknown as { scene: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') last.scene = se.scene
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'subtask_start') {
+            const se = ev as unknown as { id: string; tool: string; label: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') {
+                last.subtasks = [...(last.subtasks ?? []), { id: se.id, tool: se.tool, label: se.label || se.tool, status: 'running', details: [], blocks: [] }]
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'subtask_progress') {
+            const se = ev as unknown as { id: string; delta: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.subtasks) {
+                const it = last.subtasks.find((s) => s.id === se.id)
+                if (it) it.details = [...it.details, se.delta]
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'subtask_done') {
+            const se = ev as unknown as { id: string; status: string; detail?: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.subtasks) {
+                const it = last.subtasks.find((s) => s.id === se.id)
+                if (it) {
+                  it.status = se.status === 'error' ? 'error' : 'done'
+                  if (se.detail) it.details = [...it.details, se.detail]
+                }
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'block') {
+            const se = ev as unknown as { id: string; block: import('@renderer/api/ai').Block }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.subtasks) {
+                const it = last.subtasks.find((s) => s.id === se.id)
+                if (it) it.blocks = [...it.blocks, se.block]
+                else {
+                  last.subtasks = [...(last.subtasks ?? []), { id: se.id, tool: 'block', label: 'block', status: 'done', details: [], blocks: [se.block] }]
+                }
+              }
+              return n
+            })
           } else if (ev.type === 'sql_card') {
             cardsRef.current = [...cardsRef.current, ev.card]
             if (ev.card?.result) loopResultRef.current = ev.card.result
             attachCards()
+            finishGate()
           } else if (ev.type === 'error') {
             setTurns((t) => {
               const n = [...t]
@@ -1282,11 +1405,11 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
     }
   }
 
-  async function exec(sql: string, confirm: boolean, question?: string): Promise<void> {
+  async function exec(sql: string, confirm: boolean, question?: string, card?: AiCard, sessionId?: string | null): Promise<void> {
     if (!currentId) return
     setBusy(true)
     try {
-      const r = await runQuery({ connectionId: currentId, sql, origin: 'ai', confirm })
+      const r = await runQuery({ connectionId: currentId, sql, origin: 'ai', confirm, confirm_token: card?.confirm_token ?? null, session_id: sessionId ?? null })
       handleQueryResult(r, sql, question)
     } catch (e) {
       setTurns((tt) => {
@@ -1398,7 +1521,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                 </div>
               )}
             </div>
-            <button className="ah-btn ai-close" title={t('ws.collapseEsc')} onClick={() => setPanelOpen(false)}>✕</button>
           </div>
 
           <div className="airail-scroll" ref={scrollRef}>
@@ -1454,7 +1576,7 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                       ))}
                     </div>
                   )}
-                  {turn.steps && <ThinkPanel steps={turn.steps} />}
+                  {turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : turn.steps && !(turn.text && (turn.text.includes('不处理此类问题') || turn.text.includes('不在处理范围') || turn.text.includes('引导'))) && <ThinkPanel steps={turn.steps} />}
                   {turn.manifest && <ManifestView manifest={turn.manifest} />}
                   {turn.text && !turn.isReport && <div className="ai-txt">{turn.text}</div>}
                   {turn.text && turn.isReport && turn.clarify && null}
@@ -1467,8 +1589,9 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
                       pending={!!turn.pending}
                       dialect={connDialect}
                       connectionId={currentId}
+                      sessionId={turn.sessionId ?? null}
                       onRun={(sql) => void exec(sql, false, turn.question)}
-                      onConfirm={(sql) => void exec(sql, true, turn.question)}
+                      onConfirm={(sql, card) => void exec(sql, true, turn.question, card ?? c, turn.sessionId ?? null)}
                       onAnalyze={(kind, sql) => void analyze(kind, sql)}
                     />
                   ))}
@@ -1527,8 +1650,42 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             )}
           </div>
         )}
+        <div className="ai-in-foot">
+          <div className="ai-opt" title={t('ws.secPolicyTitle')}>
+            <span className="ai-opt-l">{t('ws.secPolicy')}</span>
+            <div className="ai-sel-dd" ref={secPolicyDdRef}>
+              <button
+                type="button"
+                className={`ai-sel-btn${secPolicyOpen ? ' open' : ''}`}
+                onClick={() => setSecPolicyOpen((o) => !o)}
+              >
+                <span>{trustLevel === 'all_confirm' ? t('ws.optAllConfirm') : t('ws.optReadAuto')}</span>
+                <svg className="ai-sel-arrow" width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+                  <path d="M1.5 3 L4 5.5 L6.5 3" />
+                </svg>
+              </button>
+              {secPolicyOpen && (
+                <div className="ai-sel-menu">
+                  <button
+                    type="button"
+                    className={`ai-sel-mi${trustLevel === 'read_auto' ? ' on' : ''}`}
+                    onClick={() => { setTrustLevel('read_auto'); setSecPolicyOpen(false); toastMsg(t('ws.policyReadAuto')) }}
+                  >
+                    {t('ws.optReadAuto')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`ai-sel-mi${trustLevel === 'all_confirm' ? ' on' : ''}`}
+                    onClick={() => { setTrustLevel('all_confirm'); setSecPolicyOpen(false); toastMsg(t('ws.policyAllConfirm')) }}
+                  >
+                    {t('ws.optAllConfirm')}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
         <div className="ai-compose">
-          <span className="compose-ic mono">▸</span>
           <textarea
             ref={inputRef}
             className="compose-input"
@@ -1547,38 +1704,6 @@ export function AiRail({ providerName, modelLabel }: { providerName?: string | n
             rows={2}
           />
           <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title={t('ws.send')}>→</button>
-        </div>
-        <div className="ai-in-foot">
-          <label className="ai-opt" title={t('ws.secPolicyTitle')}>
-            <span className="ai-opt-l">{t('ws.secPolicy')}</span>
-            <select
-              className="ai-sel"
-              value={trustLevel}
-              onChange={(e) => {
-                const v = e.target.value as TrustLevel
-                setTrustLevel(v)
-                toastMsg(v === 'all_confirm' ? t('ws.policyAllConfirm') : t('ws.policyReadAuto'))
-              }}
-            >
-              <option value="read_auto">{t('ws.optReadAuto')}</option>
-              <option value="all_confirm">{t('ws.optAllConfirm')}</option>
-            </select>
-          </label>
-          <button
-            type="button"
-            className={`ai-toggle${reasoningEffort !== 'off' ? ' on' : ''}`}
-            disabled={!supportsReasoning}
-            onClick={() => setReasoningEffort(reasoningEffort === 'off' ? 'medium' : 'off')}
-            title={supportsReasoning ? t('ws.reasonOnTitle') : t('ws.reasonOffTitle')}
-          >
-            <span className="ai-opt-l">{t('ws.reasonOn')}</span>
-            <span className="tg-track"><span className="tg-knob" /></span>
-            {!supportsReasoning && <span className="tg-note">{t('ws.unsupported')}</span>}
-          </button>
-          <span className="spacer" />
-          <span className="ai-bar-status mono">
-            <b>{providerName ?? '—'}</b> · <b>{modelLabel ?? '—'}</b>
-          </span>
         </div>
       </div>
     </div>

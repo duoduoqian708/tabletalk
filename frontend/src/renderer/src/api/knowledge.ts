@@ -11,8 +11,11 @@ export function overview(connId: string): Promise<KnowledgeOverview> {
 }
 
 /** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。 */
-export function build(connId: string): Promise<{ job_id: string; kb_status: string; stage: string }> {
-  return request(`/api/v1/knowledge/${connId}/build`, { method: 'POST' })
+export function build(connId: string, includeSamples = true): Promise<{ job_id: string; kb_status: string; stage: string }> {
+  return request(`/api/v1/knowledge/${connId}/build`, {
+    method: 'POST',
+    body: JSON.stringify({ include_samples: includeSamples }),
+  })
 }
 
 export function buildProgress(connId: string): Promise<BuildProgress> {
@@ -75,6 +78,30 @@ export function confirmTag(connId: string, name: string): Promise<{ confirmed: b
 
 export function rejectTag(connId: string, name: string): Promise<{ rejected: boolean }> {
   return request(`/api/v1/knowledge/${connId}/tags/reject`, { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+/** 人工新建标签（直接 confirmed，立即可路由）。 */
+export function createTag(connId: string, name: string, description = ''): Promise<{ created: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/tags/create`, { method: 'POST', body: JSON.stringify({ name, description }) })
+}
+
+/** 人工编辑标签：改名（同步表绑定）/ 改描述。颜色仅存前端 localStorage。 */
+export function updateTag(connId: string, name: string, patch: { newName?: string; description?: string }): Promise<{ updated: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/tags/update`, {
+    method: 'POST',
+    body: JSON.stringify({ name, new_name: patch.newName ?? null, description: patch.description ?? null }),
+  })
+}
+
+/** 删除一条用户手写笔记。 */
+export function deleteDoc(connId: string, docId: string): Promise<{ deleted: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/docs/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+}
+
+/** 知识文档列表（可按表过滤）。 */
+export function listDocs(connId: string, table?: string): Promise<{ count: number; docs: Array<{ id: string; kind: string; title: string; body: string; table: string | null; column: string | null; status: string; source: string; updated_at?: string }> }> {
+  const qs = table ? `?table=${encodeURIComponent(table)}` : ''
+  return request(`/api/v1/knowledge/${connId}/docs${qs}`)
 }
 
 export function assignTags(connId: string, table: string, tagNames: string[]): Promise<{ assigned: number }> {
@@ -150,5 +177,30 @@ export function setExcluded(connId: string, table: string, excluded: boolean): P
   return request(`/api/v1/knowledge/${connId}/graph/exclude`, {
     method: 'POST',
     body: JSON.stringify({ table, excluded }),
+  })
+}
+
+export interface GraphDraftEdge {
+  from_table: string
+  from_col: string | null
+  to_table: string
+  to_col: string | null
+  reason: string
+  source: string
+}
+
+/** 确认 LLM draft 边 → 写入正式图谱（fromTable=null 确认全部）。 */
+export function confirmGraphDrafts(connId: string, fromTable?: string | null): Promise<{ confirmed: number; llm_draft_edges: GraphDraftEdge[] }> {
+  return request(`/api/v1/knowledge/${connId}/graph/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ from_table: fromTable ?? null }),
+  })
+}
+
+/** 拒绝 LLM draft 边（从 draft 列表移除）。 */
+export function rejectGraphDrafts(connId: string, fromTable?: string | null): Promise<{ rejected: number; llm_draft_edges: GraphDraftEdge[] }> {
+  return request(`/api/v1/knowledge/${connId}/graph/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ from_table: fromTable ?? null }),
   })
 }

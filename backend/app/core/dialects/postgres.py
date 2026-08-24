@@ -32,8 +32,11 @@ class PostgresAdapter(DialectAdapter):
             connect_timeout=cfg.timeout,
             row_factory=tuple_row,
         )
-        conn.read_only = cfg.read_only
         return conn
+
+    async def set_read_only(self, conn: Any, flag: bool) -> None:
+        # psycopg3 async 连接的 read_only 是只读属性，必须用 set_read_only()
+        await conn.set_read_only(flag)
 
     async def close(self, conn: Any) -> None:
         try:

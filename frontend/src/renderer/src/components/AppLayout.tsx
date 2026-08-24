@@ -10,6 +10,7 @@ import { previewTable } from '@renderer/api/schema'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
+import { KbReviewModal } from './KbReviewModal'
 import { Graph3D } from './Graph3D'
 import { GraphSearch } from './GraphSearch'
 import { TagBar } from './TagBar'
@@ -21,6 +22,8 @@ import { AiRail } from './AiRail'
 import { KnowledgeReview } from './KnowledgeReview'
 import { AuditPage } from './ModulePages'
 import { ApprovalPage } from './ApprovalPage'
+import { TasksConsole } from './TasksConsole'
+import { CostDashboard } from './CostDashboard'
 import { SettingsDrawer } from './SettingsDrawer'
 import { LoginDialog } from './LoginDialog'
 import { setLoginRuntime } from '@renderer/hooks/useBootstrap'
@@ -32,7 +35,9 @@ const TABS: { key: View; labelKey: string }[] = [
   { key: 'workspace', labelKey: 'nav.workspace' },
   { key: 'knowledge', labelKey: 'nav.knowledge' },
   { key: 'audit', labelKey: 'nav.securityAudit' },
-  { key: 'approvals', labelKey: 'nav.approvals' }
+  { key: 'approvals', labelKey: 'nav.approvals' },
+  { key: 'tasks', labelKey: 'nav.tasks' },
+  { key: 'cost', labelKey: 'nav.cost' },
 ]
 
 /** 表格视图顶部：关联表快速跳转（替代旧 40px 左缘微条，水平化融入工具栏）。 */
@@ -236,7 +241,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
 
   async function useDemo(): Promise<void> {
     if (!rt) return
-    await create({ name: '演示库', dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
+    await create({ name: t('conn.demoName'), dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
   }
 
   return (
@@ -408,6 +413,10 @@ export function AppLayout({ health }: Props): React.JSX.Element {
           </>
         ) : view === 'knowledge' || view === 'graph' ? (
           <KnowledgeReview />
+        ) : view === 'tasks' ? (
+          <TasksConsole />
+        ) : view === 'cost' ? (
+          <CostDashboard />
         ) : (
           <AuditPage />
         )}
@@ -434,6 +443,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         onEditConnection={(id) => { setEditingConnId(id); setModalOpen(true) }}
       />
       <KbBuildGate />
+      <KbReviewModal />
       <LoginDialog
         open={showLogin}
         isInitial={loginIsInitial}
@@ -441,7 +451,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
           try {
             const r = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
             const j = await r.json()
-            if (!r.ok) return { ok: false, error: j.detail || '登录失败' }
+            if (!r.ok) return { ok: false, error: j.detail || t('login.fail') }
             setLoginIsInitial(!!j.user?.is_initial)
             // 取 dataDir 用于后续
             const b = await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))
@@ -457,7 +467,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
           try {
             const r = await fetch('/api/v1/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, old_password: oldPwd, new_password: newPwd }) })
             const j = await r.json()
-            if (!r.ok) return { ok: false, error: j.detail || '改密失败' }
+            if (!r.ok) return { ok: false, error: j.detail || t('login.changeFail') }
             setLoginRuntime(j.token, (await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))).dataDir || '')
             setLoginIsInitial(false)
             return { ok: true }

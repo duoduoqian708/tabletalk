@@ -7,19 +7,22 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.ai.skills.registry import (
     get_skill,
+    is_org_disabled,
     list_skills,
     register_custom,
     remove_skill,
+    set_org_disabled,
     update_skill,
     validate_skill,
 )
 from app.ai.skills.skill import Skill
 from app.ai.tools.registry import TOOL_SCHEMAS
+from app.state import get_state
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"])
 
@@ -82,11 +85,26 @@ async def create_skill(body: SkillCreate) -> dict:
 
 
 @router.put("/{skill_id}")
-async def update(body: SkillPatch, skill_id: str) -> dict:
+async def update(body: SkillPatch, skill_id: str, request: Request) -> dict:
     cur = get_skill(skill_id)
     if cur is None:
         raise HTTPException(status_code=404, detail="技能不存在")
     patch = body.model_dump(exclude_none=True)
+    FLOOR = {"query", "refusal"}
+    if skill_id in FLOOR and patch.get("enabled") is False:
+        patch = {k: v for k, v in patch.items() if k != "enabled"}
+        if not patch:
+            return _public(cur)
+    state = get_state()
+    try:
+        is_team = state.auth.is_team_mode()
+    except Exception:
+        is_team = False
+    if is_team and patch.get("enabled") is True and cur.enabled is False and is_org_disabled(skill_id):
+        user = getattr(request.state, "user", None)
+        role = user.get("role") if isinstance(user, dict) else None
+        if role == "member":
+            raise HTTPException(status_code=403, detail="org policy disabled, member cannot re-enable")
     if "tools" in patch:
         errors = validate_skill(
             patch.get("name", cur.name),
@@ -97,9 +115,33 @@ async def update(body: SkillPatch, skill_id: str) -> dict:
         )
         if errors:
             raise HTTPException(status_code=422, detail="; ".join(errors))
+    before_enabled = cur.enabled
     updated = update_skill(skill_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail="技能不存在")
+    if "enabled" in patch and before_enabled != updated.enabled:
+        try:
+            user = getattr(request.state, "user", None)
+            role = user.get("role") if isinstance(user, dict) else None
+            is_admin = role == "admin" or not is_team
+            if is_admin:
+                set_org_disabled(skill_id, not updated.enabled)
+        except Exception:
+            pass
+        try:
+            state.audit.log(
+                connection="settings",
+                origin="api",
+                tier="read",
+                verdict="allow",
+                status=f"skill {skill_id} enabled={updated.enabled}",
+                sql=f"[settings] skill {skill_id} enabled={updated.enabled}",
+                source="settings",
+                skill_id=skill_id,
+                enabled=updated.enabled,
+            )
+        except Exception:
+            pass
     return _public(updated)
 
 

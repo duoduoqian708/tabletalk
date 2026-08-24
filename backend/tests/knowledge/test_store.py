@@ -38,15 +38,14 @@ async def test_build_and_keyword_retrieve(tmp_path):
     assert any("orders" in d.title for d in docs)
 
 
-async def test_graph_includes_fk_and_value_overlap(tmp_path):
+async def test_graph_includes_fk_only(tmp_path):
+    """设计文档：图谱仅包含 FK 边（overlap 边已移除，仅用于内部检索）。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
     edges = kb.graph("c1")["edges"]
     assert any(e["kind"] == "fk" for e in edges)
-    # orders.customer_id 与 customers.id 共享样本值 → 值重叠边
-    assert any(e["kind"] == "overlap" and e["from"] == "orders" and e["to"] == "customers" for e in edges)
-    # 启发式：同名主键 id↔id 的重叠被过滤
-    assert not any(e["kind"] == "overlap" and e["from_col"] == "id" and e["to_col"] == "id" for e in edges)
+    # 无 overlap 边（设计文档：图谱仅 FK 边用于可视化）
+    assert not any(e["kind"] == "overlap" for e in edges)
 
 
 async def test_fk_graph_expansion_surfaces_neighbors(tmp_path):
@@ -98,8 +97,8 @@ async def test_artifact_persists_across_instances(tmp_path):
     # 确认状态在 artifact 中保留
     col = next(c for c in kb2.overview("c1")["columns"] if c["name"] == "status")
     assert col["status"] == "confirmed"
-    # 图谱（含值重叠边）也保留了
-    assert any(e["kind"] == "overlap" for e in kb2.graph("c1")["edges"])
+    # 图谱 FK 边保留了
+    assert any(e["kind"] == "fk" for e in kb2.graph("c1")["edges"])
 
 
 async def test_tag_lifecycle(tmp_path):

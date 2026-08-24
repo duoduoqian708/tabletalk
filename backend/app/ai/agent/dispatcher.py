@@ -1,7 +1,7 @@
 """意图调度：用户问题 → 从技能注册表选一个技能。
 
-WS1 后：preflight 产出 {intent, tags}，本模块做 intent→skill 映射 + enabled 感知 + 降级。
-保留 _trigger_match / dispatch_skill 供旧链路兼容，新链路走 resolve_skill。
+preflight 产出 {intent, tags}，本模块做 intent→skill 映射 + enabled 感知 + 降级。
+保留 dispatch_skill 供旧链路兼容，新链路走 resolve_skill_from_intent。
 """
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from app.ai.skills.registry import get_skill, list_enabled_skills, list_skills
 
 _DEFAULT = "query"
 
+# 新意图集：query/write/report/knowledge/scheduler/offtopic（v2 设计文档）
 INTENT_TO_SKILL: dict[str, str] = {
     "query": "query",
-    "report": "report",
-    "schema": "schema",
     "write": "write",
-    "ddl": "ddl",
-    "audit": "audit_qa",
+    "report": "report",
+    "knowledge": "knowledge",
+    "scheduler": "scheduler",
     "offtopic": "refusal",
 }
 

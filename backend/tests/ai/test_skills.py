@@ -11,7 +11,8 @@ def test_registry_builtin():
 def test_query_skill_readonly():
     s = get_skill("query")
     assert s.read_only is True          # 08 §4.4：query 只读（写由 write 技能承接）
-    assert "run_query" in s.tools and "get_schema" in s.tools and "describe_table" in s.tools
+    assert "run_query" in s.tools and "get_schema" in s.tools
+    assert "query_audit" in s.tools and "ai_review" in s.tools
     assert "run_dml" not in s.tools and "draft_ddl" not in s.tools
 
 

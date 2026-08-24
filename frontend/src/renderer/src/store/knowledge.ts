@@ -2,13 +2,31 @@ import { create } from 'zustand'
 import * as api from '@renderer/api/knowledge'
 import type { KnowledgeOverview } from '@renderer/api/types'
 
+interface BuildPhase {
+  key: string
+  label: string
+  percent: number
+  detail: string | null
+  stage?: string | null
+}
+interface BuildProgressState {
+  stage: string
+  percent: number
+  done: boolean
+  error: string | null
+  detail: string | null
+  phases?: BuildPhase[]
+}
+
 interface KnowledgeState {
   overview: KnowledgeOverview | null
   loading: boolean
   busy: boolean
   error: string | null
+  /** SSE 实时构建进度（无进度时 null） */
+  buildProgress: BuildProgressState | null
   load: (connId: string) => Promise<void>
-  /** 任务化构建：启动 + 轮询进度直到 done，然后刷新 overview */
+  /** 任务化构建：启动 + SSE 实时进度直到 done，然后刷新 overview */
   buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void) => Promise<void>
   annotateTags: (connId: string) => Promise<void>
   annotateEnums: (connId: string) => Promise<void>
@@ -26,6 +44,38 @@ interface KnowledgeState {
   addEdge: (connId: string, edge: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }) => Promise<void>
   removeEdge: (connId: string, edge: { from_table: string; to_table: string; kind: string }) => Promise<void>
   setExcluded: (connId: string, table: string, excluded: boolean) => Promise<void>
+  /** LLM 图谱 draft 边确认/拒绝 */
+  confirmGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
+  rejectGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
+}
+
+/** fetch 流式解析 SSE（EventSource 不支持自定义 header，token 走 header） */
+async function readBuildEvents(connId: string, onProgress: (p: BuildProgressState) => void): Promise<void> {
+  const { getRuntime } = await import('@renderer/api/client')
+  const token = getRuntime()?.token || localStorage.getItem('tt_token') || ''
+  const res = await fetch(`/api/v1/knowledge/${connId}/build/events`, {
+    headers: { 'X-TableTalk-Token': token, Accept: 'text/event-stream' },
+  })
+  if (!res.ok || !res.body) throw new Error('SSE 连接失败')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const parts = buf.split('\n\n')
+    buf = parts.pop() ?? ''
+    for (const part of parts) {
+      const line = part.split('\n').find((l) => l.startsWith('data: '))
+      if (!line) continue
+      try {
+        const p = JSON.parse(line.slice(6)) as BuildProgressState
+        onProgress(p)
+        if (p.done) return
+      } catch { /* 忽略坏帧 */ }
+    }
+  }
 }
 
 export const useKnowledge = create<KnowledgeState>((set, get) => ({
@@ -33,6 +83,7 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   loading: false,
   busy: false,
   error: null,
+  buildProgress: null,
 
   async load(connId) {
     set({ loading: true, error: null })
@@ -47,24 +98,20 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   },
 
   async buildTask(connId, onProgress) {
-    set({ busy: true, error: null })
+    set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
       await api.build(connId)
-      // 轮询进度（任务化构建：后台跑，页面轮询）
-      for (let i = 0; i < 600; i++) {
-        await new Promise((r) => setTimeout(r, 500))
-        const p = await api.buildProgress(connId)
+      // SSE 实时进度：推送即写 store（KbBuildGate 订阅显示），done 后退出
+      await readBuildEvents(connId, (p) => {
+        set({ buildProgress: p })
         onProgress?.(p.percent, p.stage)
-        if (p.done) {
-          if (p.error && p.error !== 'cancelled') set({ error: p.error })
-          break
-        }
-      }
+        if (p.error && p.error !== 'cancelled') set({ error: p.error })
+      })
       await get().load(connId)
     } catch (e) {
       set({ error: (e as Error).message })
     } finally {
-      set({ busy: false })
+      set({ busy: false, buildProgress: null })
     }
   },
 
@@ -157,5 +204,29 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     set((s) => s.overview ? {
       overview: { ...s.overview, graph: { ...s.overview.graph, excluded: r.excluded } }
     } : {})
+  },
+
+  async confirmGraphDraft(connId, fromTable) {
+    set({ busy: true })
+    try {
+      const r = await api.confirmGraphDrafts(connId, fromTable)
+      set((s) => s.overview ? {
+        overview: { ...s.overview, graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges } }
+      } : {})
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  async rejectGraphDraft(connId, fromTable) {
+    set({ busy: true })
+    try {
+      const r = await api.rejectGraphDrafts(connId, fromTable)
+      set((s) => s.overview ? {
+        overview: { ...s.overview, graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges } }
+      } : {})
+    } finally {
+      set({ busy: false })
+    }
   }
 }))

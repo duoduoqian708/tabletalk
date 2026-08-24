@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, approvals, audit, auth, connections, health, knowledge, query, questions, schema, settings, skills, usage
+from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, schema, settings, skills, suggestions, tasks, usage
 from app.config import get_env, get_token
 from app.state import get_state
 
@@ -40,6 +40,16 @@ async def lifespan(app: FastAPI):
     state = get_state()
     get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/tabletalk.token，供 /bootstrap 读取
     _ensure_demo_db()
+    from app.ai.tools import validate_registry
+    validate_registry()  # WS7 T7.1：工具 trust 元数据启动自检
+    # 启动时清理过期 LLM 日志和成本日志（默认保留30天）
+    try:
+        from app.ai.llm_log import LlmCallLog
+        from app.ai.cost_tracker import CostTracker
+        LlmCallLog(get_env().data_dir).cleanup(keep_days=30)
+        CostTracker(get_env().data_dir).cleanup(keep_days=30)
+    except Exception:
+        pass
     state.sync_loop.start()  # 知识库增量同步周期任务（kb_sync_minutes）
     yield
     state.sync_loop.stop()
@@ -104,7 +114,8 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
 
     for r in (health.router, connections.router, schema.router, query.router,
-              audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router):
+              audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router,
+              tasks.router, cost.router, suggestions.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）

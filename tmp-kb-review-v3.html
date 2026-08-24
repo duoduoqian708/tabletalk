@@ -1,0 +1,1481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库审阅 · 三栏 v3</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TABLETALK KB REVIEW v3 — 三栏改造（标签列 / 表卡片列 / 关系列）
+   延续信号绿指挥舱设计系统
+   ============================================================ */
+:root {
+  --void-0: #05070b;
+  --void-1: #0b0f16;
+  --void-2: #0f1520;
+  --void-3: #131b29;
+  --void-4: #1a2436;
+  --void-5: #26324a;
+
+  --ink: #d7e1ec;
+  --ink-dim: #8fa0b4;
+  --ink-faint: #5a6a7e;
+  --ink-strong: #f4f8fc;
+
+  --line: rgba(160, 185, 215, 0.09);
+  --line-strong: rgba(160, 185, 215, 0.17);
+
+  --accent: #2ee6a8;
+  --accent-dim: rgba(46, 230, 168, 0.12);
+  --accent-soft: #a6f4d6;
+  --accent-ink: #03130c;
+
+  --green: #35d99a;
+  --green-dim: rgba(53, 217, 154, 0.13);
+  --amber: #ffb454;
+  --amber-dim: rgba(255, 180, 84, 0.13);
+  --red: #ff6b81;
+  --red-dim: rgba(255, 107, 129, 0.13);
+  --blue: #63c8ff;
+  --blue-dim: rgba(99, 200, 255, 0.13);
+  --violet: #b18cff;
+  --violet-dim: rgba(177, 140, 255, 0.13);
+  --orange: #ffab70;
+  --orange-dim: rgba(255, 171, 112, 0.13);
+  --teal: var(--accent);
+
+  /* 8 色标签循环 */
+  --tag-green: #35d99a;
+  --tag-blue: #63c8ff;
+  --tag-orange: #ffb454;
+  --tag-purple: #b18cff;
+  --tag-red: #ff6b81;
+  --tag-cyan: #2ee6a8;
+  --tag-pink: #f472b6;
+  --tag-yellow: #fbbf24;
+
+  --font-sans: 'Hanken Grotesk', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --dur: 0.18s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--void-0);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ============ 整体骨架 ============ */
+.kb-main { height: 100vh; display: flex; flex-direction: column; }
+
+.kb-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--void-1);
+  border-bottom: 1px solid var(--line);
+}
+.kb-title { font-size: 14px; font-weight: 700; color: var(--ink-strong); letter-spacing: -0.01em; }
+.kb-conn {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--accent-soft); background: var(--accent-dim);
+  padding: 3px 9px; border-radius: 6px;
+}
+.kb-badge { font-family: var(--mono); font-size: 10px; padding: 3px 10px; border-radius: 99px; }
+.kb-badge.ready { color: var(--green); background: var(--green-dim); }
+.kb-badge.pending { color: var(--amber); background: var(--amber-dim); }
+.kb-emb {
+  font-family: var(--mono); font-size: 10px;
+  padding: 2px 9px; border-radius: 99px;
+  color: var(--green); background: var(--green-dim);
+}
+.kb-sync { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+.kb-spacer { flex: 1; }
+
+/* 三栏 */
+.kb-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) 320px;
+  min-height: 0;
+  overflow: hidden;
+}
+.col { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.col-tags { border-right: 1px solid var(--line); background: var(--void-1); }
+.col-tables {
+  background:
+    radial-gradient(circle at 15% 0%, rgba(46, 230, 168, 0.035), transparent 38%),
+    var(--void-0);
+}
+.col-rels { border-left: 1px solid var(--line); background: var(--void-1); }
+
+/* ============ 左栏：标签列 ============ */
+.tc-head {
+  flex: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tc-title {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.tc-newbtn { margin-left: auto; }
+
+#newTagSlot { flex: none; }
+.tc-new {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--void-2);
+  animation: fadeIn 0.18s var(--ease);
+}
+.tc-new input, .tc-edit input {
+  width: 100%;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.tc-new input:focus, .tc-edit input:focus { border-color: var(--accent); }
+.tc-new input::placeholder { color: var(--ink-faint); }
+
+.tc-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.tc-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--ink-dim);
+  border: 1px solid transparent;
+  transition: all var(--dur) var(--ease);
+}
+.tc-item:hover { background: var(--void-3); color: var(--ink); }
+.tc-item.on { background: var(--void-3); border-color: var(--line-strong); color: var(--ink-strong); font-weight: 600; }
+.tc-item.open { flex-wrap: wrap; background: var(--void-3); border-color: var(--line-strong); }
+.tc-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.3);
+}
+.tc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tc-count {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--ink-faint);
+  background: var(--void-4);
+  border-radius: 99px;
+  padding: 1px 7px;
+  min-width: 22px;
+  text-align: center;
+}
+.tc-more {
+  flex-shrink: 0;
+  background: none; border: none;
+  color: var(--ink-faint);
+  font-family: var(--mono); font-size: 11px; letter-spacing: 1px;
+  cursor: pointer; opacity: 0.65; padding: 0 2px; line-height: 1;
+}
+.tc-more:hover { opacity: 1; color: var(--ink); }
+
+.tc-edit {
+  flex-basis: 100%;
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 8px 0 2px;
+  animation: fadeIn 0.15s var(--ease);
+}
+.tc-edit-foot { display: flex; gap: 6px; justify-content: flex-end; }
+.del-txt { font-size: 11px; color: var(--red); line-height: 1.5; }
+
+.swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+.swatch {
+  width: 16px; height: 16px; border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: all 0.12s var(--ease);
+  flex-shrink: 0;
+}
+.swatch:hover { transform: scale(1.15); }
+.swatch.sel { border-color: var(--ink-strong); box-shadow: 0 0 0 1px var(--void-3); }
+
+.tc-divider { flex: none; height: 1px; background: var(--line); margin: 6px 12px; }
+.tc-foot {
+  flex: none;
+  padding: 0 8px 8px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.tc-item.other { cursor: pointer; }
+.tc-item.other.on { background: var(--void-3); border-color: var(--line-strong); color: var(--ink-strong); font-weight: 600; }
+.tc-hint { font-size: 10px; color: var(--ink-faint); padding: 0 8px 2px; line-height: 1.5; }
+
+/* ============ 中栏：表卡片列 ============ */
+.mt-search {
+  flex: none;
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--void-1);
+}
+.mt-search-row { display: flex; align-items: center; gap: 8px; }
+.mt-search input {
+  flex: 1;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.mt-search input:focus { border-color: var(--accent); }
+.mt-search input::placeholder { color: var(--ink-faint); }
+.mt-count { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); white-space: nowrap; }
+
+.mt-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-dim);
+  animation: popIn 0.15s var(--ease);
+}
+.chip .x { cursor: pointer; opacity: 0.55; font-size: 10px; }
+.chip .x:hover { opacity: 1; color: var(--ink); }
+.chip.clear { color: var(--ink-faint); cursor: pointer; }
+.chip.clear:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+.mt-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+
+/* 表卡片 */
+.tbl-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--void-2);
+  overflow: hidden;
+  transition: all var(--dur) var(--ease);
+  animation: slideUp 0.22s var(--ease) both;
+}
+.tbl-card:nth-child(2) { animation-delay: 0.03s; }
+.tbl-card:nth-child(3) { animation-delay: 0.06s; }
+.tbl-card:nth-child(4) { animation-delay: 0.09s; }
+.tbl-card:nth-child(5) { animation-delay: 0.12s; }
+.tbl-card:nth-child(6) { animation-delay: 0.15s; }
+.tbl-card:hover { background: var(--void-3); border-color: rgba(46, 230, 168, 0.18); transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28); }
+.tbl-card.open { background: var(--void-3); }
+
+.tbl-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.tbl-head:hover { background: rgba(160, 185, 215, 0.04); }
+.tbl-name { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink-strong); }
+.tbl-tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.tbl-pill {
+  font-family: var(--mono); font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  border: 1px solid;
+}
+.tbl-badge {
+  margin-left: auto;
+  font-family: var(--mono); font-size: 10px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+.tbl-badge.draft { color: var(--amber); background: var(--amber-dim); }
+.tbl-badge.ok { color: var(--green); background: var(--green-dim); }
+.tbl-arrow {
+  color: var(--ink-faint); font-size: 12px;
+  transition: transform 0.18s var(--ease);
+  flex-shrink: 0;
+}
+.tbl-card.open .tbl-arrow { transform: rotate(90deg); }
+
+.tbl-desc {
+  padding: 0 14px 9px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.55;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.tbl-detail {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px 12px;
+  display: flex; flex-direction: column; gap: 12px;
+  animation: fadeIn 0.18s var(--ease);
+}
+.tbl-block { display: flex; flex-direction: column; gap: 7px; }
+.sec-label {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* 列属性网格 */
+.cols-grid {
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.cols-row {
+  display: grid;
+  grid-template-columns: 120px 76px 44px 1fr 56px 56px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 10px;
+  background: var(--void-2);
+  font-size: 12px;
+  transition: background var(--dur) var(--ease);
+}
+.cols-row.head {
+  background: var(--void-3);
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding-top: 6px; padding-bottom: 6px;
+}
+.cols-row.draft { background: rgba(255, 180, 84, 0.05); }
+.cols-row.rejected { opacity: 0.5; }
+.c-n { font-family: var(--mono); font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-t { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+.c-k { display: flex; gap: 4px; }
+.c-key { font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 0 5px; border-radius: 4px; }
+.c-key.pk { color: var(--amber); background: var(--amber-dim); }
+.c-key.fk { color: var(--teal); background: var(--accent-dim); }
+.c-d { color: var(--ink-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-d.draft { color: var(--amber); }
+.c-a { display: flex; gap: 3px; justify-content: flex-end; }
+.st { font-family: var(--mono); font-size: 9px; padding: 1px 6px; border-radius: 99px; white-space: nowrap; }
+.st.draft { color: var(--amber); background: var(--amber-dim); }
+.st.ok { color: var(--green); background: var(--green-dim); }
+.st.rej { color: var(--ink-faint); background: var(--void-4); }
+.mini {
+  width: 20px; height: 20px; border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+  display: grid; place-items: center;
+  color: var(--ink-faint);
+  transition: all var(--dur) var(--ease);
+  line-height: 1;
+}
+.mini.ok:hover { color: var(--green); border-color: var(--green-dim); background: var(--green-dim); }
+.mini.no:hover { color: var(--red); border-color: var(--red-dim); background: var(--red-dim); }
+
+/* 枚举字典 */
+.enum-box {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--void-2);
+  padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.enum-head { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+.enum-entry { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 2px 4px; border-radius: 4px; }
+.enum-entry:hover { background: var(--void-3); }
+.enum-entry.draft { cursor: pointer; }
+.enum-entry .ev { font-family: var(--mono); color: var(--orange); min-width: 78px; font-weight: 500; }
+.enum-entry .em { color: var(--ink-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enum-entry.draft .em { color: var(--amber); }
+.enum-st { font-family: var(--mono); font-size: 8px; color: var(--amber); background: var(--amber-dim); padding: 1px 6px; border-radius: 99px; }
+
+/* 用户备注 */
+.tbl-notes textarea, .other-new textarea {
+  width: 100%;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 12px;
+  font-family: var(--font-sans);
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 54px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.tbl-notes textarea:focus, .other-new textarea:focus { border-color: var(--accent); }
+.note-foot { display: flex; align-items: center; gap: 10px; }
+.note-hint { font-family: var(--mono); font-size: 10px; color: var(--green); }
+
+/* 空态 */
+.empty {
+  padding: 44px 16px;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 12px;
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+  line-height: 1.6;
+}
+.empty .ico { font-size: 24px; opacity: 0.4; font-family: var(--mono); }
+
+/* ============ 右栏：关系列表 ============ */
+.rc-head {
+  flex: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.rc-title {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--ink-dim);
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.rc-count { font-family: var(--mono); font-size: 10px; color: var(--accent-soft); background: var(--accent-dim); padding: 1px 8px; border-radius: 99px; }
+.rc-pend { font-family: var(--mono); font-size: 9px; color: var(--amber); white-space: nowrap; }
+
+.rc-filters {
+  flex: none;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.rc-frow { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rc-flabel {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
+.fchip {
+  font-family: var(--mono); font-size: 10px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.fchip:hover { color: var(--ink); border-color: var(--ink-faint); }
+.fchip.on {
+  background: var(--accent-dim);
+  color: var(--accent-soft);
+  border-color: rgba(46, 230, 168, 0.25);
+  font-weight: 600;
+}
+.fcn { font-size: 9px; opacity: 0.6; margin-left: 2px; }
+
+.rc-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.rel-card {
+  border: 1px solid var(--line);
+  background: var(--void-2);
+  border-radius: var(--r-sm);
+  padding: 8px 11px;
+  display: flex; flex-direction: column; gap: 5px;
+  transition: all var(--dur) var(--ease);
+  animation: slideUp 0.2s var(--ease) both;
+}
+.rel-card:nth-child(2) { animation-delay: 0.03s; }
+.rel-card:nth-child(3) { animation-delay: 0.06s; }
+.rel-card:hover { border-color: var(--line-strong); background: var(--void-3); }
+.rel-card.pending { border-left: 3px solid var(--amber); }
+.rel-card.rejected { opacity: 0.45; }
+.r-line {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: var(--ink);
+}
+.r-from, .r-to { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-arrow { color: var(--accent); flex-shrink: 0; }
+.r-cols { font-family: var(--mono); font-size: 9px; color: var(--ink-faint); }
+.r-meta { display: flex; align-items: center; gap: 8px; }
+.r-src { font-family: var(--mono); font-size: 9px; padding: 1px 7px; border-radius: 4px; font-weight: 600; }
+.r-src.fk { color: var(--blue); background: var(--blue-dim); }
+.r-src.ai { color: var(--violet); background: var(--violet-dim); }
+.r-src.user { color: var(--green); background: var(--green-dim); }
+.r-status { font-family: var(--mono); font-size: 9px; display: flex; align-items: center; gap: 3px; white-space: nowrap; }
+.r-status.ok { color: var(--green); }
+.r-status.pending { color: var(--amber); }
+.r-status.rej { color: var(--ink-faint); }
+.r-acts { margin-left: auto; display: flex; gap: 4px; }
+
+/* ============ 「其他」内容区 ============ */
+.other-view { display: flex; flex-direction: column; gap: 10px; }
+.other-intro {
+  font-size: 11px; color: var(--ink-faint); line-height: 1.6;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  background: var(--void-2);
+}
+.other-new {
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--void-2);
+}
+.other-new input {
+  width: 100%;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color var(--dur) var(--ease);
+}
+.other-new input:focus { border-color: var(--accent); }
+.other-card {
+  border: 1px solid var(--line-strong);
+  background: var(--void-2);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--orange);
+  padding: 12px 14px;
+  animation: slideUp 0.2s var(--ease) both;
+}
+.oc-title { font-size: 13px; font-weight: 600; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+.oc-body { font-size: 12px; color: var(--ink-dim); line-height: 1.6; margin-top: 5px; }
+.oc-meta { font-family: var(--mono); font-size: 9px; color: var(--ink-faint); margin-top: 8px; }
+
+/* ============ 通用按钮 ============ */
+.btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  white-space: nowrap;
+}
+.btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-soft); }
+.btn.danger { color: var(--red); border-color: var(--red-dim); }
+.btn.danger:hover { background: var(--red-dim); }
+.btn.ghost { border-color: transparent; }
+.btn.ghost:hover { background: var(--void-3); }
+.btn.sm { padding: 3px 10px; font-size: 10px; }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed;
+  bottom: 22px; left: 50%;
+  transform: translate(-50%, 12px);
+  background: var(--void-4);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.22s var(--ease);
+  z-index: 9999;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  max-width: 70vw;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ============ 滚动条 / 动画 ============ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--void-5); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes popIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+
+@media (max-width: 1120px) {
+  .kb-body { grid-template-columns: 170px minmax(0, 1fr) 290px; }
+}
+@media (max-width: 960px) {
+  .kb-body { grid-template-columns: 160px minmax(0, 1fr) 260px; }
+}
+</style>
+</head>
+<body>
+
+<div class="kb-main">
+
+  <!-- 顶栏：名称 / 同步状态 / 确认全部 / 重新构建 -->
+  <header class="kb-topbar">
+    <span class="kb-title">知识库审阅</span>
+    <span class="kb-conn">demo.db</span>
+    <span class="kb-badge ready" id="readyBadge">已就绪</span>
+    <span class="kb-emb" title="语义嵌入已配置">EMB · doubao</span>
+    <span class="kb-spacer"></span>
+    <span class="kb-sync">同步于 08-23 14:30</span>
+    <button class="btn" onclick="rebuild()">重新构建</button>
+    <button class="btn primary" id="confirmAllBtn" onclick="confirmAll()">✓ 确认全部</button>
+  </header>
+
+  <div class="kb-body">
+
+    <!-- 左栏：标签列 ~180px -->
+    <aside class="col col-tags">
+      <div class="tc-head">
+        <span class="tc-title">领域标签</span>
+        <button class="btn sm primary tc-newbtn" onclick="toggleNew()">+ 新建标签</button>
+      </div>
+      <div id="newTagSlot"></div>
+      <div class="tc-list" id="tagList"></div>
+      <div class="tc-divider"></div>
+      <div class="tc-foot">
+        <div class="tc-item other" onclick="toggleOther()" title="用户自定义笔记 / 文档">
+          <span class="tc-dot" style="background:var(--orange)"></span>
+          <span class="tc-name">其他</span>
+          <span class="tc-count" id="otherCount">2</span>
+        </div>
+        <div class="tc-hint">自定义笔记 / 文档 · 纳入检索，不属于任何表</div>
+      </div>
+    </aside>
+
+    <!-- 中栏：表卡片列 flex-1 -->
+    <main class="col col-tables">
+      <div class="mt-search">
+        <div class="mt-search-row">
+          <input id="searchInput" placeholder="搜索表名 / 描述…" oninput="onSearch(this.value)">
+          <span class="mt-count" id="tableCount"></span>
+        </div>
+        <div class="mt-chips" id="chipsBox" style="display:none"></div>
+      </div>
+      <div class="mt-list" id="tableList"></div>
+    </main>
+
+    <!-- 右栏：关系列表 ~320px -->
+    <aside class="col col-rels">
+      <div class="rc-head">
+        <span class="rc-title">表间关系</span>
+        <span class="rc-count" id="relCount"></span>
+        <span style="flex:1"></span>
+        <span class="rc-pend" id="relPend"></span>
+      </div>
+      <div class="rc-filters">
+        <div class="rc-frow" id="srcChips">
+          <span class="rc-flabel">来源</span>
+          <button class="fchip on" data-v="all" data-label="全部" onclick="setRelSrc('all')"></button>
+          <button class="fchip" data-v="fk" data-label="FK" onclick="setRelSrc('fk')"></button>
+          <button class="fchip" data-v="ai" data-label="AI 发现" onclick="setRelSrc('ai')"></button>
+          <button class="fchip" data-v="user" data-label="用户" onclick="setRelSrc('user')"></button>
+        </div>
+        <div class="rc-frow" id="statusChips">
+          <span class="rc-flabel">状态</span>
+          <button class="fchip on" data-v="all" data-label="全部" onclick="setRelStatus('all')"></button>
+          <button class="fchip" data-v="pending" data-label="待确认" onclick="setRelStatus('pending')"></button>
+          <button class="fchip" data-v="confirmed" data-label="已确认" onclick="setRelStatus('confirmed')"></button>
+        </div>
+      </div>
+      <div class="rc-list" id="relList"></div>
+    </aside>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   演示数据
+   ============================================================ */
+const TAG_COLORS = ['#35d99a', '#63c8ff', '#ffb454', '#b18cff', '#ff6b81', '#2ee6a8', '#f472b6', '#fbbf24'];
+
+let tags = [
+  { id: 't1', name: '订单', color: '#2ee6a8', desc: '订单相关业务表' },
+  { id: 't2', name: '商品', color: '#35d99a', desc: '商品与库存管理' },
+  { id: 't3', name: '用户', color: '#63c8ff', desc: '用户账户与认证' },
+  { id: 't4', name: '支付', color: '#ffb454', desc: '支付与交易流水' },
+  { id: 't5', name: '物流', color: '#b18cff', desc: '物流与配送追踪' },
+  { id: 't6', name: '退货', color: '#ff6b81', desc: '退货与售后' },
+  { id: 't7', name: '评价', color: '#f472b6', desc: '用户评价与反馈' },
+  { id: 't8', name: '库存', color: '#fbbf24', desc: '库存与仓储' },
+];
+
+let tables = [
+  {
+    id: 'orders', name: 'orders',
+    desc: '订单主表，记录用户下单信息，包含订单状态、金额、收货地址等核心业务字段。',
+    tagIds: ['t1'],
+    notes: '订单金额超过 5000 元自动触发风控审核。金额字段单位为分。',
+    cols: [
+      { name: 'order_id',   type: 'INT',     pk: true,  fk: false, desc: '订单唯一标识，自增主键',                 status: 'confirmed' },
+      { name: 'user_id',    type: 'INT',     pk: false, fk: true,  desc: '下单用户 ID，关联 users 表',             status: 'draft' },
+      { name: 'status',     type: 'VARCHAR', pk: false, fk: false, desc: '订单状态枚举，含义见下方字典',           status: 'draft' },
+      { name: 'total_amount', type: 'DECIMAL', pk: false, fk: false, desc: '订单总金额（含税含运费），单位：分',   status: 'confirmed' },
+      { name: 'shipping_addr', type: 'VARCHAR', pk: false, fk: false, desc: '收货地址',                           status: 'draft' },
+      { name: 'payment_id', type: 'INT',     pk: false, fk: true,  desc: '支付单 ID，关联 payments 表',           status: 'confirmed' },
+      { name: 'created_at', type: 'DATETIME', pk: false, fk: false, desc: '下单时间',                             status: 'confirmed' },
+      { name: 'updated_at', type: 'DATETIME', pk: false, fk: false, desc: '更新时间',                             status: 'confirmed' },
+    ],
+    enums: [{
+      col: 'status',
+      values: [
+        { v: 'pending',   m: '待确认，用户已下单但未支付', draft: true },
+        { v: 'confirmed', m: '已确认，支付完成等待发货',   draft: true },
+        { v: 'shipped',   m: '已发货，物流配送中',         draft: true },
+        { v: 'delivered', m: '已送达',                     draft: false },
+        { v: 'cancelled', m: '已取消',                     draft: false },
+      ],
+    }],
+  },
+  {
+    id: 'users', name: 'users',
+    desc: '用户账户信息表，存储注册用户的个人资料、认证凭据和账户状态。',
+    tagIds: ['t3'],
+    notes: '',
+    cols: [
+      { name: 'id',         type: 'INT',     pk: true,  fk: false, desc: '用户 ID',                     status: 'confirmed' },
+      { name: 'email',      type: 'VARCHAR', pk: false, fk: false, desc: '登录邮箱，唯一约束',           status: 'draft' },
+      { name: 'role',       type: 'VARCHAR', pk: false, fk: false, desc: '用户角色枚举，含义见下方字典', status: 'draft' },
+      { name: 'nickname',   type: 'VARCHAR', pk: false, fk: false, desc: '昵称',                         status: 'confirmed' },
+      { name: 'status',     type: 'VARCHAR', pk: false, fk: false, desc: '账户状态：active/disabled',    status: 'draft' },
+      { name: 'created_at', type: 'DATETIME', pk: false, fk: false, desc: '注册时间',                   status: 'confirmed' },
+    ],
+    enums: [{
+      col: 'role',
+      values: [
+        { v: 'admin',  m: '系统管理员，拥有全部权限', draft: true },
+        { v: 'member', m: '普通注册用户',             draft: true },
+        { v: 'guest',  m: '访客，未注册用户',         draft: false },
+      ],
+    }],
+  },
+  {
+    id: 'products', name: 'products',
+    desc: '商品信息表，存储商品名称、描述、价格、库存和上下架状态。',
+    tagIds: ['t2'],
+    notes: '',
+    cols: [
+      { name: 'product_id', type: 'INT',     pk: true,  fk: false, desc: '商品 ID',                   status: 'confirmed' },
+      { name: 'name',       type: 'VARCHAR', pk: false, fk: false, desc: '商品名称',                   status: 'draft' },
+      { name: 'category_id', type: 'INT',    pk: false, fk: true,  desc: '所属分类，关联 categories', status: 'confirmed' },
+      { name: 'price',      type: 'DECIMAL', pk: false, fk: false, desc: '售价，单位：分',             status: 'confirmed' },
+      { name: 'stock',      type: 'INT',     pk: false, fk: false, desc: '当前库存',                   status: 'confirmed' },
+      { name: 'status',     type: 'VARCHAR', pk: false, fk: false, desc: '上下架状态',                 status: 'draft' },
+      { name: 'created_at', type: 'DATETIME', pk: false, fk: false, desc: '创建时间',                 status: 'confirmed' },
+    ],
+    enums: [{
+      col: 'status',
+      values: [
+        { v: 'on',  m: '在售', draft: true },
+        { v: 'off', m: '下架', draft: true },
+      ],
+    }],
+  },
+  {
+    id: 'order_items', name: 'order_items',
+    desc: '订单条目表，记录每笔订单购买的商品明细与成交单价。',
+    tagIds: ['t1', 't2'],
+    notes: '',
+    cols: [
+      { name: 'item_id',   type: 'INT',     pk: true,  fk: false, desc: '条目 ID',               status: 'confirmed' },
+      { name: 'order_id',  type: 'INT',     pk: false, fk: true,  desc: '所属订单，关联 orders', status: 'confirmed' },
+      { name: 'product_id', type: 'INT',    pk: false, fk: true,  desc: '商品，关联 products',   status: 'confirmed' },
+      { name: 'qty',       type: 'INT',     pk: false, fk: false, desc: '购买数量',               status: 'draft' },
+      { name: 'price',     type: 'DECIMAL', pk: false, fk: false, desc: '成交单价（分）',         status: 'confirmed' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'payments', name: 'payments',
+    desc: '支付流水表，记录订单的支付方式、金额与支付状态。',
+    tagIds: ['t4'],
+    notes: '',
+    cols: [
+      { name: 'payment_id', type: 'INT',     pk: true,  fk: false, desc: '支付单 ID',               status: 'confirmed' },
+      { name: 'order_id',   type: 'INT',     pk: false, fk: true,  desc: '关联订单',                 status: 'draft' },
+      { name: 'user_id',    type: 'INT',     pk: false, fk: true,  desc: '支付用户',                 status: 'confirmed' },
+      { name: 'method',     type: 'VARCHAR', pk: false, fk: false, desc: '支付方式枚举，含义见下方字典', status: 'draft' },
+      { name: 'amount',     type: 'DECIMAL', pk: false, fk: false, desc: '支付金额（分）',           status: 'confirmed' },
+      { name: 'status',     type: 'VARCHAR', pk: false, fk: false, desc: '支付状态：success/failed', status: 'confirmed' },
+    ],
+    enums: [{
+      col: 'method',
+      values: [
+        { v: 'alipay', m: '支付宝',   draft: true },
+        { v: 'wechat', m: '微信支付', draft: true },
+        { v: 'card',   m: '银行卡',   draft: false },
+      ],
+    }],
+  },
+  {
+    id: 'shipments', name: 'shipments',
+    desc: '物流运单表，记录订单的承运商、物流单号与配送状态。',
+    tagIds: ['t5'],
+    notes: '',
+    cols: [
+      { name: 'shipment_id', type: 'INT',     pk: true,  fk: false, desc: '运单 ID',               status: 'confirmed' },
+      { name: 'order_id',    type: 'INT',     pk: false, fk: true,  desc: '关联订单',               status: 'draft' },
+      { name: 'carrier',     type: 'VARCHAR', pk: false, fk: false, desc: '承运商',                 status: 'draft' },
+      { name: 'tracking_no', type: 'VARCHAR', pk: false, fk: false, desc: '物流单号',               status: 'confirmed' },
+      { name: 'status',      type: 'VARCHAR', pk: false, fk: false, desc: '物流状态',               status: 'confirmed' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'inventory', name: 'inventory',
+    desc: '库存表，记录各仓库的商品在库数量与最后更新时间。',
+    tagIds: ['t8'],
+    notes: '',
+    cols: [
+      { name: 'inv_id',     type: 'INT',     pk: true,  fk: false, desc: '库存记录 ID',       status: 'confirmed' },
+      { name: 'product_id', type: 'INT',     pk: false, fk: true,  desc: '商品',               status: 'confirmed' },
+      { name: 'warehouse',  type: 'VARCHAR', pk: false, fk: false, desc: '仓库编码',           status: 'draft' },
+      { name: 'qty',        type: 'INT',     pk: false, fk: false, desc: '在库数量',           status: 'confirmed' },
+      { name: 'updated_at', type: 'DATETIME', pk: false, fk: false, desc: '最后更新',         status: 'confirmed' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'categories', name: 'categories',
+    desc: '商品分类表，支持父子层级（多级分类）。',
+    tagIds: ['t2'],
+    notes: '',
+    cols: [
+      { name: 'category_id', type: 'INT',     pk: true,  fk: false, desc: '分类 ID',     status: 'confirmed' },
+      { name: 'parent_id',   type: 'INT',     pk: false, fk: true,  desc: '父分类，自关联', status: 'confirmed' },
+      { name: 'name',        type: 'VARCHAR', pk: false, fk: false, desc: '分类名',       status: 'confirmed' },
+      { name: 'sort',        type: 'INT',     pk: false, fk: false, desc: '排序权重',     status: 'draft' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'reviews', name: 'reviews',
+    desc: '用户评价表，记录商品评分与评价内容。',
+    tagIds: ['t7'],
+    notes: '',
+    cols: [
+      { name: 'review_id', type: 'INT',     pk: true,  fk: false, desc: '评价 ID',       status: 'confirmed' },
+      { name: 'product_id', type: 'INT',    pk: false, fk: true,  desc: '被评商品',       status: 'draft' },
+      { name: 'user_id',   type: 'INT',     pk: false, fk: true,  desc: '评价用户',       status: 'draft' },
+      { name: 'rating',    type: 'INT',     pk: false, fk: false, desc: '评分 1-5',       status: 'confirmed' },
+      { name: 'content',   type: 'TEXT',    pk: false, fk: false, desc: '评价内容',       status: 'draft' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'returns', name: 'returns',
+    desc: '退货单表，记录退货申请的原因与处理状态。',
+    tagIds: ['t6'],
+    notes: '',
+    cols: [
+      { name: 'return_id', type: 'INT',     pk: true,  fk: false, desc: '退货单 ID',   status: 'confirmed' },
+      { name: 'order_id',  type: 'INT',     pk: false, fk: true,  desc: '原订单',       status: 'draft' },
+      { name: 'product_id', type: 'INT',    pk: false, fk: true,  desc: '退货商品',     status: 'draft' },
+      { name: 'reason',    type: 'VARCHAR', pk: false, fk: false, desc: '退货原因',     status: 'draft' },
+      { name: 'status',    type: 'VARCHAR', pk: false, fk: false, desc: '退货状态',     status: 'confirmed' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'coupons', name: 'coupons',
+    desc: '优惠券表，记录券码、面额与过期时间。',
+    tagIds: [],
+    notes: '',
+    cols: [
+      { name: 'coupon_id', type: 'INT',     pk: true,  fk: false, desc: '优惠券 ID',   status: 'confirmed' },
+      { name: 'code',      type: 'VARCHAR', pk: false, fk: false, desc: '券码',         status: 'draft' },
+      { name: 'discount',  type: 'DECIMAL', pk: false, fk: false, desc: '优惠金额（分）', status: 'confirmed' },
+      { name: 'expires_at', type: 'DATETIME', pk: false, fk: false, desc: '过期时间',   status: 'confirmed' },
+    ],
+    enums: [],
+  },
+  {
+    id: 'tags', name: 'tags',
+    desc: '领域标签表，记录标签名与颜色。',
+    tagIds: [],
+    notes: '',
+    cols: [
+      { name: 'tag_id', type: 'INT',     pk: true,  fk: false, desc: '标签 ID', status: 'confirmed' },
+      { name: 'name',   type: 'VARCHAR', pk: false, fk: false, desc: '标签名',   status: 'confirmed' },
+      { name: 'color',  type: 'VARCHAR', pk: false, fk: false, desc: '标签颜色', status: 'confirmed' },
+    ],
+    enums: [],
+  },
+];
+
+let rels = [
+  { id: 'r1',  from: 'orders',     fromCol: 'user_id',    to: 'users',      toCol: 'id',         source: 'fk',   status: 'confirmed' },
+  { id: 'r2',  from: 'order_items', fromCol: 'order_id',  to: 'orders',     toCol: 'order_id',   source: 'fk',   status: 'confirmed' },
+  { id: 'r3',  from: 'order_items', fromCol: 'product_id', to: 'products',  toCol: 'product_id', source: 'fk',   status: 'confirmed' },
+  { id: 'r4',  from: 'payments',   fromCol: 'order_id',   to: 'orders',     toCol: 'order_id',   source: 'ai',   status: 'pending' },
+  { id: 'r5',  from: 'shipments',  fromCol: 'order_id',   to: 'orders',     toCol: 'order_id',   source: 'ai',   status: 'pending' },
+  { id: 'r6',  from: 'reviews',    fromCol: 'product_id', to: 'products',   toCol: 'product_id', source: 'ai',   status: 'pending' },
+  { id: 'r7',  from: 'reviews',    fromCol: 'user_id',    to: 'users',      toCol: 'id',         source: 'user', status: 'confirmed' },
+  { id: 'r8',  from: 'returns',    fromCol: 'order_id',   to: 'orders',     toCol: 'order_id',   source: 'ai',   status: 'pending' },
+  { id: 'r9',  from: 'returns',    fromCol: 'product_id', to: 'products',   toCol: 'product_id', source: 'user', status: 'pending' },
+  { id: 'r10', from: 'inventory',  fromCol: 'product_id', to: 'products',   toCol: 'product_id', source: 'user', status: 'confirmed' },
+  { id: 'r11', from: 'products',   fromCol: 'category_id', to: 'categories', toCol: 'category_id', source: 'fk', status: 'confirmed' },
+  { id: 'r12', from: 'categories', fromCol: 'parent_id',  to: 'categories', toCol: 'category_id', source: 'fk',   status: 'confirmed' },
+  { id: 'r13', from: 'orders',     fromCol: 'payment_id', to: 'payments',   toCol: 'payment_id', source: 'fk',   status: 'confirmed' },
+  { id: 'r14', from: 'payments',   fromCol: 'user_id',    to: 'users',      toCol: 'id',         source: 'user', status: 'confirmed' },
+];
+
+let docs = [
+  { id: 'd1', title: '业务规则备注', body: '订单金额超过 5000 元自动触发风控审核流程，需管理员在 approval_queue 表中确认后才能继续发货。', date: '2026-08-20' },
+  { id: 'd2', title: '数据字典补充', body: '所有金额字段单位为"分"（整数），前端展示时需除以 100 转换为元。此约定适用于 orders.total_amount、order_items.price 等字段。', date: '2026-08-22' },
+];
+
+/* ============================================================
+   状态与工具
+   ============================================================ */
+const state = {
+  view: 'tables',          // 'tables' | 'other'
+  tagFilter: null,         // tagId | 'untagged' | null
+  search: '',
+  relSrc: 'all',           // all | fk | ai | user
+  relStatus: 'all',        // all | pending | confirmed
+  expanded: new Set(),
+  openEdit: null,          // 正在编辑的标签 id
+  confirmDel: null,        // 待确认删除的标签 id
+  newOpen: false,
+  newTag: { name: '', desc: '', color: TAG_COLORS[0] },
+};
+
+const $  = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+const esc = s => String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '\u003c': '&lt;', '\u003e': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function pendingTotal() {
+  let n = 0;
+  tables.forEach(t => {
+    n += t.cols.filter(c => c.status === 'draft').length;
+    (t.enums || []).forEach(e => n += e.values.filter(v => v.draft).length);
+  });
+  n += rels.filter(r => r.status === 'pending').length;
+  return n;
+}
+
+/* ============================================================
+   渲染入口
+   ============================================================ */
+function renderAll() {
+  renderTags();
+  renderMiddle();
+  renderRels();
+  $('#confirmAllBtn').textContent = `✓ 确认全部 (${pendingTotal()})`;
+  $('#otherCount').textContent = docs.length;
+}
+
+function renderMiddle() {
+  if (state.view === 'other') { renderOther(); return; }
+  renderTables();
+  renderChips();
+}
+
+/* ============================================================
+   左栏：标签
+   ============================================================ */
+function renderTags() {
+  const list = $('#tagList');
+  list.innerHTML = tags.map(t => {
+    const cnt = tables.filter(x => x.tagIds.includes(t.id)).length;
+    const open = state.openEdit === t.id;
+    const isOn = state.tagFilter === t.id;
+    return `
+    <div class="tc-item ${isOn ? 'on' : ''} ${open ? 'open' : ''}">
+      <span class="tc-dot" style="background:${t.color}"></span>
+      <span class="tc-name" onclick="toggleTagFilter('${t.id}')" title="${esc(t.desc || '')}">${esc(t.name)}</span>
+      <span class="tc-count">${cnt}</span>
+      <button class="tc-more" onclick="toggleEdit('${t.id}')" title="编辑标签">···</button>
+      ${open ? editPanel(t, cnt) : ''}
+    </div>`;
+  }).join('');
+
+  const unc = tables.filter(x => x.tagIds.length === 0).length;
+  list.innerHTML += `
+    <div class="tc-item ${state.tagFilter === 'untagged' ? 'on' : ''}" title="未挂任何标签的表">
+      <span class="tc-dot" style="background:#5a6a7e"></span>
+      <span class="tc-name" onclick="toggleUntagged()">未分类</span>
+      <span class="tc-count">${unc}</span>
+    </div>`;
+}
+
+function editPanel(t, cnt) {
+  if (state.confirmDel === t.id) {
+    return `
+    <div class="tc-edit">
+      <div class="del-txt">删除后 ${cnt} 张表将释放到「未分类」，标签本身不可恢复。</div>
+      <div class="tc-edit-foot">
+        <button class="btn sm ghost" onclick="cancelDel()">取消</button>
+        <button class="btn sm danger" onclick="doDelete('${t.id}')">确认删除</button>
+      </div>
+    </div>`;
+  }
+  const sw = TAG_COLORS.map(c =>
+    `<span class="swatch ${t.color === c ? 'sel' : ''}" data-color="${c}" style="background:${c}" onclick="pickColor('${t.id}','${c}',this)"></span>`
+  ).join('');
+  return `
+  <div class="tc-edit">
+    <input value="${esc(t.name)}" placeholder="标签名" oninput="tagField('${t.id}','name',this.value)">
+    <input value="${esc(t.desc || '')}" placeholder="描述（可选）" oninput="tagField('${t.id}','desc',this.value)">
+    <div class="swatches">${sw}</div>
+    <div class="tc-edit-foot">
+      <button class="btn sm danger" onclick="requestDelete('${t.id}')">删除</button>
+      <button class="btn sm primary" onclick="saveTag('${t.id}')">保存</button>
+    </div>
+  </div>`;
+}
+
+function renderNewForm() {
+  const slot = $('#newTagSlot');
+  if (!state.newOpen) { slot.innerHTML = ''; return; }
+  const n = state.newTag;
+  const sw = TAG_COLORS.map(c =>
+    `<span class="swatch ${n.color === c ? 'sel' : ''}" data-color="${c}" style="background:${c}" onclick="pickNewColor('${c}',this)"></span>`
+  ).join('');
+  slot.innerHTML = `
+  <div class="tc-new">
+    <div class="sec-label">新建标签</div>
+    <input placeholder="标签名，如：营销" oninput="newField('name',this.value)">
+    <input placeholder="描述（可选）" oninput="newField('desc',this.value)">
+    <div class="swatches">${sw}</div>
+    <div class="tc-edit-foot">
+      <button class="btn sm ghost" onclick="toggleNew()">取消</button>
+      <button class="btn sm primary" onclick="createTag()">创建</button>
+    </div>
+  </div>`;
+}
+
+function toggleNew() {
+  state.newOpen = !state.newOpen;
+  if (state.newOpen) {
+    state.newTag = { name: '', desc: '', color: TAG_COLORS[tags.length % TAG_COLORS.length] };
+  }
+  renderNewForm();
+}
+function newField(f, v) { state.newTag[f] = v; }
+function pickNewColor(c, el) {
+  state.newTag.color = c;
+  $$('.swatch', el.parentElement).forEach(s => s.classList.toggle('sel', s.dataset.color === c));
+}
+function createTag() {
+  if (!state.newTag.name.trim()) { toast('请输入标签名'); return; }
+  const name = state.newTag.name.trim();
+  tags.push({ id: 't' + Date.now(), name, desc: state.newTag.desc.trim(), color: state.newTag.color });
+  state.newOpen = false;
+  renderAll();
+  toast(`标签「${name}」已创建`);
+}
+
+function toggleEdit(id) {
+  state.openEdit = state.openEdit === id ? null : id;
+  state.confirmDel = null;
+  renderTags();
+}
+function tagField(id, f, v) { const t = tags.find(x => x.id === id); t[f] = v; }
+function pickColor(id, color, el) {
+  const t = tags.find(x => x.id === id);
+  t.color = color;
+  $$('.swatch', el.closest('.tc-edit')).forEach(s => s.classList.toggle('sel', s.dataset.color === color));
+  const dot = el.closest('.tc-item').querySelector('.tc-dot');
+  if (dot) dot.style.background = color;
+}
+function saveTag(id) {
+  state.openEdit = null;
+  state.confirmDel = null;
+  renderAll();
+  toast('标签已保存');
+}
+function requestDelete(id) { state.confirmDel = id; renderTags(); }
+function cancelDel() { state.confirmDel = null; renderTags(); }
+function doDelete(id) {
+  const t = tags.find(x => x.id === id);
+  tags = tags.filter(x => x.id !== id);
+  tables.forEach(x => { x.tagIds = x.tagIds.filter(y => y !== id); });
+  if (state.tagFilter === id) state.tagFilter = null;
+  state.openEdit = null;
+  state.confirmDel = null;
+  renderAll();
+  toast(`标签「${t ? t.name : ''}」已删除，相关表已释放到未分类`);
+}
+
+/* ============================================================
+   中栏：筛选 + 表卡片
+   ============================================================ */
+function toggleTagFilter(id) {
+  state.tagFilter = state.tagFilter === id ? null : id;
+  renderAll();
+}
+function toggleUntagged() {
+  state.tagFilter = state.tagFilter === 'untagged' ? null : 'untagged';
+  renderAll();
+}
+function onSearch(v) {
+  state.search = v.trim();
+  renderTables();
+  renderChips();
+}
+function clearFilter(type) {
+  if (type === 'tag') state.tagFilter = null;
+  if (type === 'search') { state.search = ''; $('#searchInput').value = ''; }
+  renderAll();
+}
+function clearAllFilters() {
+  state.tagFilter = null;
+  state.search = '';
+  $('#searchInput').value = '';
+  renderAll();
+}
+
+function visibleTables() {
+  return tables.filter(t => {
+    if (state.tagFilter) {
+      if (state.tagFilter === 'untagged') { if (t.tagIds.length) return false; }
+      else if (!t.tagIds.includes(state.tagFilter)) return false;
+    }
+    if (state.search) {
+      const q = state.search.toLowerCase();
+      if (!(t.name.toLowerCase().includes(q) || t.desc.toLowerCase().includes(q))) return false;
+    }
+    return true;
+  });
+}
+
+function renderChips() {
+  const box = $('#chipsBox');
+  const chips = [];
+  if (state.tagFilter === 'untagged') {
+    chips.push(`<span class="chip" style="color:#8fa0b4;background:rgba(143,160,180,.1);border-color:rgba(143,160,180,.28)">未分类 <span class="x" onclick="clearFilter('tag')">✕</span></span>`);
+  } else if (state.tagFilter) {
+    const t = tags.find(x => x.id === state.tagFilter);
+    if (t) chips.push(`<span class="chip" style="color:${t.color};background:${hexA(t.color, .12)};border-color:${hexA(t.color, .3)}">${esc(t.name)} <span class="x" onclick="clearFilter('tag')">✕</span></span>`);
+  }
+  if (state.search) chips.push(`<span class="chip">“${esc(state.search)}” <span class="x" onclick="clearFilter('search')">✕</span></span>`);
+  if (chips.length) chips.push(`<span class="chip clear" onclick="clearAllFilters()">清除全部</span>`);
+  box.innerHTML = chips.join('');
+  box.style.display = chips.length ? 'flex' : 'none';
+}
+
+function renderTables() {
+  const list = $('#tableList');
+  const rows = visibleTables();
+  $('#tableCount').textContent = `${rows.length} / ${tables.length} 张表`;
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty"><div class="ico">∅</div>没有匹配的表<br><span style="font-size:11px;opacity:.7">试试清除筛选或换一个关键词</span></div>`;
+    return;
+  }
+  list.innerHTML = rows.map(tblCard).join('');
+}
+
+function tblCard(t) {
+  const tag = t.tagIds.length ? tags.find(x => x.id === t.tagIds[0]) : null;
+  const band = tag ? tag.color : '#5a6a7e';
+  const pend = t.cols.filter(c => c.status === 'draft').length;
+  const open = state.expanded.has(t.id);
+  const pills = t.tagIds.map(id => {
+    const tg = tags.find(x => x.id === id);
+    return tg ? `<span class="tbl-pill" style="color:${tg.color};background:${hexA(tg.color, .12)};border-color:${hexA(tg.color, .28)}">${esc(tg.name)}</span>` : '';
+  }).join('');
+  return `
+  <article class="tbl-card ${open ? 'open' : ''}" style="border-left:3px solid ${band}">
+    <div class="tbl-head" onclick="toggleExpand('${t.id}')">
+      <span class="tbl-name">${esc(t.name)}</span>
+      <span class="tbl-tags">${pills}</span>
+      <span class="tbl-badge ${pend ? 'draft' : 'ok'}">${pend ? pend + ' 待确认' : '已确认'}</span>
+      <span class="tbl-arrow">▸</span>
+    </div>
+    <div class="tbl-desc" title="${esc(t.desc)}">${esc(t.desc)}</div>
+    ${open ? tblDetail(t) : ''}
+  </article>`;
+}
+
+function toggleExpand(id) {
+  if (state.expanded.has(id)) state.expanded.delete(id);
+  else state.expanded.add(id);
+  renderTables();
+}
+
+function tblDetail(t) {
+  const head = `<div class="cols-row head"><span>列名</span><span>类型</span><span>键</span><span>描述</span><span>状态</span><span>操作</span></div>`;
+  const colRows = t.cols.map(c => {
+    const key = (c.pk ? '<b class="c-key pk">PK</b>' : '') + (c.fk ? '<b class="c-key fk">FK</b>' : '');
+    const st = c.status === 'draft' ? '<span class="st draft">待确认</span>'
+      : c.status === 'rejected' ? '<span class="st rej">已拒绝</span>'
+      : '<span class="st ok">已确认</span>';
+    const acts = c.status === 'draft'
+      ? `<button class="mini ok" title="确认" onclick="colAct('${t.id}','${c.name}','ok')">✓</button><button class="mini no" title="拒绝" onclick="colAct('${t.id}','${c.name}','no')">✕</button>`
+      : '';
+    return `<div class="cols-row ${c.status === 'draft' ? 'draft' : ''} ${c.status === 'rejected' ? 'rejected' : ''}">
+      <span class="c-n">${esc(c.name)}</span>
+      <span class="c-t">${esc(c.type)}</span>
+      <span class="c-k">${key}</span>
+      <span class="c-d ${c.status === 'draft' ? 'draft' : ''}">${esc(c.desc)}</span>
+      <span class="c-s">${st}</span>
+      <span class="c-a">${acts}</span>
+    </div>`;
+  }).join('');
+
+  let enums = '';
+  if (t.enums && t.enums.length) {
+    enums = `<div class="tbl-block">
+      <div class="sec-label">枚举字典</div>
+      ${t.enums.map(e => `<div class="enum-box">
+        <div class="enum-head">${esc(t.name)}.${esc(e.col)}</div>
+        ${e.values.map(v => `<div class="enum-entry ${v.draft ? 'draft' : ''}" title="${v.draft ? '点击确认该含义' : ''}" onclick="enumAct('${t.id}','${e.col}','${v.v}')">
+          <span class="ev">${esc(v.v)}</span>
+          <span class="em">${esc(v.m)}</span>${v.draft ? '<span class="enum-st">待确认</span>' : ''}
+        </div>`).join('')}
+      </div>`).join('')}
+    </div>`;
+  }
+
+  const notes = `<div class="tbl-block">
+    <div class="sec-label">用户备注</div>
+    <textarea id="notes-${t.id}" placeholder="写对该表的补充说明，将纳入知识库检索…">${esc(t.notes || '')}</textarea>
+    <div class="note-foot">
+      <button class="btn sm" onclick="saveNotes('${t.id}')">保存备注</button>
+      <span class="note-hint" id="noteHint-${t.id}"></span>
+    </div>
+  </div>`;
+
+  return `<div class="tbl-detail">
+    <div class="tbl-block">
+      <div class="sec-label">列属性</div>
+      <div class="cols-grid">${head}${colRows}</div>
+    </div>
+    ${enums}${notes}
+  </div>`;
+}
+
+function colAct(tid, name, act) {
+  const t = tables.find(x => x.id === tid);
+  const c = t.cols.find(x => x.name === name);
+  c.status = act === 'ok' ? 'confirmed' : 'rejected';
+  renderTables();
+  renderAll();
+  toast(act === 'ok' ? `${tid}.${name} 已确认` : `${tid}.${name} 已拒绝`);
+}
+
+function enumAct(tid, col, v) {
+  const t = tables.find(x => x.id === tid);
+  const e = t.enums.find(x => x.col === col);
+  const val = e.values.find(x => x.v === v);
+  if (!val.draft) return;
+  val.draft = false;
+  renderTables();
+  renderAll();
+  toast(`${tid}.${col} = ${v} 已确认`);
+}
+
+function saveNotes(tid) {
+  const t = tables.find(x => x.id === tid);
+  t.notes = $('#notes-' + tid).value;
+  const h = $('#noteHint-' + tid);
+  if (h) { h.textContent = '✓ 已保存'; setTimeout(() => { h.textContent = ''; }, 1600); }
+  toast('备注已保存');
+}
+
+/* ============================================================
+   顶栏：确认全部 / 重新构建
+   ============================================================ */
+function confirmAll() {
+  let n = 0;
+  tables.forEach(t => {
+    t.cols.forEach(c => { if (c.status === 'draft') { c.status = 'confirmed'; n++; } });
+    (t.enums || []).forEach(e => e.values.forEach(v => { if (v.draft) { v.draft = false; n++; } }));
+  });
+  rels.forEach(r => { if (r.status === 'pending') { r.status = 'confirmed'; n++; } });
+  renderAll();
+  toast(n ? `已确认全部 ${n} 项待确认内容` : '没有待确认的内容');
+}
+
+function rebuild() {
+  const b = $('#readyBadge');
+  b.textContent = '重建中';
+  b.className = 'kb-badge pending';
+  toast('重新构建已触发，正在重建知识库…');
+  setTimeout(() => {
+    b.textContent = '已就绪';
+    b.className = 'kb-badge ready';
+    toast('知识库重建完成');
+  }, 2600);
+}
+
+/* ============================================================
+   右栏：关系
+   ============================================================ */
+function renderRels() {
+  const rs = rels.filter(r => {
+    if (state.relSrc !== 'all' && r.source !== state.relSrc) return false;
+    if (state.relStatus !== 'all' && r.status !== state.relStatus) return false;
+    return true;
+  });
+  $('#relCount').textContent = `${rs.length} / ${rels.length}`;
+  const pend = rels.filter(r => r.status === 'pending').length;
+  $('#relPend').textContent = pend ? `${pend} 待确认` : '全部已确认';
+
+  renderRelChips();
+
+  const list = $('#relList');
+  if (!rs.length) {
+    list.innerHTML = `<div class="empty"><div class="ico">∅</div>没有匹配的关系</div>`;
+    return;
+  }
+  list.innerHTML = rs.map(relCard).join('');
+}
+
+function renderRelChips() {
+  $$('#srcChips .fchip').forEach(b => {
+    const v = b.dataset.v;
+    const n = v === 'all' ? rels.length : rels.filter(r => r.source === v).length;
+    b.classList.toggle('on', state.relSrc === v);
+    b.innerHTML = `${b.dataset.label} <span class="fcn">${n}</span>`;
+  });
+  $$('#statusChips .fchip').forEach(b => {
+    const v = b.dataset.v;
+    const n = v === 'all' ? rels.length : rels.filter(r => r.status === v).length;
+    b.classList.toggle('on', state.relStatus === v);
+    b.innerHTML = `${b.dataset.label} <span class="fcn">${n}</span>`;
+  });
+}
+
+function relCard(r) {
+  const src = r.source === 'fk' ? '<span class="r-src fk">FK</span>'
+    : r.source === 'ai' ? '<span class="r-src ai">AI 发现</span>'
+    : '<span class="r-src user">用户添加</span>';
+  const st = r.status === 'confirmed' ? '<span class="r-status ok">✓ 已确认</span>'
+    : r.status === 'pending' ? '<span class="r-status pending">● 待确认</span>'
+    : '<span class="r-status rej">已拒绝</span>';
+  const acts = r.status === 'pending'
+    ? `<span class="r-acts">
+        <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)" onclick="relAct('${r.id}','ok')">✓ 确认</button>
+        <button class="btn sm danger" onclick="relAct('${r.id}','no')">✕ 拒绝</button>
+      </span>`
+    : '';
+  return `<div class="rel-card ${r.status}">
+    <div class="r-line"><span class="r-from">${esc(r.from)}</span><span class="r-arrow">→</span><span class="r-to">${esc(r.to)}</span></div>
+    <div class="r-cols">${esc(r.fromCol)} → ${esc(r.toCol)}</div>
+    <div class="r-meta">${src}${st}${acts}</div>
+  </div>`;
+}
+
+function setRelSrc(v) { state.relSrc = v; renderRels(); }
+function setRelStatus(v) { state.relStatus = v; renderRels(); }
+function relAct(id, act) {
+  const r = rels.find(x => x.id === id);
+  r.status = act === 'ok' ? 'confirmed' : 'rejected';
+  renderRels();
+  renderAll();
+  toast(act === 'ok' ? `关系 ${r.from} → ${r.to} 已确认` : `关系 ${r.from} → ${r.to} 已拒绝`);
+}
+
+/* ============================================================
+   「其他」内容区
+   ============================================================ */
+function toggleOther() {
+  state.view = state.view === 'other' ? 'tables' : 'other';
+  renderMiddle();
+  const el = $('.tc-item.other');
+  if (el) el.classList.toggle('on', state.view === 'other');
+  if (state.view === 'other') toast('已切换到「其他」内容');
+}
+
+function renderOther() {
+  $('#tableCount').textContent = `${docs.length} 条笔记`;
+  $('#chipsBox').style.display = 'none';
+  $('#tableList').innerHTML = `
+  <div class="other-view">
+    <div class="other-intro">自由编辑区：添加用户自定义的笔记 / 文档，内容会纳入知识库检索，但不属于任何表。</div>
+    <div class="other-new">
+      <input id="docTitle" placeholder="标题，如：业务规则" maxlength="40">
+      <textarea id="docBody" placeholder="内容…" rows="3"></textarea>
+      <div><button class="btn sm primary" onclick="addDoc()">+ 添加笔记</button></div>
+    </div>
+    ${docs.map(d => `<div class="other-card">
+      <div class="oc-title">${esc(d.title)}<button class="btn sm ghost" style="margin-left:auto" onclick="delDoc('${d.id}')">删除</button></div>
+      <div class="oc-body">${esc(d.body)}</div>
+      <div class="oc-meta">来源：用户手写 · ${d.date}</div>
+    </div>`).join('')}
+  </div>`;
+}
+
+function addDoc() {
+  const t = $('#docTitle').value.trim();
+  const b = $('#docBody').value.trim();
+  if (!t || !b) { toast('标题和内容不能为空'); return; }
+  const d = new Date();
+  docs.unshift({
+    id: 'd' + Date.now(),
+    title: t,
+    body: b,
+    date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+  });
+  $('#docTitle').value = '';
+  $('#docBody').value = '';
+  renderAll();
+  toast('笔记已添加');
+}
+
+function delDoc(id) {
+  docs = docs.filter(x => x.id !== id);
+  renderAll();
+  toast('笔记已删除');
+}
+
+/* ============================================================
+   初始化
+   ============================================================ */
+renderAll();
+</script>
+</body>
+</html>

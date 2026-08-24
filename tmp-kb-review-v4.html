@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库审阅 · 三栏改造 v4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TABLETALK KB REVIEW v4 — 三栏改造（信号绿指挥舱设计系统）
+   左：标签库(CRUD+筛选) · 中：表卡片(展开列/枚举/备注) · 右：关系列表
+   ============================================================ */
+:root {
+  --void-0: #05070b;
+  --void-1: #0b0f16;
+  --void-2: #0f1520;
+  --void-3: #131b29;
+  --void-4: #1a2436;
+  --void-5: #26324a;
+
+  --ink: #d7e1ec;
+  --ink-dim: #8fa0b4;
+  --ink-faint: #5a6a7e;
+  --ink-strong: #f4f8fc;
+
+  --line: rgba(160, 185, 215, 0.09);
+  --line-strong: rgba(160, 185, 215, 0.17);
+
+  --accent: #2ee6a8;
+  --accent-dim: rgba(46, 230, 168, 0.12);
+  --accent-soft: #a6f4d6;
+  --accent-ink: #03130c;
+
+  --green: #35d99a;
+  --green-dim: rgba(53, 217, 154, 0.13);
+  --amber: #ffb454;
+  --amber-dim: rgba(255, 180, 84, 0.13);
+  --red: #ff6b81;
+  --red-dim: rgba(255, 107, 129, 0.13);
+  --blue: #63c8ff;
+  --blue-dim: rgba(99, 200, 255, 0.13);
+  --violet: #b18cff;
+  --violet-dim: rgba(177, 140, 255, 0.13);
+
+  --font-sans: 'Hanken Grotesk', 'PingFang SC', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', 'PingFang SC', monospace;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --dur: 0.18s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--void-0);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  height: 100vh;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--void-5); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea, select { font-family: inherit; outline: none; }
+
+.mono { font-family: var(--mono); }
+
+/* ============ 顶栏 ============ */
+.topbar {
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  background: var(--void-1);
+  border-bottom: 1px solid var(--line);
+}
+.tb-title { font-size: 14px; font-weight: 700; color: var(--ink-strong); letter-spacing: -0.01em; }
+.tb-conn {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.tb-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  transition: all var(--dur) var(--ease);
+}
+.tb-badge.pending { color: var(--amber); background: var(--amber-dim); }
+.tb-badge.ready { color: var(--green); background: var(--green-dim); }
+.tb-synced { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+.tb-spacer { flex: 1; }
+
+.btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 13px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  transition: all var(--dur) var(--ease);
+  white-space: nowrap;
+}
+.btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+
+/* ============ 主布局 ============ */
+.main {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 320px;
+  height: calc(100vh - 50px);
+}
+
+/* ============================================================
+   左栏：标签库
+   ============================================================ */
+.col-tags {
+  background: var(--void-1);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ct-cap {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 12px 12px 8px;
+}
+.tag-new-btn {
+  margin: 0 10px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 0;
+  border-radius: var(--r-sm);
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  transition: all var(--dur) var(--ease);
+}
+.tag-new-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.tag-create-row {
+  margin: 0 10px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: var(--void-2);
+}
+.tag-create-row .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.tag-create-row input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.tag-create-row input::placeholder { color: var(--ink-faint); }
+.tag-create-row .tc-ok { background: none; border: none; color: var(--green); font-size: 13px; }
+.tag-create-row .tc-x { background: none; border: none; color: var(--ink-faint); font-size: 12px; }
+.tag-create-row .tc-x:hover { color: var(--red); }
+
+.tag-list { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+
+.tag-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 12px;
+  margin: 0 4px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+  border-left: 3px solid transparent;
+  position: relative;
+}
+.tag-item:hover { background: var(--void-3); }
+.tag-item.on {
+  background: var(--accent-dim);
+  border-left-color: var(--tag-color, var(--accent));
+}
+.tag-item.on .tg-name { color: var(--accent-soft); font-weight: 600; }
+.tg-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.tg-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tg-name.draft { color: var(--amber); }
+.tg-cnt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  min-width: 16px;
+  text-align: right;
+}
+.tg-more {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 12px;
+  opacity: 0;
+  transition: all var(--dur) var(--ease);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.tag-item:hover .tg-more { opacity: 1; }
+.tg-more:hover { background: var(--void-5); color: var(--ink); }
+.tg-st-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+.tags-divider { height: 1px; background: var(--line); margin: 8px 12px; }
+
+/* 标签编辑浮层 */
+.tag-editor {
+  position: fixed;
+  z-index: 300;
+  width: 252px;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  animation: popIn 0.16s var(--ease);
+  overflow: hidden;
+}
+@keyframes popIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.te-head {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+.te-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.te-close:hover { color: var(--ink); }
+.te-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.te-field label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 4px;
+}
+.te-field input, .te-field textarea {
+  width: 100%;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: none;
+}
+.te-field input:focus, .te-field textarea:focus { border-color: var(--accent); }
+.te-colors { display: flex; gap: 6px; flex-wrap: wrap; }
+.te-color {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform var(--dur) var(--ease);
+}
+.te-color:hover { transform: scale(1.15); }
+.te-color.on { border-color: var(--ink-strong); box-shadow: 0 0 0 2px var(--void-2), 0 0 0 3.5px currentColor; }
+.te-acts { display: flex; gap: 6px; margin-top: 2px; }
+.te-del {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 6px 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--red-dim);
+  background: transparent;
+  color: var(--red);
+  transition: all var(--dur) var(--ease);
+}
+.te-del:hover { background: var(--red-dim); }
+.te-del.armed { background: var(--red); border-color: var(--red); color: #fff; font-weight: 700; }
+.te-save {
+  flex: 1.4;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 6px 0;
+  border-radius: var(--r-sm);
+  border: none;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.te-save:hover { background: var(--accent-soft); }
+
+/* ============================================================
+   中栏：表卡片列
+   ============================================================ */
+.col-tables {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--void-0);
+}
+.ct-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.search-box {
+  flex: 1;
+  max-width: 340px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  padding: 5px 12px;
+  transition: border-color var(--dur) var(--ease);
+}
+.search-box:focus-within { border-color: var(--accent); }
+.search-box svg { flex-shrink: 0; opacity: 0.4; }
+.search-box input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: 12px;
+}
+.search-box input::placeholder { color: var(--ink-faint); }
+
+.chips-row { display: flex; gap: 5px; flex-wrap: wrap; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--accent-dim);
+  color: var(--accent-soft);
+  border: none;
+  transition: all var(--dur) var(--ease);
+}
+.chip:hover { background: rgba(46, 230, 168, 0.2); }
+.chip.clear { background: var(--void-3); color: var(--ink-faint); }
+.chip.clear:hover { color: var(--red); background: var(--red-dim); }
+.ct-count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+
+.cards-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card {
+  background: var(--void-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--band, var(--ink-faint));
+  border-radius: var(--r-md);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+  animation: slideUp 0.22s var(--ease) both;
+}
+@keyframes slideUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.card:hover { border-color: var(--line-strong); background: var(--void-2); }
+.card.open { border-color: rgba(46, 230, 168, 0.2); }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+}
+.chev {
+  color: var(--ink-faint);
+  font-size: 10px;
+  transition: transform var(--dur) var(--ease);
+  flex-shrink: 0;
+  width: 12px;
+}
+.card.open .chev { transform: rotate(90deg); color: var(--accent); }
+.c-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-strong);
+  flex-shrink: 0;
+}
+.c-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-desc.empty { color: var(--ink-faint); font-style: italic; }
+.c-pills { display: flex; gap: 4px; flex-shrink: 0; }
+.c-pill {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.c-badge {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.c-badge.warn { color: var(--amber); background: var(--amber-dim); }
+.c-badge.ok { color: var(--green); background: var(--green-dim); }
+
+.card-body {
+  border-top: 1px solid var(--line);
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: slideUp 0.18s var(--ease);
+}
+.sec-label {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sec-label .sl-n { color: var(--ink-dim); }
+
+.cols-grid {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.cols-row {
+  display: grid;
+  grid-template-columns: 130px 82px 30px 30px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--void-1);
+  font-size: 12px;
+  border-bottom: 1px solid var(--line-soft, rgba(160,185,215,0.045));
+  transition: background var(--dur) var(--ease);
+}
+.cols-row:last-child { border-bottom: none; }
+.cols-row:hover { background: var(--void-3); }
+.cols-row.st-draft .cc { color: var(--amber); }
+.cols-row.st-rejected { opacity: 0.45; }
+.cols-row.st-rejected .cc { text-decoration: line-through; color: var(--ink-faint); }
+.cn { font-family: var(--mono); font-size: 11.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+.ck { font-family: var(--mono); font-size: 9px; font-weight: 700; }
+.ck.pk { color: var(--amber); }
+.ck.fk { color: var(--accent); }
+.cc { color: var(--ink-dim); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs { display: flex; gap: 3px; }
+.cs button {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1;
+  transition: all var(--dur) var(--ease);
+}
+.cs button.ok:hover { color: var(--green); border-color: var(--green); background: var(--green-dim); }
+.cs button.no:hover { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+
+.enum-box {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--void-1);
+  padding: 8px 10px;
+}
+.enum-head { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink); margin-bottom: 5px; }
+.enum-entry { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 2px 0; }
+.ev { font-family: var(--mono); color: var(--orange, #ffab70); font-weight: 500; min-width: 76px; }
+.em { color: var(--ink-dim); }
+.em.draft { color: var(--amber); }
+.em-input {
+  background: var(--void-3);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 11.5px;
+  padding: 1px 6px;
+  width: 260px;
+}
+.ea { display: flex; gap: 3px; margin-left: auto; }
+.ea button {
+  width: 18px; height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+.ea button.ok:hover { color: var(--green); border-color: var(--green); }
+.ea button.no:hover { color: var(--red); border-color: var(--red); }
+
+.note-area {
+  background: var(--void-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+  cursor: text;
+  min-height: 36px;
+  transition: border-color var(--dur) var(--ease);
+}
+.note-area:hover { border-color: var(--line-strong); }
+.note-area.empty { color: var(--ink-faint); font-style: italic; }
+.note-edit-ta {
+  width: 100%;
+  background: var(--void-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 56px;
+}
+.note-acts { display: flex; gap: 6px; margin-top: 6px; justify-content: flex-end; }
+
+.empty-hint {
+  padding: 56px 0;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+.empty-hint .eh-icon { font-size: 26px; opacity: 0.3; margin-bottom: 10px; }
+
+/* ============================================================
+   「其他」视图（中栏替换）
+   ============================================================ */
+.other-intro {
+  font-size: 12px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+  padding: 4px 2px 2px;
+}
+.other-new {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.other-new input {
+  flex: 1;
+  background: var(--void-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.other-new input:focus { border-style: solid; border-color: var(--accent); }
+.other-card {
+  background: var(--void-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--amber);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+}
+.oc-title { font-size: 13px; font-weight: 600; color: var(--ink); margin-bottom: 5px; display: flex; align-items: center; gap: 8px; }
+.oc-body { font-size: 12px; color: var(--ink-dim); line-height: 1.65; }
+.oc-meta { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+.oc-meta .oc-del { margin-left: auto; background: none; border: none; color: var(--ink-faint); font-size: 10.5px; }
+.oc-meta .oc-del:hover { color: var(--red); }
+
+/* ============================================================
+   右栏：关系列表
+   ============================================================ */
+.col-rels {
+  background: var(--void-1);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rel-cap {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 12px 14px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rel-cap .rc-n { color: var(--ink-dim); }
+.rel-filters {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.fchip {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  border: none;
+  background: var(--void-3);
+  color: var(--ink-faint);
+  transition: all var(--dur) var(--ease);
+}
+.fchip:hover { color: var(--ink); }
+.fchip.on { background: var(--accent-dim); color: var(--accent-soft); font-weight: 600; }
+.fsep { width: 100%; height: 3px; }
+
+.rel-list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.rel-item {
+  padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid rgba(160, 185, 215, 0.045);
+  border-left: 3px solid transparent;
+  transition: background var(--dur) var(--ease);
+  animation: slideUp 0.2s var(--ease) both;
+}
+.rel-item:hover { background: var(--void-2); }
+.rel-item.st-draft { border-left-color: var(--violet); background: rgba(177, 140, 255, 0.03); }
+.ri-line { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+.ri-from, .ri-to { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--ink); }
+.ri-col { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+.ri-arrow { color: var(--accent); font-size: 12px; margin: 0 2px; }
+.ri-line2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+.ri-src {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1.5px 7px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+}
+.ri-src.fk { color: var(--blue); background: var(--blue-dim); }
+.ri-src.llm { color: var(--violet); background: var(--violet-dim); }
+.ri-src.user { color: var(--green); background: var(--green-dim); }
+.ri-reason {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ri-status { font-size: 10px; display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.ri-status.ok { color: var(--green); }
+.ri-status.dot::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); }
+.ri-status.dot { color: var(--amber); }
+.ri-acts { display: flex; gap: 3px; flex-shrink: 0; }
+.ri-acts button {
+  width: 19px; height: 19px;
+  border-radius: 5px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1;
+}
+.ri-acts button.ok:hover { color: var(--green); border-color: var(--green); background: var(--green-dim); }
+.ri-acts button.no:hover { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 9px 18px;
+  border-radius: var(--r-full);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  z-index: 999;
+  animation: slideUp 0.2s var(--ease);
+  pointer-events: none;
+}
+.toast b { color: var(--accent-soft); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ 顶栏 ═══════════ -->
+<header class="topbar">
+  <span class="tb-title">知识库审阅</span>
+  <span class="tb-conn">demo.db</span>
+  <span class="tb-badge pending" id="tbBadge">…</span>
+  <span class="tb-spacer"></span>
+  <span class="tb-synced">同步于 08-23 21:40</span>
+  <button class="btn" onclick="toast('结构无变化，知识库已是最新')">增量同步</button>
+  <button class="btn" onclick="toast('已重新触发构建任务')">重新构建</button>
+  <button class="btn" onclick="toast('AI 标签生成完成：新增 0 个草案')">生成标签</button>
+  <button class="btn" onclick="toast('枚举含义生成完成')">生成枚举</button>
+  <button class="btn primary" id="confirmAllBtn" onclick="confirmAll()">✓ 确认全部</button>
+</header>
+
+<div class="main">
+
+  <!-- ═══════════ 左栏：标签库 ═══════════ -->
+  <aside class="col-tags">
+    <div class="ct-cap">标签库</div>
+    <div id="createRowHost"></div>
+    <button class="tag-new-btn" id="newTagBtn">＋ 新建标签</button>
+    <div class="tag-list" id="tagList"></div>
+  </aside>
+
+  <!-- ═══════════ 中栏：表卡片 / 其他 ═══════════ -->
+  <section class="col-tables">
+    <div class="ct-head">
+      <div class="search-box">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8fa0b4" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="searchInput" placeholder="搜索表名 / 描述…" oninput="onSearch(this.value)">
+      </div>
+      <div class="chips-row" id="chipsRow"></div>
+      <span class="ct-count" id="ctCount"></span>
+    </div>
+    <div class="cards-scroll" id="centerBody"></div>
+  </section>
+
+  <!-- ═══════════ 右栏：关系 ═══════════ -->
+  <aside class="col-rels">
+    <div class="rel-cap">关系 <span class="rc-n" id="relCount"></span></div>
+    <div class="rel-filters">
+      <button class="fchip on" data-src="all" onclick="setRelSrc('all')">全部</button>
+      <button class="fchip" data-src="fk" onclick="setRelSrc('fk')">FK</button>
+      <button class="fchip" data-src="llm" onclick="setRelSrc('llm')">AI 发现</button>
+      <button class="fchip" data-src="user" onclick="setRelSrc('user')">用户添加</button>
+      <span class="fsep"></span>
+      <button class="fchip on" data-st="all" onclick="setRelSt('all')">全部状态</button>
+      <button class="fchip" data-st="draft" onclick="setRelSt('draft')">待确认</button>
+      <button class="fchip" data-st="confirmed" onclick="setRelSt('confirmed')">已确认</button>
+    </div>
+    <div class="rel-list" id="relList"></div>
+  </aside>
+
+</div>
+
+<!-- 标签编辑浮层挂载点 -->
+<div id="editorHost"></div>
+
+<script>
+/* ============================================================
+   数据（demo mock）
+   ============================================================ */
+const PALETTE = ['#35d99a', '#63c8ff', '#ffb454', '#b18cff', '#ff6b81', '#2ee6a8', '#f472b6', '#fbbf24']
+const GRAY = '#5a6a7e'
+
+let state = {
+  tags: [
+    { name: '订单', desc: '订单主流程业务表', color: '#35d99a', status: 'confirmed' },
+    { name: '商品', desc: '商品与库存管理', color: '#63c8ff', status: 'confirmed' },
+    { name: '用户', desc: '账户与认证', color: '#b18cff', status: 'confirmed' },
+    { name: '支付', desc: '支付流水与对账', color: '#ffb454', status: 'draft' },
+    { name: '物流', desc: '物流与配送追踪', color: '#f472b6', status: 'draft' },
+  ],
+  tables: [
+    {
+      name: 'orders', desc: '订单主表，记录用户下单信息，包含订单状态、金额、收货地址等核心业务字段。',
+      tags: ['订单', '支付'], note: '金额单位统一为“分”，前端需除以 100 展示。',
+      cols: [
+        { n: 'order_id', t: 'INT', k: 'PK', d: '订单唯一标识，自增主键', st: 'confirmed' },
+        { n: 'user_id', t: 'INT', k: 'FK', d: '下单用户 ID，关联 users 表', st: 'draft' },
+        { n: 'status', t: 'VARCHAR', k: '', d: '订单状态机字段', st: 'draft' },
+        { n: 'total_amount', t: 'DECIMAL', k: '', d: '总金额（含税含运费），单位分', st: 'confirmed' },
+        { n: 'created_at', t: 'DATETIME', k: '', d: '下单时间', st: 'confirmed' },
+      ],
+      enums: [{ col: 'status', entries: [
+        { v: 'pending', m: '待支付，用户已下单但未付款', draft: true },
+        { v: 'paid', m: '已支付等待发货', draft: true },
+        { v: 'shipped', m: '已发货配送中', draft: true },
+        { v: 'done', m: '已完成', draft: false },
+      ]}],
+    },
+    {
+      name: 'users', desc: '用户账户信息表，存储注册用户的个人资料、认证凭据和账户状态。',
+      tags: ['用户'], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '用户 ID', st: 'confirmed' },
+        { n: 'email', t: 'VARCHAR', k: '', d: '登录邮箱，唯一约束', st: 'draft' },
+        { n: 'role', t: 'VARCHAR', k: '', d: '角色：admin/member/guest', st: 'draft' },
+        { n: 'created_at', t: 'DATETIME', k: '', d: '注册时间', st: 'confirmed' },
+      ],
+      enums: [{ col: 'role', entries: [
+        { v: 'admin', m: '系统管理员', draft: true },
+        { v: 'member', m: '普通注册用户', draft: true },
+        { v: 'guest', m: '访客', draft: false },
+      ]}],
+    },
+    {
+      name: 'products', desc: '商品信息表，存储商品名称、描述、价格、库存和上下架状态。',
+      tags: ['商品'], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '商品 ID', st: 'confirmed' },
+        { n: 'title', t: 'VARCHAR', k: '', d: '商品名称', st: 'confirmed' },
+        { n: 'price', t: 'DECIMAL', k: '', d: '售价（分）', st: 'draft' },
+        { n: 'stock', t: 'INT', k: '', d: '库存数量', st: 'confirmed' },
+        { n: 'category_id', t: 'INT', k: 'FK', d: '所属分类', st: 'draft' },
+      ],
+      enums: [],
+    },
+    {
+      name: 'order_items', desc: '订单明细表，记录每笔订单内的商品行与小计金额。',
+      tags: ['订单', '商品'], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '明细 ID', st: 'confirmed' },
+        { n: 'order_id', t: 'INT', k: 'FK', d: '所属订单', st: 'confirmed' },
+        { n: 'product_id', t: 'INT', k: 'FK', d: '商品 ID', st: 'confirmed' },
+        { n: 'quantity', t: 'INT', k: '', d: '购买数量', st: 'confirmed' },
+      ],
+      enums: [],
+    },
+    {
+      name: 'payments', desc: '支付流水表，记录每笔订单的支付渠道、金额与回调状态。',
+      tags: ['支付'], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '流水 ID', st: 'confirmed' },
+        { n: 'order_id', t: 'INT', k: '', d: '关联订单（无外键约束）', st: 'draft' },
+        { n: 'channel', t: 'VARCHAR', k: '', d: '支付渠道', st: 'draft' },
+        { n: 'amount', t: 'DECIMAL', k: '', d: '支付金额（分）', st: 'confirmed' },
+      ],
+      enums: [],
+    },
+    {
+      name: 'shipments', desc: '发货单表，记录订单包裹的物流公司与运单号。',
+      tags: ['物流'], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '发货单 ID', st: 'draft' },
+        { n: 'order_id', t: 'INT', k: '', d: '关联订单', st: 'draft' },
+        { n: 'tracking_no', t: 'VARCHAR', k: '', d: '运单号', st: 'draft' },
+      ],
+      enums: [],
+    },
+    {
+      name: 'coupons', desc: '优惠券表，记录券模板、面额与领取核销情况。',
+      tags: [], note: '',
+      cols: [
+        { n: 'id', t: 'INT', k: 'PK', d: '券 ID', st: 'confirmed' },
+        { n: 'user_id', t: 'INT', k: '', d: '持有用户', st: 'draft' },
+        { n: 'value', t: 'DECIMAL', k: '', d: '面额（分）', st: 'confirmed' },
+      ],
+      enums: [],
+    },
+  ],
+  rels: [
+    { from: 'orders', fcol: 'user_id', to: 'users', tcol: 'id', src: 'fk', status: 'confirmed' },
+    { from: 'order_items', fcol: 'order_id', to: 'orders', tcol: 'id', src: 'fk', status: 'confirmed' },
+    { from: 'order_items', fcol: 'product_id', to: 'products', tcol: 'id', src: 'fk', status: 'confirmed' },
+    { from: 'payments', fcol: 'order_id', to: 'orders', tcol: 'id', src: 'llm', status: 'draft', reason: '语义推断：支付流水归属订单' },
+    { from: 'shipments', fcol: 'order_id', to: 'orders', tcol: 'id', src: 'llm', status: 'draft', reason: '物流单关联订单' },
+    { from: 'coupons', fcol: 'user_id', to: 'users', tcol: 'id', src: 'user', status: 'confirmed' },
+  ],
+  notes: [
+    { title: '业务规则备注', body: '订单金额超过 5000 元自动触发风控审核流程，需管理员在 approval_queue 表中确认后才能继续发货。', meta: '来源：用户手写 · 2026-08-20' },
+    { title: '数据字典补充', body: '所有金额字段单位为“分”（整数），前端展示时需除以 100 转换为元。适用于 orders.total_amount、order_items.price、payments.amount 等字段。', meta: '来源：用户手写 · 2026-08-22' },
+  ],
+
+  /* ── 交互状态 ── */
+  selTag: null,          // null | tag名 | '__untagged__' | '__other__'
+  search: '',
+  openCard: null,        // 展开的表名
+  relSrc: 'all',
+  relSt: 'all',
+  creating: false,       // 新建标签输入行
+  editingTag: null,      // 正在编辑的标签名
+  delArm: false,         // 删除二段确认
+  noteEditing: null,     // 正在编辑备注的表名
+  noteText: '',
+}
+
+/* ============================================================
+   工具
+   ============================================================ */
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+function tagOf(name) { return state.tags.find((t) => t.name === name) }
+function primaryColor(tbl) {
+  for (const tn of tbl.tags) { const t = tagOf(tn); if (t) return t.color }
+  return GRAY
+}
+function tablePending(tbl) { return tbl.cols.filter((c) => c.st === 'draft').length }
+function untaggedTables() { return state.tables.filter((t) => t.tags.length === 0) }
+function totalPending() {
+  const cols = state.tables.reduce((s, t) => s + tablePending(t), 0)
+  const tags = state.tags.filter((t) => t.status === 'draft').length
+  const rels = state.rels.filter((r) => r.status === 'draft').length
+  return cols + tags + rels
+}
+function nextColor() {
+  const used = new Set(state.tags.map((t) => t.color))
+  return PALETTE.find((c) => !used.has(c)) ?? PALETTE[state.tags.length % PALETTE.length]
+}
+
+let toastTimer = null
+function toast(html) {
+  document.querySelectorAll('.toast').forEach((el) => el.remove())
+  const el = document.createElement('div')
+  el.className = 'toast'
+  el.innerHTML = html
+  document.body.appendChild(el)
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el.remove(), 2600)
+}
+
+/* ============================================================
+   渲染：顶栏
+   ============================================================ */
+function renderTopbar() {
+  const n = totalPending()
+  const b = $('#tbBadge')
+  if (n > 0) { b.className = 'tb-badge pending'; b.textContent = `${n} 项待确认` }
+  else { b.className = 'tb-badge ready'; b.textContent = '✓ 已就绪' }
+}
+
+/* ============================================================
+   渲染：左栏标签
+   ============================================================ */
+function renderTags() {
+  const host = $('#tagList')
+  const cnt = (tn) => state.tables.filter((t) => t.tags.includes(tn)).length
+  let html = ''
+
+  for (const tg of state.tags) {
+    const on = state.selTag === tg.name
+    html += `
+      <div class="tag-item ${on ? 'on' : ''}" style="--tag-color:${tg.color}"
+           onclick="onTagClick('${esc(tg.name)}')" data-name="${esc(tg.name)}">
+        <span class="tg-dot" style="background:${tg.color}"></span>
+        <span class="tg-name ${tg.status === 'draft' ? 'draft' : ''}">${esc(tg.name)}</span>
+        ${tg.status === 'draft' ? '<span class="tg-st-dot" style="background:var(--amber)" title="待确认"></span>' : ''}
+        <span class="tg-cnt">${cnt(tg.name)}</span>
+        <button class="tg-more" title="编辑标签" onclick="event.stopPropagation(); openEditor('${esc(tg.name)}', this)">⋯</button>
+      </div>`
+  }
+
+  html += `<div class="tags-divider"></div>`
+
+  const un = untaggedTables()
+  html += `
+    <div class="tag-item ${state.selTag === '__untagged__' ? 'on' : ''}" style="--tag-color:${GRAY}"
+         onclick="onTagClick('__untagged__')">
+      <span class="tg-dot" style="border:1.5px dashed var(--ink-faint);background:transparent"></span>
+      <span class="tg-name" style="color:var(--ink-dim)">未分类</span>
+      <span class="tg-cnt">${un.length}</span>
+    </div>`
+
+  html += `
+    <div class="tag-item ${state.selTag === '__other__' ? 'on' : ''}" style="--tag-color:var(--amber)"
+         onclick="onTagClick('__other__')">
+      <span class="tg-dot" style="background:var(--amber);opacity:.85"></span>
+      <span class="tg-name" style="color:${state.selTag === '__other__' ? 'var(--accent-soft)' : 'var(--ink-dim)'}">其他 · 自由笔记</span>
+      <span class="tg-cnt">${state.notes.length}</span>
+    </div>`
+
+  host.innerHTML = html
+
+  // 新建行
+  $('#createRowHost').innerHTML = state.creating ? `
+    <div class="tag-create-row">
+      <span class="dot" style="background:${nextColor()}"></span>
+      <input id="newTagName" placeholder="标签名称…" maxlength="16"
+             onkeydown="if(event.key==='Enter')saveNewTag();if(event.key==='Escape')cancelNewTag()">
+      <button class="tc-ok" onclick="saveNewTag()" title="保存">✓</button>
+      <button class="tc-x" onclick="cancelNewTag()" title="取消">✕</button>
+    </div>` : ''
+  if (state.creating) $('#newTagName')?.focus()
+}
+
+function onTagClick(name) {
+  state.editingTag = null; state.delArm = false; closeEditor()
+  state.selTag = state.selTag === name ? null : name
+  render()
+}
+
+function startCreate() { state.creating = true; renderTags() }
+function cancelNewTag() { state.creating = false; renderTags() }
+function saveNewTag() {
+  const v = $('#newTagName').value.trim()
+  if (!v) return
+  if (tagOf(v)) { toast(`标签 <b>${esc(v)}</b> 已存在`); return }
+  state.tags.push({ name: v, desc: '', color: nextColor(), status: 'confirmed' })
+  state.creating = false
+  toast(`已创建标签 <b>${esc(v)}</b>`)
+  render()
+}
+$('#newTagBtn').onclick = startCreate
+
+/* ============================================================
+   标签编辑浮层
+   ============================================================ */
+function closeEditor() { state.editingTag = null; $('#editorHost').innerHTML = '' }
+
+function openEditor(name, anchorEl) {
+  const tg = tagOf(name)
+  if (!tg) return
+  state.editingTag = name
+  state.delArm = false
+  const rect = anchorEl.getBoundingClientRect()
+  const W = 252
+  let x = rect.right + 8
+  if (x + W > window.innerWidth - 8) x = rect.left - W - 8
+  const y = Math.min(Math.max(8, rect.top - 8), window.innerHeight - 320)
+
+  $('#editorHost').innerHTML = `
+    <div class="tag-editor" id="tePanel" style="left:${x}px;top:${y}px" onclick="event.stopPropagation()">
+      <div class="te-head">编辑标签<button class="te-close" onclick="closeEditor();renderTags()">✕</button></div>
+      <div class="te-body">
+        <div class="te-field"><label>名称</label><input id="teName" value="${esc(tg.name)}" maxlength="16"></div>
+        <div class="te-field"><label>描述</label><textarea id="teDesc" rows="2">${esc(tg.desc)}</textarea></div>
+        <div class="te-field"><label>颜色</label>
+          <div class="te-colors">${PALETTE.map((c) =>
+            `<div class="te-color ${c === tg.color ? 'on' : ''}" style="background:${c};color:${c}" data-c="${c}" onclick="pickColor('${c}')"></div>`).join('')}
+          </div>
+        </div>
+        <div class="te-acts">
+          <button class="te-del" id="teDel" onclick="deleteArmed('${esc(tg.name)}')">删除标签</button>
+          <button class="te-save" onclick="saveTag('${esc(tg.name)}')">保存</button>
+        </div>
+      </div>
+    </div>`
+  setTimeout(() => $('#teName')?.select(), 30)
+}
+
+let pickedColor = null
+function pickColor(c) {
+  pickedColor = c
+  document.querySelectorAll('.te-color').forEach((el) => el.classList.toggle('on', el.dataset.c === c))
+}
+function saveTag(oldName) {
+  const tg = tagOf(oldName)
+  if (!tg) return
+  const nn = $('#teName').value.trim()
+  if (!nn) { toast('标签名不能为空'); return }
+  if (nn !== oldName && tagOf(nn)) { toast(`标签 <b>${esc(nn)}</b> 已存在`); return }
+  // 改名：同步所有表的引用
+  if (nn !== oldName) {
+    state.tables.forEach((t) => { t.tags = t.tags.map((x) => (x === oldName ? nn : x)) })
+  }
+  tg.name = nn
+  tg.desc = $('#teDesc').value.trim()
+  if (pickedColor && pickedColor !== tg.color) tg.color = pickedColor
+  if (tg.status === 'draft') tg.status = 'confirmed'
+  pickedColor = null
+  if (state.selTag === oldName) state.selTag = nn
+  closeEditor()
+  toast(`已更新标签 <b>${esc(nn)}</b>`)
+  render()
+}
+function deleteArmed(name) {
+  const btn = $('#teDel')
+  if (!state.delArm) {
+    state.delArm = true
+    btn.classList.add('armed')
+    btn.textContent = '再点一次确认删除'
+    return
+  }
+  // 执行删除：释放归属表
+  state.tables.forEach((t) => { t.tags = t.tags.filter((x) => x !== name) })
+  state.tags = state.tags.filter((t) => t.name !== name)
+  if (state.selTag === name) state.selTag = null
+  closeEditor()
+  toast(`标签 <b>${esc(name)}</b> 已删除，归属表移入未分类`)
+  render()
+}
+document.addEventListener('click', (e) => {
+  if (state.editingTag && !e.target.closest('.tag-editor') && !e.target.closest('.tg-more')) {
+    closeEditor(); renderTags()
+  }
+})
+
+/* ============================================================
+   渲染：中栏
+   ============================================================ */
+function filteredTables() {
+  let ts = state.tables
+  if (state.selTag === '__untagged__') ts = untaggedTables()
+  else if (state.selTag) ts = ts.filter((t) => t.tags.includes(state.selTag))
+  if (state.search.trim()) {
+    const q = state.search.toLowerCase()
+    ts = ts.filter((t) => t.name.toLowerCase().includes(q) || (t.desc || '').toLowerCase().includes(q))
+  }
+  return ts
+}
+
+function renderChips() {
+  let html = ''
+  if (state.selTag) {
+    const label = state.selTag === '__untagged__' ? '未分类' : state.selTag === '__other__' ? '其他·笔记' : state.selTag
+    const color = state.selTag && state.selTag !== '__untagged__' && state.selTag !== '__other__' ? tagOf(state.selTag)?.color : GRAY
+    html += `<button class="chip" onclick="clearSelTag()">
+      ${state.selTag !== '__untagged__' && state.selTag !== '__other__' ? `<span style="width:7px;height:7px;border-radius:50%;background:${color};display:inline-block"></span>` : ''}
+      ${esc(label)} ✕</button>`
+  }
+  if (state.search.trim()) {
+    html += `<button class="chip" onclick="clearSearch()">“${esc(state.search)}” ✕</button>`
+  }
+  $('#chipsRow').innerHTML = html
+}
+function clearSelTag() { state.selTag = null; render() }
+function clearSearch() { state.search = ''; $('#searchInput').value = ''; render() }
+
+function colRowHtml(c) {
+  return `
+    <div class="cols-row st-${c.st}">
+      <span class="cn">${esc(c.n)}</span>
+      <span class="ct">${esc(c.t)}</span>
+      <span class="ck ${c.k === 'PK' ? 'pk' : c.k === 'FK' ? 'fk' : ''}">${c.k || ''}</span>
+      <span></span>
+      <span class="cc" title="${esc(c.d)}">${esc(c.d) || '—'}</span>
+      <span class="cs">
+        ${c.st !== 'confirmed' ? `<button class="ok" title="确认" onclick="event.stopPropagation(); setCol('${esc(c.n)}','confirmed')">✓</button>` : ''}
+        ${c.st !== 'rejected' ? `<button class="no" title="拒绝" onclick="event.stopPropagation(); setCol('${esc(c.n)}','rejected')">✕</button>` : ''}
+      </span>
+    </div>`
+}
+
+function cardHtml(tbl, i) {
+  const open = state.openCard === tbl.name
+  const pend = tablePending(tbl)
+  const band = primaryColor(tbl)
+  const pills = tbl.tags.map((tn) => {
+    const tg = tagOf(tn)
+    const c = tg?.color ?? GRAY
+    return `<span class="c-pill" style="color:${c};background:${c}1f">${esc(tn)}</span>`
+  }).join('')
+  const badge = pend > 0
+    ? `<span class="c-badge warn">${pend} 字段待确认</span>`
+    : `<span class="c-badge ok">✓ 已确认</span>`
+
+  const colsHtml = tbl.cols.map(colRowHtml).join('')
+  const enumsHtml = (tbl.enums ?? []).map((en) => `
+    <div class="enum-box" style="margin-bottom:6px">
+      <div class="enum-head">${esc(tbl.name)}.${esc(en.col)} <span style="color:var(--ink-faint);font-weight:400">· 枚举字典</span></div>
+      ${en.entries.map((e) => `
+        <div class="enum-entry">
+          <span class="ev">${esc(e.v)}</span>
+          <span class="em ${e.draft ? 'draft' : ''}" id="em-${esc(tbl.name)}-${esc(en.col)}-${esc(e.v)}"
+                onclick="editMeaning('${esc(tbl.name)}','${esc(en.col)}','${esc(e.v)}')">${esc(e.m) || '—'}</span>
+          <span class="ea">
+            ${e.draft ? `<button class="ok" title="确认" onclick="confirmMeaning('${esc(tbl.name)}','${esc(en.col)}','${esc(e.v)}')">✓</button>` : ''}
+          </span>
+        </div>`).join('')}
+    </div>`).join('')
+
+  const noteHtml = state.noteEditing === tbl.name
+    ? `<textarea class="note-edit-ta" id="noteTa" rows="3">${esc(state.noteText)}</textarea>
+       <div class="note-acts">
+         <button class="btn" onclick="cancelNote()">取消</button>
+         <button class="btn primary" onclick="saveNote('${esc(tbl.name)}')">保存备注</button>
+       </div>`
+    : `<div class="note-area ${tbl.note ? '' : 'empty'}" onclick="beginNote('${esc(tbl.name)}')"
+           title="点击编辑该表的补充说明">${tbl.note ? esc(tbl.note) : '点击添加该表的补充说明…'}</div>`
+
+  return `
+    <div class="card ${open ? 'open' : ''}" style="--band:${band};animation-delay:${Math.min(i * 0.03, 0.3)}s">
+      <div class="card-head" onclick="toggleCard('${esc(tbl.name)}')">
+        <span class="chev">▶</span>
+        <span class="c-name">${esc(tbl.name)}</span>
+        <span class="c-desc ${tbl.desc ? '' : 'empty'}" title="${esc(tbl.desc)}">${esc(tbl.desc) || '暂无描述'}</span>
+        <span class="c-pills">${pills}</span>
+        ${badge}
+      </div>
+      ${open ? `
+      <div class="card-body">
+        <div>
+          <div class="sec-label">列属性 <span class="sl-n">${tbl.cols.length}</span></div>
+          <div class="cols-grid">
+            ${colsHtml}
+          </div>
+        </div>
+        ${(tbl.enums ?? []).length ? `<div><div class="sec-label">枚举字典</div>${enumsHtml}</div>` : ''}
+        <div>
+          <div class="sec-label">用户备注</div>
+          ${noteHtml}
+        </div>
+      </div>` : ''}
+    </div>`
+}
+
+/* “其他”自由笔记视图 */
+function otherViewHtml() {
+  return `
+    <div class="other-intro">这里的笔记不挂在任何表上，但会被纳入知识库检索 —— 适合放业务规则、口径说明、跨表约定。</div>
+    <div class="other-new">
+      <input id="noteTitle" placeholder="新笔记标题，回车快速添加"
+             onkeydown="if(event.key==='Enter')addNote()">
+      <button class="btn primary" onclick="addNote()">＋ 添加笔记</button>
+    </div>
+    ${state.notes.map((n, i) => `
+      <div class="other-card" style="animation-delay:${i * 0.04}s">
+        <div class="oc-title">${esc(n.title)}</div>
+        <div class="oc-body">${esc(n.body)}</div>
+        <div class="oc-meta">${esc(n.meta)}
+          <button class="oc-del" onclick="delNote(${i})">删除</button>
+        </div>
+      </div>`).join('')}
+  `
+}
+
+function renderCenter() {
+  const host = $('#centerBody')
+  if (state.selTag === '__other__') {
+    $('#ctCount').textContent = `${state.notes.length} 篇`
+    host.innerHTML = otherViewHtml()
+    return
+  }
+  const ts = filteredTables()
+  $('#ctCount').textContent = `${ts.length} 张表`
+  host.innerHTML = ts.length
+    ? ts.map(cardHtml).join('')
+    : `<div class="empty-hint"><div class="eh-icon">◇</div>没有匹配的数据表<br><span style="font-size:11px;opacity:.7">试试清除搜索或标签筛选</span></div>`
+}
+
+/* ============================================================
+   渲染：右栏关系
+   ============================================================ */
+const SRC_LABEL = { fk: 'FK', llm: 'AI 发现', user: '用户添加' }
+
+function filteredRels() {
+  return state.rels.filter((r) =>
+    (state.relSrc === 'all' || r.src === state.relSrc) &&
+    (state.relSt === 'all' || r.status === state.relSt))
+}
+
+function renderRels() {
+  const rs = filteredRels()
+  $('#relCount').textContent = `· ${rs.length}`
+  $('#relList').innerHTML = rs.length
+    ? rs.map((r, i) => `
+      <div class="rel-item ${r.status === 'draft' ? 'st-draft' : ''}" style="animation-delay:${Math.min(i * 0.025, 0.25)}s">
+        <div class="ri-line">
+          <span class="ri-from">${esc(r.from)}</span>${r.fcol ? `<span class="ri-col">.${esc(r.fcol)}</span>` : ''}
+          <span class="ri-arrow">→</span>
+          <span class="ri-to">${esc(r.to)}</span>${r.tcol ? `<span class="ri-col">.${esc(r.tcol)}</span>` : ''}
+        </div>
+        <div class="ri-line2">
+          <span class="ri-src ${r.src}">${SRC_LABEL[r.src]}</span>
+          ${r.reason ? `<span class="ri-reason" title="${esc(r.reason)}">${esc(r.reason)}</span>` : '<span class="ri-reason"></span>'}
+          ${r.status === 'draft' ? `
+            <span class="ri-status dot">待确认</span>
+            <span class="ri-acts">
+              <button class="ok" title="确认此关系" onclick="confirmRel(${state.rels.indexOf(r)})">✓</button>
+              <button class="no" title="拒绝并移除" onclick="rejectRel(${state.rels.indexOf(r)})">✕</button>
+            </span>` : `
+            <span class="ri-status ok">✓ 已确认</span>`}
+        </div>
+      </div>`).join('')
+    : `<div class="empty-hint"><div class="eh-icon">⇄</div>没有匹配的关系</div>`
+}
+
+function setRelSrc(v) {
+  state.relSrc = v
+  document.querySelectorAll('[data-src]').forEach((b) => b.classList.toggle('on', b.dataset.src === v))
+  renderRels()
+}
+function setRelSt(v) {
+  state.relSt = v
+  document.querySelectorAll('[data-st]').forEach((b) => b.classList.toggle('on', b.dataset.st === v))
+  renderRels()
+}
+
+/* ============================================================
+   动作
+   ============================================================ */
+function render() {
+  renderTopbar()
+  renderTags()
+  renderChips()
+  renderCenter()
+  renderRels()
+}
+
+function onSearch(v) { state.search = v; renderChips(); renderCenter() }
+function toggleCard(name) { state.openCard = state.openCard === name ? null : name; renderCenter() }
+
+function setCol(colName, st) {
+  for (const t of state.tables) {
+    const c = t.cols.find((x) => x.n === colName)
+    if (c) { c.st = st; break }
+  }
+  render()
+  toast(st === 'confirmed' ? `已确认字段 <b>${esc(colName)}</b>` : `已拒绝字段 <b>${esc(colName)}</b>`)
+}
+
+function beginNote(table) {
+  const t = state.tables.find((x) => x.name === table)
+  state.noteEditing = table
+  state.noteText = t?.note ?? ''
+  renderCenter()
+  $('#noteTa')?.focus()
+}
+function cancelNote() { state.noteEditing = null; renderCenter() }
+function saveNote(table) {
+  const t = state.tables.find((x) => x.name === table)
+  if (t) t.note = $('#noteTa').value.trim()
+  state.noteEditing = null
+  render()
+  toast(`已保存 <b>${esc(table)}</b> 的备注`)
+}
+
+function editMeaning(table, col, val) {
+  const en = state.tables.find((t) => t.name === table)?.enums.find((e) => e.col === col)?.entries.find((x) => x.v === val)
+  if (!en) return
+  const span = $(`#em-${table}-${col}-${val}`)
+  span.outerHTML = `<input class="em-input" id="em-in" value="${esc(en.m)}">`
+  const inp = $('#em-in')
+  inp.focus(); inp.select()
+  const done = () => {
+    en.m = inp.value.trim()
+    if (!en.draft) { /* 已确认的直接更新 */ } else { /* 草案保持草案 */ }
+    render()
+  }
+  inp.addEventListener('blur', done)
+  inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') inp.blur(); if (ev.key === 'Escape') { en._keep = true; inp.blur() } })
+}
+function confirmMeaning(table, col, val) {
+  const en = state.tables.find((t) => t.name === table)?.enums.find((e) => e.col === col)?.entries.find((x) => x.v === val)
+  if (en) { en.draft = false; render(); toast(`已确认枚举含义：<b>${esc(val)}</b>`) }
+}
+
+function confirmRel(i) { state.rels[i].status = 'confirmed'; render(); toast('已确认该关系') }
+function rejectRel(i) {
+  const r = state.rels[i]
+  state.rels.splice(i, 1)
+  render()
+  toast(`已拒绝 <b>${esc(r.from)} → ${esc(r.to)}</b>`)
+}
+
+function addNote() {
+  const v = $('#noteTitle').value.trim()
+  if (!v) return
+  state.notes.unshift({ title: v, body: '（双击正文开始编辑…此处 demo 省略编辑态）', meta: '来源：用户手写 · 刚刚' })
+  render()
+  toast(`已添加笔记 <b>${esc(v)}</b>`)
+}
+function delNote(i) { state.notes.splice(i, 1); render(); toast('已删除笔记') }
+
+function confirmAll() {
+  const n = totalPending()
+  if (n === 0) { toast('没有待确认的项目'); return }
+  state.tables.forEach((t) => t.cols.forEach((c) => { if (c.st === 'draft') c.st = 'confirmed' }))
+  state.tags.forEach((t) => { if (t.status === 'draft') t.status = 'confirmed' })
+  state.rels.forEach((r) => { if (r.status === 'draft') r.status = 'confirmed' })
+  render()
+  toast(`已批量确认 <b>${n}</b> 项，知识库就绪 🎉`)
+}
+
+render()
+</script>
+</body>
+</html>

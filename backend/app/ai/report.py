@@ -40,6 +40,27 @@ MAX_REPORT_TURNS = 10        # 报告比单查询多几轮：澄清 + 计划 + �
 CLARIFY_MAX_QUESTIONS = 3    # 一轮澄清最多 3 个问题
 
 
+def _log_llm_call(provider, *, conn_id: str = "", skill: str = "report", session_id: str | None = None) -> None:
+    """写 LLM 日志（request JSON + response JSON + usage）。每次 provider.chat() 后调用。"""
+    try:
+        meta = getattr(provider, "last_meta", None)
+        if not meta:
+            return
+        from app.ai.llm_log import LlmCallLog
+        from app.config import get_env
+        usage = meta.get("response_usage") or {}
+        LlmCallLog(get_env().data_dir).log(
+            conn_id=conn_id, skill=skill, session_id=session_id,
+            model=meta.get("response_model"), provider=meta.get("response_model", ""),
+            request_json=meta.get("request_payload"),
+            response_json=meta.get("response_usage"),
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+        )
+    except Exception:
+        pass
+
+
 def _normalize_messages(messages: list) -> list[dict]:
     out: list[dict] = []
     for m in messages:
@@ -360,7 +381,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
     if len(answered) == 0 and not any(
         m.get("name") == "clarify" for m in _normalize_messages(req.messages)
     ):
-        need_clarify = _mock_clarify(user_text) if is_mock else await _llm_clarify(provider, user_text)
+        need_clarify = _mock_clarify(user_text) if is_mock else await _llm_clarify(provider, user_text, session_id=req.session_id)
 
     if need_clarify:
         # 把澄清问题作为一条带 name=clarify 的 system 消息记下（前端答完回传时凭借它判断 replay）
@@ -370,7 +391,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
         return
 
     # ---- 2) 计划：mock 下确定性 → plan 事件 ----
-    plan = _mock_plan(user_text) if is_mock else await _llm_plan(provider, user_text, context)
+    plan = _mock_plan(user_text) if is_mock else await _llm_plan(provider, user_text, context, session_id=req.session_id)
     if not plan:
         # 真实路径规划失败：报错而非生成空壳报告（零定制，不注入演示数据）
         yield {"type": "error", "message": "报告章节规划失败，请稍后重试或换个问法。"}
@@ -408,7 +429,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 
     # ---- 4) 汇总成文：把各章聚合数据集喂模型，产出引用 result_id 的叙述 ----
     narration = _mock_narration(user_text, plan, section_results) if is_mock \
-        else await _llm_narration(provider, user_text, plan, section_results)
+        else await _llm_narration(provider, user_text, plan, section_results, session_id=req.session_id)
     # 一个 narration 事件叙述整份报告的结论（含各章数字 + 来源标注）
     yield {"type": "narration", "section_id": None, "text": narration,
            "refs": _collect_refs(plan, section_results)}
@@ -417,7 +438,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 
 
 # ---- LLM 版澄清/计划/叙述（真实网关下走；mock 下不走） ----
-async def _llm_clarify(provider, question: str) -> list[dict]:
+async def _llm_clarify(provider, question: str, session_id: str | None = None) -> list[dict]:
     try:
         prompt = (
             "你是 tabletalk 分析副驾。用户想要一份报告，判断问题是否需要澄清口径。\n"
@@ -428,6 +449,7 @@ async def _llm_clarify(provider, question: str) -> list[dict]:
             "只返回 JSON。"
         )
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        _log_llm_call(provider, skill="report", session_id=session_id)
         text = (resp.content or "").strip()
         text = __import__("re").sub(r"^```(?:json)?\s*|\s*```$", "", text)
         data = json.loads(text)
@@ -436,7 +458,7 @@ async def _llm_clarify(provider, question: str) -> list[dict]:
         return []   # 拿不准就不澄清，直接出计划
 
 
-async def _llm_plan(provider, question: str, context: str) -> list[dict]:
+async def _llm_plan(provider, question: str, context: str, session_id: str | None = None) -> list[dict]:
     try:
         prompt = (
             "根据以下数据库结构与用户分析目标，规划 2~4 个报告章节，每章一个聚合只读查询。\n"
@@ -447,6 +469,7 @@ async def _llm_plan(provider, question: str, context: str) -> list[dict]:
             "只返回 JSON。chart_hint 仅 bar/line/pie。SQL 必须是有 GROUP BY 或 LIMIT 的聚合查询。"
         )
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        _log_llm_call(provider, skill="report", session_id=session_id)
         text = (resp.content or "").strip()
         text = __import__("re").sub(r"^```(?:json)?\s*|\s*```$", "", text)
         data = json.loads(text)
@@ -468,7 +491,7 @@ async def _llm_plan(provider, question: str, context: str) -> list[dict]:
         return []
 
 
-async def _llm_narration(provider, question, plan, section_results) -> str:
+async def _llm_narration(provider, question, plan, section_results, session_id: str | None = None) -> str:
     try:
         # B2: 聚合行使用脱敏后 redacted_rows 出网
         blocks = "\n\n".join(
@@ -484,6 +507,7 @@ async def _llm_narration(provider, question, plan, section_results) -> str:
             "直接输出 2~4 段中文叙述，不要复述表格。"
         )
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        _log_llm_call(provider, skill="report", session_id=session_id)
         return (resp.content or "").strip() or "（无法生成叙述）"
     except Exception:  # noqa: BLE001
         # 真实路径异常时不回填 mock 演示叙述（零定制红线），返回明确占位

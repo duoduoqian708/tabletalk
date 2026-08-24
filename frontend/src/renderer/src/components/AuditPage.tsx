@@ -231,15 +231,15 @@ export function AuditPage(): React.JSX.Element {
               </div>
             </div>
             <div className="panel">
-              <div className="p-h">{t('gate.ruleTitle')}<span className="p-s">app/safety · 纯逻辑 · 单测覆盖</span></div>
+              <div className="p-h">{t('gate.ruleTitle')}<span className="p-s">{t('audit.rulePanelSub')}</span></div>
               <table className="rule-table">
-                <thead><tr><th style={{ width: 210 }}>规则</th><th style={{ width: 90 }}>适用</th><th style={{ width: 80 }}>判定</th><th>说明</th></tr></thead>
+                <thead><tr><th style={{ width: 210 }}>{t('audit.colRule')}</th><th style={{ width: 90 }}>{t('audit.colScope')}</th><th style={{ width: 80 }}>{t('audit.colVerdict')}</th><th>{t('audit.colDesc')}</th></tr></thead>
                 <tbody>
                   <tr><td>{t('gate.ruleReadRow')}</td><td>SELECT</td><td><VerdictBadge v="allow" /></td><td>{t('gate.ruleReadDesc')}</td></tr>
                   <tr><td>{t('gate.ruleNoWhereRow')}</td><td>UPDATE / DELETE</td><td><VerdictBadge v="block" /></td><td>{t('gate.ruleNoWhereDesc')}</td></tr>
                   <tr><td>{t('gate.ruleReviewRow')}</td><td>INSERT / UPDATE / DELETE</td><td><VerdictBadge v="review" /></td><td>{t('gate.ruleReviewDesc')}</td></tr>
                   <tr><td>{t('gate.ruleDdlRow')}</td><td>CREATE / ALTER / DROP / TRUNCATE</td><td><span className="badge manual">MANUAL</span></td><td>{t('gate.ruleDdlDesc')}</td></tr>
-                  <tr><td>{t('gate.ruleParseFailRow')}</td><td>任意 SQL</td><td><VerdictBadge v="review" /></td><td>{t('gate.ruleParseFailDesc')}</td></tr>
+                  <tr><td>{t('gate.ruleParseFailRow')}</td><td>{t('audit.anySql')}</td><td><VerdictBadge v="review" /></td><td>{t('gate.ruleParseFailDesc')}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -263,8 +263,8 @@ export function AuditPage(): React.JSX.Element {
           <button className={`seg-b${view === 'exception' ? ' on' : ''}`} onClick={() => { setView('exception'); resetPage() }}>{t('audit.viewException')}</button>
           <button className={`seg-b${view === 'all' ? ' on' : ''}`} onClick={() => { setView('all'); resetPage() }}>{t('audit.viewAll')}</button>
           <button className={`seg-b${view === 'report' ? ' on' : ''}`} onClick={() => { setView('report'); resetPage() }}>{t('audit.viewReport')}</button>
-          <button className={`seg-b${view === 'egress' ? ' on' : ''}`} onClick={() => { setView('egress'); resetPage() }}>出网</button>
-          <button className={`seg-b${view === 'weekly' ? ' on' : ''}`} onClick={() => { setView('weekly'); resetPage() }}>周报</button>
+          <button className={`seg-b${view === 'egress' ? ' on' : ''}`} onClick={() => { setView('egress'); resetPage() }}>{t('audit.tabEgress')}</button>
+          <button className={`seg-b${view === 'weekly' ? ' on' : ''}`} onClick={() => { setView('weekly'); resetPage() }}>{t('audit.tabWeekly')}</button>
         </div>
         <div className="spacer" />
         <select className="rs-input" value={range} onChange={(e) => { setRange(e.target.value as Range); resetPage() }}>
@@ -326,30 +326,30 @@ export function AuditPage(): React.JSX.Element {
 
       {!loading && !error && view === 'egress' && (
         <div className="panel">
-          <div className="egress-head mono">出网总计 {egress?.total ?? 0} · 按模型 {Object.entries(egress?.by_model ?? {}).map(([k,v])=>`${k}:${v}`).join(' ')} · 按模式 {Object.entries(egress?.by_mode ?? {}).map(([k,v])=>`${k}:${v}`).join(' ')}</div>
+          <div className="egress-head mono">{t('audit.egressTotal', { n: egress?.total ?? 0, byModel: Object.entries(egress?.by_model ?? {}).map(([k,v])=>`${k}:${v}`).join(' '), byMode: Object.entries(egress?.by_mode ?? {}).map(([k,v])=>`${k}:${v}`).join(' ') })}</div>
           {egress?.entries?.slice(0,20).map((e, idx)=> (
             <div key={idx} className="egress-row mono" style={{padding:'6px 0', borderTop:'1px solid var(--line)'}}>
               <span>{e.ts}</span> <span style={{marginLeft:8}}>{e.manifest?.model || e.manifest?.provider || '—'}</span> <span style={{marginLeft:8}}>{(e.manifest?.tables || []).join(', ')}</span>
             </div>
           ))}
-          {(!egress || egress.total===0) && <div className="mpage-empty">暂无出网记录</div>}
+          {(!egress || egress.total===0) && <div className="mpage-empty">{t('audit.egressEmpty')}</div>}
         </div>
       )}
 
       {!loading && !error && view === 'weekly' && (
         <div className="panel">
-          <div className="weekly-head mono">周报 · 总计 {weekly?.total ?? 0} 条</div>
+          <div className="weekly-head mono">{t('audit.weeklyTitle', { n: weekly?.total ?? 0 })}</div>
           <div className="weekly-sec">
-            <div className="weekly-label mono">按周</div>
+            <div className="weekly-label mono">{t('audit.byWeek')}</div>
             <div>{Object.entries(weekly?.weekly ?? {}).map(([w,c])=> <span key={w} className="weekly-chip mono">{w}:{c} </span>)}</div>
           </div>
           <div className="weekly-sec">
-            <div className="weekly-label mono">Top 表</div>
+            <div className="weekly-label mono">{t('audit.topTables')}</div>
             <div>{(weekly?.top_tables ?? []).map(([tbl,c])=> <span key={tbl} className="weekly-chip mono">{tbl}:{c} </span>)}</div>
           </div>
           <div className="weekly-sec">
-            <div className="weekly-label mono">异常（深夜批量）</div>
-            {weekly?.anomalies?.length ? weekly.anomalies.map((a,i)=> <div key={i} className="weekly-anomaly mono">{a.ts} · {a.sql}</div>) : <span className="weekly-empty mono">无异常</span>}
+            <div className="weekly-label mono">{t('audit.anomalyNightBatch')}</div>
+            {weekly?.anomalies?.length ? weekly.anomalies.map((a,i)=> <div key={i} className="weekly-anomaly mono">{a.ts} · {a.sql}</div>) : <span className="weekly-empty mono">{t('audit.empty')}</span>}
           </div>
         </div>
       )}

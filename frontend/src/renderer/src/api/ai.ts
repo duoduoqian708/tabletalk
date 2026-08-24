@@ -58,6 +58,13 @@ export interface AiCard {
   /** 人工确认/运行后已执行：展示"已留痕"标记 */
   executed?: boolean
   affected?: number
+  /** WS4 确认协议：DML 需确认卡 */
+  confirm_token?: string
+  expires_in?: number
+  needs_confirm?: boolean
+  /** WS5 问题库命中卡 */
+  question_library?: boolean
+  question_id?: string
 }
 
 /* 报告模式：章节计划/执行/图表数据/数字回溯 */
@@ -91,6 +98,14 @@ export interface ReportRef {
   row_count: number
 }
 
+export type Block =
+  | { kind: 'text'; text: string }
+  | { kind: 'sql_editor'; sql: string; dialect?: string; editable?: boolean }
+  | { kind: 'table'; columns: string[]; rows: unknown[][]; title?: string }
+  | { kind: 'chart'; chartType: 'bar' | 'line' | 'pie'; title?: string; data: unknown[][]; columns?: string[] }
+  | { kind: 'confirm'; prompt: string; confirmLabel?: string; cancelLabel?: string }
+  | { kind: 'choice'; prompt: string; multiple: boolean; options: { label: string; value: string }[] }
+
 export type AiEvent =
   | { type: 'turn_start'; connection: string }
   | { type: 'text'; content: string }
@@ -98,8 +113,14 @@ export type AiEvent =
   | { type: 'sql_card'; card: AiCard }
   | { type: 'stage'; stage: string; value?: unknown; tables?: string[]; vec_tables?: string[] }
   | { type: 'manifest'; manifest: Manifest }
-  | { type: 'done' }
+  | { type: 'done'; context_meta?: Record<string, unknown> }
   | { type: 'error'; message: string; code?: string }
+  | { type: 'scene_start'; scene: string; intent?: string | null; skill_id?: string | null }
+  | { type: 'scene_done'; scene: string }
+  | { type: 'subtask_start'; id: string; tool: string; label: string; status: string }
+  | { type: 'subtask_progress'; id: string; tool: string; delta: string }
+  | { type: 'subtask_done'; id: string; tool: string; status: string; detail?: string }
+  | { type: 'block'; id: string; block: Block }
   // 报告模式事件
   | { type: 'report_start'; connection: string; report_id: string; snapshot_ts: string }
   | { type: 'clarify'; question: string; field: string }

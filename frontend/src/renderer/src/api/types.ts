@@ -199,13 +199,23 @@ export interface GraphEdge {
   shared?: number | null
 }
 
+export interface GraphDraftEdge {
+  from_table: string
+  from_col?: string | null
+  to_table: string
+  to_col?: string | null
+  reason: string
+  source: string
+  status?: 'previously_rejected'
+}
+
 export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
   synced_at?: string
   tables: ReviewTable[]
   columns: ReviewColumn[]
-  graph: { edges: GraphEdge[]; excluded?: string[] }
+  graph: { edges: GraphEdge[]; excluded?: string[]; llm_draft_edges?: GraphDraftEdge[] }
   tags: { library: TagInfo[]; tables: Record<string, string[]> }
   enums: EnumColumn[]
   draft_count: number
@@ -221,6 +231,7 @@ export interface BuildProgress {
   done: boolean
   error: string | null
   kb_status: string
+  detail: string | null
 }
 
 export interface KbStatus {

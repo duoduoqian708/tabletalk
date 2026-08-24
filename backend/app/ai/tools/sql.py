@@ -248,6 +248,7 @@ def register() -> None:
         {"sql": {"type": "string", "description": "只读 SELECT SQL"}},
         ["sql"],
         _run_query,
+        trust="readonly",
     )
     register_tool(
         "run_dml",
@@ -255,6 +256,8 @@ def register() -> None:
         {"sql": {"type": "string", "description": "DML SQL"}},
         ["sql"],
         _run_dml,
+        trust="mutating",
+        confirm="card",
     )
     register_tool(
         "draft_ddl",
@@ -262,4 +265,5 @@ def register() -> None:
         {"sql": {"type": "string", "description": "DDL SQL 脚本"}},
         ["sql"],
         _draft_ddl,
+        trust="readonly",
     )

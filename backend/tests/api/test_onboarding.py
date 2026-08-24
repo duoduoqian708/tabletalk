@@ -60,7 +60,7 @@ async def test_confirm_all_confirms_drafts_and_tags(client, conn_id):
     await _build_and_wait(client, conn_id)
     # 生产 AI 草案 + 标签
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate", json={"include_samples": False})
-    assert r.json()["added"] > 0
+    assert r.json()["items"] > 0  # items>0 确认 mock 正常；added 可能=0（build 已创建全部 draft）
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate-tags")
     assert r.json()["tables"] > 0
     st = (await client.get(f"/api/v1/knowledge/{conn_id}/status")).json()

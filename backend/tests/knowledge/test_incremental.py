@@ -136,12 +136,13 @@ async def test_incremental_remove_table_archives(tmp_path):
 
 
 async def test_tombstone_survives_rebuild(tmp_path):
+    """FK 边墓碑化后，全量重建不复活。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
-    # 找到一条 overlap 边并墓碑化
-    overlap = [e for e in kb.graph("c1")["edges"] if e["kind"] == "overlap"]
-    assert overlap, "需要存在 overlap 边（orders.status ↔ customers.name 无重叠；构造样本使其出现）"
-    e = overlap[0]
+    # 找到一条 FK 边并墓碑化
+    fk_edges = [e for e in kb.graph("c1")["edges"] if e["kind"] == "fk"]
+    assert fk_edges, "需要存在 FK 边"
+    e = fk_edges[0]
     kb._edge_tombstones.setdefault("c1", []).append(
         {"from": e["from"], "from_col": e["from_col"], "to": e["to"], "to_col": e["to_col"]}
     )
@@ -151,9 +152,8 @@ async def test_tombstone_survives_rebuild(tmp_path):
     await kb2.build("c1", _schema(), _samples())
     edges2 = kb2.graph("c1")["edges"]
     assert not any(
-        x["kind"] == "overlap"
-        and ((x["from"], x["from_col"], x["to"], x["to_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"])
-             or (x["to"], x["to_col"], x["from"], x["from_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"]))
+        (x["from"], x["from_col"], x["to"], x["to_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"])
+        or (x["to"], x["to_col"], x["from"], x["from_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"])
         for x in edges2
     )
 

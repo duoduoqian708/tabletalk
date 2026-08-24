@@ -137,6 +137,13 @@ class PoolManager:
         try:
             conn = await adapter.connect(cfg.to_dialect_config())
             ok = await adapter.is_healthy(conn)
+            if ok and cfg.read_only:
+                # 连通测试通过后，才把"只读"标记应用到会话（失败仅提示，不阻断测试）
+                try:
+                    await adapter.set_read_only(conn, True)
+                except Exception as e:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning("read_only 会话标记失败（%s）: %s", conn_id, e)
             return {"ok": ok, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": None}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": str(e)}
@@ -164,6 +171,13 @@ class PoolManager:
                 ok = len(tables) > 0
                 if not ok:
                     detail = "文件可读但未发现任何表"
+            if ok and cfg.read_only:
+                # 连通测试通过后，才把"只读"标记应用到会话（失败仅提示，不阻断测试）
+                try:
+                    await adapter.set_read_only(conn, True)
+                except Exception as e:  # noqa: BLE001
+                    import logging
+                    logging.getLogger(__name__).warning("read_only 会话标记失败（draft）: %s", e)
             return {"ok": ok, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": detail}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "latency_ms": round((time.monotonic() - t0) * 1000, 1), "error": str(e)}

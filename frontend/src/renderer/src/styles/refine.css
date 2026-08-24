@@ -162,8 +162,7 @@
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
 .modal input::placeholder,
-.rs-input::placeholder,
-.compose-input::placeholder {
+.rs-input::placeholder {
   color: var(--ink-faint);
   opacity: 1;
 }
@@ -214,21 +213,7 @@
   border-left: 1px solid var(--line-strong);
   background: var(--void-1);
 }
-.compose-input {
-  font-size: 13.5px;
-  line-height: 1.5;
-  background: var(--void-2) !important;
-  border: 1px solid var(--line-strong) !important;
-  border-radius: 12px !important;
-  padding: 11px 14px !important;
-  color: var(--ink) !important;
-  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
-}
-.compose-input:focus {
-  outline: none;
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px var(--accent-dim) !important;
-}
+
 .airail .send {
   font-size: 13px;
   font-weight: 600;

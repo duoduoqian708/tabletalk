@@ -1,0 +1,1646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知识库审阅</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TABLETALK KB REVIEW — 延续信号绿指挥舱设计系统
+   ============================================================ */
+:root {
+  --void-0: #05070b;
+  --void-1: #0b0f16;
+  --void-2: #0f1520;
+  --void-3: #131b29;
+  --void-4: #1a2436;
+  --void-5: #26324a;
+
+  --ink: #d7e1ec;
+  --ink-dim: #8fa0b4;
+  --ink-faint: #5a6a7e;
+  --ink-strong: #f4f8fc;
+
+  --line: rgba(160, 185, 215, 0.09);
+  --line-strong: rgba(160, 185, 215, 0.17);
+
+  --accent: #2ee6a8;
+  --accent-dim: rgba(46, 230, 168, 0.12);
+  --accent-soft: #a6f4d6;
+  --accent-ink: #03130c;
+
+  --green: #35d99a;
+  --green-dim: rgba(53, 217, 154, 0.13);
+  --amber: #ffb454;
+  --amber-dim: rgba(255, 180, 84, 0.13);
+  --red: #ff6b81;
+  --red-dim: rgba(255, 107, 129, 0.13);
+  --blue: #63c8ff;
+  --blue-dim: rgba(99, 200, 255, 0.13);
+  --violet: #b18cff;
+  --violet-dim: rgba(177, 140, 255, 0.13);
+  --orange: #ffab70;
+  --orange-dim: rgba(255, 171, 112, 0.13);
+  --teal: var(--accent);
+
+  --font-sans: 'Hanken Grotesk', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --dur: 0.18s;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-sans);
+  background: var(--void-0);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* ============ VIEW SWITCHER (demo only) ============ */
+.view-switcher {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  gap: 4px;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 3px;
+}
+.vs-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.vs-btn:hover { color: var(--ink); }
+.vs-btn.on {
+  background: var(--accent-dim);
+  color: var(--accent-soft);
+  font-weight: 600;
+}
+
+/* ============ VIEW 1: 确认弹窗 ============ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(5, 7, 11, 0.92);
+  backdrop-filter: blur(12px);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.25s var(--ease);
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── 弹窗顶栏 ── */
+.modal-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--void-1);
+}
+.modal-topbar .mt-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-strong);
+  letter-spacing: -0.01em;
+}
+.modal-topbar .mt-conn {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.mt-stats {
+  display: flex;
+  gap: 16px;
+  margin-left: 8px;
+}
+.mt-stat {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.mt-stat .num {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.mt-stat .num.draft { color: var(--amber); }
+.mt-stat .num.ok { color: var(--green); }
+.mt-spacer { flex: 1; }
+.mt-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 16px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all var(--dur) var(--ease);
+}
+.mt-close:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+/* ── 弹窗主体：侧栏 + 内容 ── */
+.modal-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── 左侧分类导航 ── */
+.modal-sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--void-1);
+  padding: 12px 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ms-section {
+  padding: 0 12px;
+}
+.ms-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 12px 0 6px;
+}
+.ms-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  font-size: 13px;
+  color: var(--ink-dim);
+  border: 1px solid transparent;
+}
+.ms-item:hover { background: var(--void-3); color: var(--ink); }
+.ms-item.active {
+  background: var(--accent-dim);
+  color: var(--accent-soft);
+  border-color: rgba(46, 230, 168, 0.08);
+  font-weight: 600;
+}
+.ms-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--mono);
+  flex-shrink: 0;
+}
+.ms-icon.tbl { color: var(--blue); background: var(--blue-dim); }
+.ms-icon.col { color: var(--green); background: var(--green-dim); }
+.ms-icon.tag { color: var(--violet); background: var(--violet-dim); }
+.ms-icon.rel { color: var(--teal); background: var(--accent-dim); }
+.ms-icon.other { color: var(--orange); background: var(--orange-dim); }
+.ms-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  min-width: 20px;
+  text-align: right;
+}
+.ms-count.draft { color: var(--amber); }
+.ms-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 8px 12px;
+}
+
+/* ── 右侧内容区 ── */
+.modal-content {
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.mc-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+.mc-subtitle {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.mc-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+/* 通用按钮 */
+.btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  white-space: nowrap;
+}
+.btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.btn.primary:hover { background: var(--accent-soft); }
+.btn.danger { color: var(--red); border-color: var(--red-dim); }
+.btn.danger:hover { background: var(--red-dim); }
+.btn.ghost { border-color: transparent; }
+.btn.ghost:hover { background: var(--void-3); }
+.btn.sm { padding: 3px 10px; font-size: 10px; }
+.btn.all { background: var(--green-dim); color: var(--green); border-color: var(--green-dim); font-weight: 600; }
+.btn.all:hover { background: var(--green); color: var(--accent-ink); }
+
+/* ── 表格/列 审阅卡片 ── */
+.kb-card {
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--void-2);
+  overflow: hidden;
+  transition: border-color var(--dur) var(--ease);
+}
+.kb-card:hover { border-color: rgba(46, 230, 168, 0.15); }
+.kb-card.reviewed { border-left: 3px solid var(--green); }
+.kb-card.rejected-card { border-left: 3px solid var(--red); opacity: 0.6; }
+
+.kb-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--void-3);
+  border-bottom: 1px solid var(--line);
+}
+.kb-card-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-strong);
+}
+.kb-card-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+.kb-card-badge.draft { color: var(--amber); background: var(--amber-dim); }
+.kb-card-badge.confirmed { color: var(--green); background: var(--green-dim); }
+.kb-card-badge.ai { color: var(--violet); background: var(--violet-dim); }
+.kb-card-badge.struct { color: var(--blue); background: var(--blue-dim); }
+.kb-card-meta {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.kb-card-acts {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.kb-card-body {
+  padding: 10px 14px;
+}
+.kb-card-desc {
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+.kb-card-desc.empty {
+  color: var(--ink-faint);
+  font-style: italic;
+}
+
+/* 列表格 */
+.cols-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: var(--line);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.cols-row {
+  display: grid;
+  grid-template-columns: 140px 90px 50px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  background: var(--void-2);
+  font-size: 12px;
+  transition: background var(--dur) var(--ease);
+}
+.cols-row:hover { background: var(--void-3); }
+.cols-row .cn {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+.cols-row .ct {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.cols-row .ck {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+.cols-row .ck.pk { color: var(--amber); }
+.cols-row .ck.fk { color: var(--teal); }
+.cols-row .cc {
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.cols-row .cc.draft { color: var(--amber); }
+.cols-row .cs {
+  display: flex;
+  gap: 3px;
+}
+.cols-row .cs button {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.cols-row .cs button:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+/* 标签卡片 */
+.tags-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink-dim);
+  transition: all var(--dur) var(--ease);
+}
+.tag-pill.confirmed {
+  color: var(--teal);
+  background: var(--accent-dim);
+  border-color: rgba(46, 230, 168, 0.12);
+}
+.tag-pill.draft {
+  color: var(--amber);
+  background: var(--amber-dim);
+  border-color: rgba(255, 180, 84, 0.12);
+}
+.tag-pill .tag-desc {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-left: 4px;
+}
+.tag-pill .tag-acts {
+  display: flex;
+  gap: 2px;
+}
+.tag-pill .tag-acts button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+.tag-pill .tag-acts button:hover { opacity: 1; }
+
+/* 关系卡片 */
+.rel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rel-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--void-3);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  border: 1px solid var(--line);
+  transition: border-color var(--dur) var(--ease);
+}
+.rel-item:hover { border-color: var(--line-strong); }
+.rel-item .ri-from, .rel-item .ri-to {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 12px;
+}
+.rel-item .ri-col {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.rel-item .ri-arrow {
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+.rel-item .ri-kind {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.rel-item .ri-kind.fk { color: var(--teal); background: var(--accent-dim); }
+.rel-item .ri-kind.semantic { color: var(--violet); background: var(--violet-dim); }
+.rel-item .ri-kind.user { color: var(--blue); background: var(--blue-dim); }
+.rel-item .ri-reason {
+  font-size: 11px;
+  color: var(--ink-faint);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rel-item .ri-acts {
+  display: flex;
+  gap: 4px;
+}
+
+/* 枚举卡片 */
+.enum-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+.enum-col {
+  background: var(--void-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+}
+.enum-col-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.enum-col-head .ecn { color: var(--ink); font-weight: 600; }
+.enum-col-head .ecc { color: var(--ink-faint); }
+.enum-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.enum-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 0;
+}
+.enum-entry .ev {
+  font-family: var(--mono);
+  color: var(--orange);
+  font-weight: 500;
+  min-width: 60px;
+}
+.enum-entry .ea { color: var(--ink-faint); }
+.enum-entry .em {
+  color: var(--ink-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.enum-entry .em.draft { color: var(--amber); }
+
+/* 其他/用户笔记 */
+.other-card {
+  padding: 12px 14px;
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  border-left: 3px solid var(--orange);
+}
+.other-card .oc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.other-card .oc-body {
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+}
+.other-card .oc-meta {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+
+/* ── 弹窗底栏 ── */
+.modal-footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--void-1);
+}
+.mf-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mf-bar {
+  width: 120px;
+  height: 4px;
+  background: var(--void-4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mf-bar-fill {
+  height: 100%;
+  background: var(--green);
+  border-radius: 2px;
+  transition: width 0.4s var(--ease);
+}
+.mf-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.mf-label .mf-n { color: var(--green); font-weight: 600; }
+.mf-spacer { flex: 1; }
+
+/* ============================================================
+   VIEW 2: 知识库主页（确认后）
+   ============================================================ */
+.kb-main {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 主页顶栏 ── */
+.kb-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--void-1);
+  border-bottom: 1px solid var(--line);
+}
+.kb-topbar .kb-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-strong);
+  letter-spacing: -0.01em;
+}
+.kb-topbar .kb-conn {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+.kb-topbar .kb-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 99px;
+}
+.kb-topbar .kb-badge.ready { color: var(--green); background: var(--green-dim); }
+.kb-topbar .kb-badge.pending { color: var(--amber); background: var(--amber-dim); }
+.kb-emb {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 9px;
+  border-radius: 99px;
+}
+.kb-emb.on { color: var(--green); background: var(--green-dim); }
+.kb-emb.off { color: var(--amber); background: var(--amber-dim); }
+.kb-spacer { flex: 1; }
+.kb-topbar .btn { font-size: 11px; }
+
+/* ── 50/50 分栏 ── */
+.kb-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.kb-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.kb-panel-left {
+  border-right: 1px solid var(--line);
+  background: var(--void-1);
+}
+.kb-panel-right {
+  background: var(--void-0);
+}
+
+/* ── 左面板：tabs + 内容 ── */
+.kb-panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.kb-tab {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 5px 14px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  position: relative;
+}
+.kb-tab:hover { color: var(--ink); background: var(--void-3); }
+.kb-tab.on {
+  color: var(--accent-soft);
+  background: var(--accent-dim);
+  font-weight: 600;
+}
+.kb-tab .cnt {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-radius: 99px;
+  padding: 0 5px;
+  margin-left: 4px;
+  min-width: 16px;
+  text-align: center;
+  line-height: 16px;
+}
+
+/* 左面板搜索 */
+.kb-search-row {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.kb-search-row input {
+  flex: 1;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px 10px;
+  outline: none;
+}
+.kb-search-row input:focus { border-color: var(--accent); }
+.kb-search-row input::placeholder { color: var(--ink-faint); }
+
+/* 左面板内容滚动区 */
+.kb-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 左面板底栏统计 */
+.kb-panel-foot {
+  flex: none;
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+}
+.kb-panel-foot .stat-ok { color: var(--green); }
+.kb-panel-foot .stat-d { color: var(--amber); }
+
+/* ── 右面板：图谱 ── */
+.kb-graph-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--void-1);
+}
+.kb-graph-head .gh-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.kb-graph-head .gh-hint {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.kb-graph-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 图谱 SVG 模拟 */
+.graph-canvas {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 30% 40%, rgba(46, 230, 168, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 70% 60%, rgba(177, 140, 255, 0.02) 0%, transparent 50%);
+}
+.graph-node {
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.graph-node:hover circle { stroke-width: 2.5; }
+.graph-node text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  fill: var(--ink-dim);
+  pointer-events: none;
+}
+.graph-edge {
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+  fill: none;
+}
+.graph-edge.fk { stroke: var(--accent-dim); stroke-width: 1.5; }
+.graph-edge.semantic { stroke: var(--violet-dim); stroke-width: 1.2; stroke-dasharray: 4 3; }
+
+.graph-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: rgba(10, 12, 20, 0.8);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 12px;
+  backdrop-filter: blur(6px);
+}
+.graph-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.gl-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.gl-line {
+  display: inline-block;
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+}
+.gl-line.fk { background: var(--accent-dim); }
+.gl-line.sem { background: var(--violet-dim); }
+
+/* 右面板 inspector */
+.graph-inspector {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 260px;
+  background: rgba(15, 21, 32, 0.95);
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gi-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gi-name {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-strong);
+}
+.gi-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+  font-size: 12px;
+}
+.gi-close:hover { color: var(--ink); }
+.gi-stat {
+  display: flex;
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.gi-stat .gs-n { color: var(--ink); font-weight: 600; }
+.gi-desc {
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.6;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.gi-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.gi-tags .tag-pill { font-size: 10px; padding: 2px 8px; }
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--void-5); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kb-card { animation: slideUp 0.2s var(--ease) both; }
+.kb-card:nth-child(2) { animation-delay: 0.03s; }
+.kb-card:nth-child(3) { animation-delay: 0.06s; }
+.kb-card:nth-child(4) { animation-delay: 0.09s; }
+.kb-card:nth-child(5) { animation-delay: 0.12s; }
+.rel-item { animation: slideUp 0.2s var(--ease) both; }
+.rel-item:nth-child(2) { animation-delay: 0.03s; }
+.rel-item:nth-child(3) { animation-delay: 0.06s; }
+
+/* hide views */
+.view { display: none; }
+.view.active { display: flex; flex-direction: column; height: 100vh; }
+</style>
+</head>
+<body>
+
+<!-- ============ 视角切换（演示用） ============ -->
+<div class="view-switcher">
+  <button class="vs-btn on" onclick="showView('confirm')">确认弹窗</button>
+  <button class="vs-btn" onclick="showView('main')">知识库主页</button>
+</div>
+
+<!-- ============================================================
+     VIEW 1: 知识库构建确认弹窗
+     ============================================================ -->
+<div id="view-confirm" class="view active modal-overlay">
+
+  <!-- 顶栏：标题 + 统计 + 关闭 -->
+  <div class="modal-topbar">
+    <span class="mt-title">知识库审阅</span>
+    <span class="mt-conn">demo.db</span>
+    <div class="mt-stats">
+      <span class="mt-stat">表 <span class="num">12</span></span>
+      <span class="mt-stat">列 <span class="num">86</span></span>
+      <span class="mt-stat">标签 <span class="num">8</span></span>
+      <span class="mt-stat">关系 <span class="num">14</span></span>
+      <span class="mt-stat">待确认 <span class="num draft">23</span></span>
+      <span class="mt-stat">已确认 <span class="num ok">71</span></span>
+    </div>
+    <span class="mt-spacer"></span>
+    <button class="mt-close" title="关闭弹窗">✕</button>
+  </div>
+
+  <!-- 主体：侧栏 + 内容 -->
+  <div class="modal-body">
+
+    <!-- 左侧分类导航 -->
+    <div class="modal-sidebar">
+      <div class="ms-section">
+        <div class="ms-label">分类</div>
+        <div class="ms-item active" onclick="scrollToSection('sec-tables', this)">
+          <span class="ms-icon tbl">T</span>
+          表注释
+          <span class="ms-count">12</span>
+        </div>
+        <div class="ms-item" onclick="scrollToSection('sec-columns', this)">
+          <span class="ms-icon col">C</span>
+          列注释
+          <span class="ms-count draft">74</span>
+        </div>
+        <div class="ms-item" onclick="scrollToSection('sec-tags', this)">
+          <span class="ms-icon tag">#</span>
+          领域标签
+          <span class="ms-count draft">3</span>
+        </div>
+        <div class="ms-item" onclick="scrollToSection('sec-rels', this)">
+          <span class="ms-icon rel">↔</span>
+          表间关系
+          <span class="ms-count">14</span>
+        </div>
+        <div class="ms-item" onclick="scrollToSection('sec-enums', this)">
+          <span class="ms-icon other">E</span>
+          枚举字典
+          <span class="ms-count draft">6</span>
+        </div>
+        <div class="ms-item" onclick="scrollToSection('sec-other', this)">
+          <span class="ms-icon other">+</span>
+          其他
+          <span class="ms-count">2</span>
+        </div>
+      </div>
+      <div class="ms-divider"></div>
+      <div class="ms-section">
+        <div class="ms-label">快捷操作</div>
+        <div class="ms-item" style="color: var(--green); font-size: 12px;" onclick="void 0">
+          <span class="ms-icon" style="color: var(--green); background: var(--green-dim);">✓</span>
+          全部确认
+        </div>
+        <div class="ms-item" style="font-size: 12px;" onclick="void 0">
+          <span class="ms-icon" style="color: var(--red); background: var(--red-dim);">✕</span>
+          全部拒绝
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧内容 -->
+    <div class="modal-content">
+
+      <!-- ── 表注释 ── -->
+      <div id="sec-tables">
+        <div class="mc-header">
+          <span class="mc-title">表注释</span>
+          <span class="mc-subtitle">12 张表 · 4 个待确认</span>
+          <div class="mc-actions">
+            <button class="btn sm ghost">展开全部</button>
+            <button class="btn sm all">✓ 全部确认</button>
+          </div>
+        </div>
+
+        <div class="kb-card reviewed">
+          <div class="kb-card-head">
+            <span class="kb-card-name">orders</span>
+            <span class="kb-card-badge confirmed">已确认</span>
+            <span class="kb-card-badge struct">结构注释</span>
+            <span class="kb-card-meta">8 列 · <span class="kb-card-badge ai" style="margin-left:4px">AI 生成</span></span>
+          </div>
+          <div class="kb-card-body">
+            <div class="kb-card-desc">订单主表，记录用户下单信息，包含订单状态、金额、收货地址等核心业务字段。</div>
+            <div class="cols-grid">
+              <div class="cols-row">
+                <span class="cn">order_id</span>
+                <span class="ct">INT</span>
+                <span class="ck pk">PK</span>
+                <span class="cc">订单唯一标识，自增主键</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+              <div class="cols-row">
+                <span class="cn">user_id</span>
+                <span class="ct">INT</span>
+                <span class="ck fk">FK</span>
+                <span class="cc draft">下单用户 ID，关联 users 表</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+              <div class="cols-row">
+                <span class="cn">status</span>
+                <span class="ct">VARCHAR</span>
+                <span class="ck"></span>
+                <span class="cc draft">订单状态：pending/confirmed/shipped/delivered/cancelled</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+              <div class="cols-row">
+                <span class="cn">total_amount</span>
+                <span class="ct">DECIMAL</span>
+                <span class="ck"></span>
+                <span class="cc">订单总金额（含税含运费），单位：分</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="kb-card">
+          <div class="kb-card-head">
+            <span class="kb-card-name">users</span>
+            <span class="kb-card-badge draft">待确认</span>
+            <span class="kb-card-badge ai">AI 注释</span>
+            <span class="kb-card-meta">6 列</span>
+            <div class="kb-card-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="kb-card-body">
+            <div class="kb-card-desc">用户账户信息表，存储注册用户的个人资料、认证凭据和账户状态。</div>
+            <div class="cols-grid">
+              <div class="cols-row">
+                <span class="cn">id</span>
+                <span class="ct">INT</span>
+                <span class="ck pk">PK</span>
+                <span class="cc">用户 ID</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+              <div class="cols-row">
+                <span class="cn">email</span>
+                <span class="ct">VARCHAR</span>
+                <span class="ck"></span>
+                <span class="cc draft">登录邮箱，唯一约束</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+              <div class="cols-row">
+                <span class="cn">role</span>
+                <span class="ct">VARCHAR</span>
+                <span class="ck"></span>
+                <span class="cc draft">用户角色：admin/member/guest</span>
+                <span class="cs"><button>✓</button><button>✕</button></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="kb-card">
+          <div class="kb-card-head">
+            <span class="kb-card-name">products</span>
+            <span class="kb-card-badge draft">待确认</span>
+            <span class="kb-card-badge ai">AI 注释</span>
+            <span class="kb-card-meta">9 列</span>
+            <div class="kb-card-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="kb-card-body">
+            <div class="kb-card-desc">商品信息表，存储商品名称、描述、价格、库存和上下架状态。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 领域标签 ── -->
+      <div id="sec-tags">
+        <div class="mc-header">
+          <span class="mc-title">领域标签</span>
+          <span class="mc-subtitle">8 个标签 · 3 个待确认</span>
+          <div class="mc-actions">
+            <button class="btn sm all">✓ 全部确认</button>
+          </div>
+        </div>
+        <div class="tags-grid">
+          <span class="tag-pill confirmed">
+            订单
+            <span class="tag-desc">订单相关业务表</span>
+            <span class="tag-acts"><button title="拒绝">✕</button></span>
+          </span>
+          <span class="tag-pill confirmed">
+            商品
+            <span class="tag-desc">商品与库存管理</span>
+            <span class="tag-acts"><button title="拒绝">✕</button></span>
+          </span>
+          <span class="tag-pill confirmed">
+            用户
+            <span class="tag-desc">用户账户与认证</span>
+            <span class="tag-acts"><button title="拒绝">✕</button></span>
+          </span>
+          <span class="tag-pill confirmed">
+            支付
+            <span class="tag-desc">支付与交易流水</span>
+            <span class="tag-acts"><button title="拒绝">✕</button></span>
+          </span>
+          <span class="tag-pill draft">
+            物流
+            <span class="tag-desc">物流与配送追踪</span>
+            <span class="tag-acts">
+              <button title="确认" style="color:var(--green)">✓</button>
+              <button title="拒绝">✕</button>
+            </span>
+          </span>
+          <span class="tag-pill draft">
+            退货
+            <span class="tag-desc">退货与售后</span>
+            <span class="tag-acts">
+              <button title="确认" style="color:var(--green)">✓</button>
+              <button title="拒绝">✕</button>
+            </span>
+          </span>
+          <span class="tag-pill draft">
+            评价
+            <span class="tag-desc">用户评价与反馈</span>
+            <span class="tag-acts">
+              <button title="确认" style="color:var(--green)">✓</button>
+              <button title="拒绝">✕</button>
+            </span>
+          </span>
+          <span class="tag-pill confirmed">
+            库存
+            <span class="tag-desc">库存与仓储</span>
+            <span class="tag-acts"><button title="拒绝">✕</button></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- ── 表间关系 ── -->
+      <div id="sec-rels">
+        <div class="mc-header">
+          <span class="mc-title">表间关系</span>
+          <span class="mc-subtitle">14 条关系 · 4 条 LLM 发现</span>
+          <div class="mc-actions">
+            <button class="btn sm all">✓ 全部确认</button>
+          </div>
+        </div>
+        <div class="rel-list">
+          <div class="rel-item">
+            <span class="ri-from">orders</span>
+            <span class="ri-col">.user_id</span>
+            <span class="ri-arrow">→</span>
+            <span class="ri-to">users</span>
+            <span class="ri-col">.id</span>
+            <span class="ri-kind fk">FK</span>
+            <span class="ri-reason">外键约束</span>
+          </div>
+          <div class="rel-item">
+            <span class="ri-from">order_items</span>
+            <span class="ri-col">.order_id</span>
+            <span class="ri-arrow">→</span>
+            <span class="ri-to">orders</span>
+            <span class="ri-col">.id</span>
+            <span class="ri-kind fk">FK</span>
+            <span class="ri-reason">外键约束</span>
+          </div>
+          <div class="rel-item">
+            <span class="ri-from">order_items</span>
+            <span class="ri-col">.product_id</span>
+            <span class="ri-arrow">→</span>
+            <span class="ri-to">products</span>
+            <span class="ri-col">.id</span>
+            <span class="ri-kind fk">FK</span>
+            <span class="ri-reason">外键约束</span>
+          </div>
+          <div class="rel-item" style="border-left: 3px solid var(--violet);">
+            <span class="ri-from">payments</span>
+            <span class="ri-col">.order_id</span>
+            <span class="ri-arrow">→</span>
+            <span class="ri-to">orders</span>
+            <span class="ri-col">.id</span>
+            <span class="ri-kind semantic">LLM</span>
+            <span class="ri-reason">支付关联订单，语义推断</span>
+            <div class="ri-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="rel-item" style="border-left: 3px solid var(--violet);">
+            <span class="ri-from">shipments</span>
+            <span class="ri-col">.order_id</span>
+            <span class="ri-arrow">→</span>
+            <span class="ri-to">orders</span>
+            <span class="ri-col">.id</span>
+            <span class="ri-kind semantic">LLM</span>
+            <span class="ri-reason">物流单关联订单</span>
+            <div class="ri-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 枚举字典 ── -->
+      <div id="sec-enums">
+        <div class="mc-header">
+          <span class="mc-title">枚举字典</span>
+          <span class="mc-subtitle">6 个列级枚举 · AI 生成含义</span>
+          <div class="mc-actions">
+            <button class="btn sm all">✓ 全部确认</button>
+          </div>
+        </div>
+        <div class="enum-grid">
+          <div class="enum-col">
+            <div class="enum-col-head">
+              <span class="ecn">orders.status</span>
+              <span class="kb-card-badge draft" style="font-size:9px">3 待确认</span>
+            </div>
+            <div class="enum-entries">
+              <div class="enum-entry"><span class="ev">pending</span><span class="em draft">待确认，用户已下单但未支付</span></div>
+              <div class="enum-entry"><span class="ev">confirmed</span><span class="em draft">已确认，支付完成等待发货</span></div>
+              <div class="enum-entry"><span class="ev">shipped</span><span class="em draft">已发货，物流配送中</span></div>
+              <div class="enum-entry"><span class="ev">delivered</span><span class="em">已送达</span></div>
+              <div class="enum-entry"><span class="ev">cancelled</span><span class="em">已取消</span></div>
+            </div>
+          </div>
+          <div class="enum-col">
+            <div class="enum-col-head">
+              <span class="ecn">users.role</span>
+              <span class="kb-card-badge draft" style="font-size:9px">2 待确认</span>
+            </div>
+            <div class="enum-entries">
+              <div class="enum-entry"><span class="ev">admin</span><span class="em draft">系统管理员，拥有全部权限</span></div>
+              <div class="enum-entry"><span class="ev">member</span><span class="em draft">普通注册用户</span></div>
+              <div class="enum-entry"><span class="ev">guest</span><span class="em">访客，未注册用户</span></div>
+            </div>
+          </div>
+          <div class="enum-col">
+            <div class="enum-col-head">
+              <span class="ecn">products.category</span>
+            </div>
+            <div class="enum-entries">
+              <div class="enum-entry"><span class="ev">electronics</span><span class="em">电子产品</span></div>
+              <div class="enum-entry"><span class="ev">clothing</span><span class="em">服装配饰</span></div>
+              <div class="enum-entry"><span class="ev">food</span><span class="em">食品饮料</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 其他 ── -->
+      <div id="sec-other">
+        <div class="mc-header">
+          <span class="mc-title">其他</span>
+          <span class="mc-subtitle">用户笔记 · 自定义内容</span>
+        </div>
+        <div class="other-card">
+          <div class="oc-title">业务规则备注</div>
+          <div class="oc-body">订单金额超过 5000 元自动触发风控审核流程，需管理员在 approval_queue 表中确认后才能继续发货。</div>
+          <div class="oc-meta">来源：用户手写 · 2026-08-20</div>
+        </div>
+        <div class="other-card">
+          <div class="oc-title">数据字典补充</div>
+          <div class="oc-body">所有金额字段单位为"分"（整数），前端展示时需除以 100 转换为元。此约定适用于 orders.total_amount、order_items.price 等字段。</div>
+          <div class="oc-meta">来源：用户手写 · 2026-08-22</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 底栏：进度 + 操作 -->
+  <div class="modal-footer">
+    <div class="mf-progress">
+      <div class="mf-bar"><div class="mf-bar-fill" style="width: 73%"></div></div>
+      <span class="mf-label"><span class="mf-n">73</span> / 96 已审阅</span>
+    </div>
+    <span class="mf-spacer"></span>
+    <button class="btn ghost">暂不确认，稍后处理</button>
+    <button class="btn primary" style="font-size: 13px; padding: 8px 28px;">
+      确认并启用知识库 →
+    </button>
+  </div>
+</div>
+
+<!-- ============================================================
+     VIEW 2: 知识库主页（确认后，50/50 分栏）
+     ============================================================ -->
+<div id="view-main" class="view kb-main">
+
+  <!-- 顶栏 -->
+  <div class="kb-topbar">
+    <span class="kb-title">知识库</span>
+    <span class="kb-conn">demo.db</span>
+    <span class="kb-badge ready">已就绪</span>
+    <span class="kb-emb on" title="语义嵌入已配置">EMB · doubao</span>
+    <span class="kb-spacer"></span>
+    <span class="mc-subtitle" style="font-size:11px">同步于 08-23 14:30</span>
+    <button class="btn">增量同步</button>
+    <button class="btn">重新构建</button>
+    <button class="btn">生成标签</button>
+    <button class="btn">生成枚举</button>
+  </div>
+
+  <!-- 50/50 分栏 -->
+  <div class="kb-split">
+
+    <!-- 左面板：知识库内容 -->
+    <div class="kb-panel kb-panel-left">
+      <div class="kb-panel-head">
+        <button class="kb-tab on">审阅 <span class="cnt">3</span></button>
+        <button class="kb-tab">文档</button>
+        <button class="kb-tab">标签</button>
+        <button class="kb-tab">枚举</button>
+        <span class="kb-spacer" style="flex:1"></span>
+        <span class="mc-subtitle" style="font-size:10px">86 文档 · 8 标签 · 14 关系</span>
+      </div>
+
+      <div class="kb-search-row">
+        <input placeholder="搜索知识库文档…" />
+        <button class="btn sm">搜索</button>
+      </div>
+
+      <div class="kb-panel-body">
+
+        <!-- 审阅卡片：注释 -->
+        <div class="kb-card">
+          <div class="kb-card-head">
+            <span style="font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-dim);padding:2px 7px;border-radius:5px;font-family:var(--mono)">注释</span>
+            <span class="kb-card-name" style="font-size:12px">orders</span>
+            <span class="kb-card-badge draft">待确认</span>
+            <div class="kb-card-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="kb-card-body" style="padding:8px 14px">
+            <div class="kb-card-desc" style="font-size:12px; margin-bottom:0">订单主表，记录用户下单信息，包含订单状态、金额、收货地址等核心业务字段。</div>
+          </div>
+        </div>
+
+        <!-- 审阅卡片：标签 -->
+        <div class="kb-card">
+          <div class="kb-card-head">
+            <span style="font-size:10px;font-weight:700;color:var(--violet);background:var(--violet-dim);padding:2px 7px;border-radius:5px;font-family:var(--mono)">标签</span>
+            <span class="kb-card-name" style="font-size:12px">物流</span>
+            <span class="kb-card-badge draft">待确认</span>
+            <div class="kb-card-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="kb-card-body" style="padding:8px 14px">
+            <div class="kb-card-desc" style="font-size:12px; margin-bottom:0">物流与配送追踪相关业务表</div>
+          </div>
+        </div>
+
+        <!-- 审阅卡片：图谱边 -->
+        <div class="kb-card">
+          <div class="kb-card-head">
+            <span style="font-size:10px;font-weight:700;color:var(--teal);background:var(--accent-dim);padding:2px 7px;border-radius:5px;font-family:var(--mono)">关系</span>
+            <span class="kb-card-name" style="font-size:12px">
+              <span style="color:var(--ink)">payments</span>
+              <span style="color:var(--ink-faint);margin:0 3px">→</span>
+              <span style="color:var(--ink)">orders</span>
+            </span>
+            <span class="kb-card-badge ai">LLM 发现</span>
+            <div class="kb-card-acts">
+              <button class="btn sm" style="color:var(--green);border-color:var(--green-dim)">✓</button>
+              <button class="btn sm danger">✕</button>
+            </div>
+          </div>
+          <div class="kb-card-body" style="padding:8px 14px">
+            <div class="kb-card-desc" style="font-size:12px; margin-bottom:0">支付关联订单，语义推断</div>
+          </div>
+        </div>
+
+        <!-- 已确认的表 -->
+        <div class="kb-card reviewed" style="opacity: 0.7">
+          <div class="kb-card-head">
+            <span style="font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-dim);padding:2px 7px;border-radius:5px;font-family:var(--mono)">注释</span>
+            <span class="kb-card-name" style="font-size:12px">users</span>
+            <span class="kb-card-badge confirmed">已确认</span>
+          </div>
+          <div class="kb-card-body" style="padding:8px 14px">
+            <div class="kb-card-desc" style="font-size:12px; margin-bottom:0">用户账户信息表，存储注册用户的个人资料、认证凭据和账户状态。</div>
+          </div>
+        </div>
+
+        <div class="kb-card reviewed" style="opacity: 0.7">
+          <div class="kb-card-head">
+            <span style="font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-dim);padding:2px 7px;border-radius:5px;font-family:var(--mono)">注释</span>
+            <span class="kb-card-name" style="font-size:12px">products</span>
+            <span class="kb-card-badge confirmed">已确认</span>
+          </div>
+          <div class="kb-card-body" style="padding:8px 14px">
+            <div class="kb-card-desc" style="font-size:12px; margin-bottom:0">商品信息表，存储商品名称、描述、价格、库存和上下架状态。</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="kb-panel-foot">
+        <span>文档 <span class="stat-ok">82</span></span>
+        <span>标签 <span class="stat-ok">8</span></span>
+        <span>关系 <span class="stat-ok">14</span></span>
+        <span>待确认 <span class="stat-d">3</span></span>
+      </div>
+    </div>
+
+    <!-- 右面板：图谱 -->
+    <div class="kb-panel kb-panel-right">
+      <div class="kb-graph-head">
+        <span class="gh-title">关系图谱</span>
+        <span class="gh-hint">12 节点 · 14 边</span>
+        <span style="flex:1"></span>
+        <button class="btn sm ghost">全屏</button>
+      </div>
+      <div class="kb-graph-body">
+        <svg class="graph-canvas" viewBox="0 0 600 500">
+          <!-- 边 -->
+          <line class="graph-edge fk" x1="180" y1="120" x2="320" y2="80" />
+          <line class="graph-edge fk" x1="320" y1="80" x2="450" y2="140" />
+          <line class="graph-edge fk" x1="320" y1="80" x2="260" y2="200" />
+          <line class="graph-edge fk" x1="180" y1="120" x2="120" y2="240" />
+          <line class="graph-edge fk" x1="450" y1="140" x2="500" y2="280" />
+          <line class="graph-edge fk" x1="260" y1="200" x2="400" y2="300" />
+          <line class="graph-edge semantic" x1="350" y1="280" x2="320" y2="80" />
+          <line class="graph-edge semantic" x1="480" y1="380" x2="320" y2="80" />
+          <line class="graph-edge fk" x1="120" y1="240" x2="200" y2="370" />
+          <line class="graph-edge fk" x1="400" y1="300" x2="500" y2="280" />
+          <line class="graph-edge" x1="200" y1="370" x2="400" y2="300" />
+          <line class="graph-edge" x1="80" y1="380" x2="120" y2="240" />
+          <line class="graph-edge" x1="80" y1="380" x2="200" y2="370" />
+          <line class="graph-edge fk" x1="500" y1="280" x2="520" y2="400" />
+
+          <!-- 节点 -->
+          <g class="graph-node" transform="translate(180, 120)">
+            <circle r="20" fill="var(--void-3)" stroke="var(--accent)" stroke-width="2.5"/>
+            <text text-anchor="middle" dy="4" fill="var(--ink-strong)" font-weight="700" font-size="10">orders</text>
+          </g>
+          <g class="graph-node" transform="translate(320, 80)">
+            <circle r="18" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="10">users</text>
+          </g>
+          <g class="graph-node" transform="translate(450, 140)">
+            <circle r="16" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="10">products</text>
+          </g>
+          <g class="graph-node" transform="translate(260, 200)">
+            <circle r="14" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="9">order_items</text>
+          </g>
+          <g class="graph-node" transform="translate(120, 240)">
+            <circle r="12" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="9">payments</text>
+          </g>
+          <g class="graph-node" transform="translate(400, 300)">
+            <circle r="14" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="9">inventory</text>
+          </g>
+          <g class="graph-node" transform="translate(500, 280)">
+            <circle r="12" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="9">categories</text>
+          </g>
+          <g class="graph-node" transform="translate(200, 370)">
+            <circle r="13" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="9">shipments</text>
+          </g>
+          <g class="graph-node" transform="translate(350, 280)">
+            <circle r="11" fill="var(--void-3)" stroke="var(--violet-dim)" stroke-width="1.5" stroke-dasharray="3 2"/>
+            <text text-anchor="middle" dy="4" font-size="9" fill="var(--violet)">reviews</text>
+          </g>
+          <g class="graph-node" transform="translate(480, 380)">
+            <circle r="11" fill="var(--void-3)" stroke="var(--violet-dim)" stroke-width="1.5" stroke-dasharray="3 2"/>
+            <text text-anchor="middle" dy="4" font-size="9" fill="var(--violet)">returns</text>
+          </g>
+          <g class="graph-node" transform="translate(80, 380)">
+            <circle r="10" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="8">coupons</text>
+          </g>
+          <g class="graph-node" transform="translate(520, 400)">
+            <circle r="10" fill="var(--void-3)" stroke="var(--line-strong)" stroke-width="1.5"/>
+            <text text-anchor="middle" dy="4" font-size="8">tags</text>
+          </g>
+        </svg>
+
+        <!-- Inspector -->
+        <div class="graph-inspector">
+          <div class="gi-head">
+            <span class="gi-name">orders</span>
+            <button class="gi-close">✕</button>
+          </div>
+          <div class="gi-stat">
+            <span><span class="gs-n">8</span> 列</span>
+            <span><span class="gs-n">3</span> 关系</span>
+          </div>
+          <div class="gi-desc">订单主表，记录用户下单信息，包含订单状态、金额、收货地址等核心业务字段。</div>
+          <div class="gi-tags">
+            <span class="tag-pill confirmed" style="font-size:10px; padding:2px 8px">订单</span>
+            <span class="tag-pill confirmed" style="font-size:10px; padding:2px 8px">支付</span>
+          </div>
+        </div>
+
+        <!-- 图例 -->
+        <div class="graph-legend">
+          <span><span class="gl-line fk"></span> FK</span>
+          <span><span class="gl-line sem"></span> LLM</span>
+          <span><span class="gl-dot" style="background:var(--accent)"></span> 选中</span>
+          <span><span class="gl-dot" style="background:var(--violet-dim);border:1px dashed var(--violet)"></span> 草稿</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function showView(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.vs-btn').forEach(b => b.classList.remove('on'));
+  document.getElementById('view-' + name).classList.add('active');
+  event.target.classList.add('on');
+}
+
+function scrollToSection(id, el) {
+  document.querySelectorAll('.ms-item').forEach(i => i.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+</script>
+</body>
+</html>

@@ -7,6 +7,13 @@ import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
 import { GraphEditor } from './GraphEditor'
 
+/* ═══════════════════════════════════════════════
+   知识库主页（左右布局）
+   左：tabs（审阅/文档/标签）+ 搜索 + 列表
+   右：关系图谱（GraphEditor）
+   审核流程在 KbReviewModal（构建完成后弹出的审核弹窗）
+   ═══════════════════════════════════════════════ */
+
 function Tag({ name, status, onConfirm, onReject }: {
   name: string
   status: string
@@ -27,28 +34,6 @@ function Tag({ name, status, onConfirm, onReject }: {
   )
 }
 
-function EnumMeaningInput({ value, onSave }: { value: string; onSave: (v: string) => void }): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(value)
-  if (!editing) {
-    return (
-      <span className="rv-enum-meaning" onClick={() => { setText(value); setEditing(true) }}>
-        {value || <span className="kb-none">—</span>}
-      </span>
-    )
-  }
-  return (
-    <input
-      className="rv-enum-meaning-input"
-      value={text}
-      autoFocus
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => { setEditing(false); if (text !== value) onSave(text) }}
-      onKeyDown={(e) => { if (e.key === 'Enter') { setEditing(false); if (text !== value) onSave(text) } if (e.key === 'Escape') setEditing(false) }}
-    />
-  )
-}
-
 const KB_BADGE: Record<string, { text: string; cls: string }> = {
   none: { text: 'kb.badgeNone', cls: 'kb-badge none' },
   building: { text: 'kb.badgeBuilding', cls: 'kb-badge building' },
@@ -59,7 +44,9 @@ const KB_BADGE: Record<string, { text: string; cls: string }> = {
 export function KnowledgeReview(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
-  const { overview, loading, busy, error, load, buildTask, annotateTags, annotateEnums, confirmComment, rejectComment, confirmTag, rejectTag, confirmEnum, rejectEnum, saveEnum, assignTags, saveNote, confirmAll, addEdge, removeEdge, setExcluded } = useKnowledge()
+  const { overview, loading, busy, error, load, buildTask, annotateTags, annotateEnums,
+    confirmComment, rejectComment, confirmTag, rejectTag, confirmEnum, rejectEnum, saveEnum,
+    assignTags, saveNote, addEdge, removeEdge, setExcluded } = useKnowledge()
   const { t } = useI18n()
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -70,9 +57,10 @@ export function KnowledgeReview(): React.JSX.Element {
     const draftCount = overview?.draft_count ?? 0
     const tagDraftCount = overview?.tag_draft_count ?? 0
     const enumDraftCount = overview?.enum_draft_count ?? 0
-    return (draftCount + tagDraftCount + enumDraftCount) > 0 ? 'review' : 'docs'
+    const graphDraftCount = overview?.graph?.llm_draft_edges?.length ?? 0
+    return (draftCount + tagDraftCount + enumDraftCount + graphDraftCount) > 0 ? 'review' : 'docs'
   })
-  const [reviewFilter, setReviewFilter] = useState<'all' | 'comment' | 'tag' | 'enum'>('all')
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'comment' | 'tag' | 'enum' | 'graph'>('all')
   const [kq, setKq] = useState('')
   const [kdocs, setKdocs] = useState<KbDoc[] | null>(null)
   const [searching, setSearching] = useState(false)
@@ -80,7 +68,12 @@ export function KnowledgeReview(): React.JSX.Element {
   const [syncing, setSyncing] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
-  const [confirming, setConfirming] = useState(false)
+  const [showRebuildConfirm, setShowRebuildConfirm] = useState(false)
+
+  const totalPending = (overview?.draft_count ?? 0)
+    + (overview?.tag_draft_count ?? 0)
+    + (overview?.enum_draft_count ?? 0)
+    + (overview?.graph?.llm_draft_edges?.length ?? 0)
 
   async function doSearch(): Promise<void> {
     const q = kq.trim()
@@ -235,7 +228,7 @@ export function KnowledgeReview(): React.JSX.Element {
             <button className="iconbtn" onClick={() => void doSync()} disabled={busy} title={t('kb.syncTitle')}>
               {syncing ? t('kb.syncing') : t('kb.checkUpdate')}
             </button>
-            <button className="iconbtn" onClick={() => void startBuild()} disabled={busy} title={t('kb.rebuildTitle')}>
+            <button className="iconbtn" onClick={() => setShowRebuildConfirm(true)} disabled={busy} title={t('kb.rebuildTitle')}>
               {busy ? t('kb.building', { n: buildPct ?? 0 }) : t('kb.rebuild')}
             </button>
             <button className="iconbtn" onClick={() => currentId && annotateTags(currentId)} disabled={busy}>
@@ -245,20 +238,6 @@ export function KnowledgeReview(): React.JSX.Element {
               {busy ? t('kb.genBusy') : t('kb.genEnums')}
             </button>
           </div>
-
-          {/* 确认闸横幅：构建完成 → 用户审阅后可一键启用 */}
-          {kbStatus === 'pending_review' && (
-            <div className="kb-confirm-banner">
-              <span className="kb-cb-dot" />
-              <span>{t('kb.confirmBanner')}</span>
-              <button className="btn save" disabled={confirming} onClick={() => {
-                setConfirming(true)
-                void confirmAll(currentId).finally(() => setConfirming(false))
-              }}>
-                {confirming ? t('kb.confirming') : t('kb.confirmAll')}
-              </button>
-            </div>
-          )}
 
           <div className="kb-cols">
             {/* ============ 左：知识库内容区（42%） ============ */}
@@ -298,8 +277,8 @@ export function KnowledgeReview(): React.JSX.Element {
               <div className="kb-tabs">
                 <button className={`kb-tab${tab === 'review' ? ' on' : ''}`} onClick={() => setTab('review')}>
                   {t('kb.reviewTab')}
-                  {(overview.draft_count + overview.tag_draft_count + overview.enum_draft_count) > 0 && (
-                    <span className="kb-tab-cnt">{overview.draft_count + overview.tag_draft_count + overview.enum_draft_count}</span>
+                  {totalPending > 0 && (
+                    <span className="kb-tab-cnt">{totalPending}</span>
                   )}
                 </button>
                 <button className={`kb-tab${tab === 'docs' ? ' on' : ''}`} onClick={() => setTab('docs')}>{t('kb.statsDocs')}</button>
@@ -310,7 +289,7 @@ export function KnowledgeReview(): React.JSX.Element {
                 /* ============ 审阅队列（多态：注释/标签/枚举） ============ */
                 <div className="kb-review-queue">
                   <div className="rv-filter-bar">
-                    {(['all', 'comment', 'tag', 'enum'] as const).map((f) => (
+                    {(['all', 'comment', 'tag', 'enum', 'graph'] as const).map((f) => (
                       <button key={f} className={`rv-filter-btn${reviewFilter === f ? ' on' : ''}`}
                         onClick={() => setReviewFilter(f)}>
                         {t(`kb.filter.${f}`)}
@@ -318,19 +297,17 @@ export function KnowledgeReview(): React.JSX.Element {
                     ))}
                     <span className="spacer" />
                     <span className="mono" style={{ fontSize: 11, color: 'var(--ink-faint)' }}>
-                      {t('kb.remaining', { n: overview.draft_count + overview.tag_draft_count + overview.enum_draft_count })}
+                      {t('kb.remaining', { n: totalPending })}
                     </span>
                   </div>
 
-                  {/* 无待确认 */}
-                  {(overview.draft_count + overview.tag_draft_count + overview.enum_draft_count) === 0 && (
+                  {totalPending === 0 && (
                     <div className="rv-empty">
                       <div className="rv-empty-icon">✓</div>
                       <div>{t('kb.allConfirmed')}</div>
                     </div>
                   )}
 
-                  {/* 注释 draft */}
                   {reviewFilter !== 'tag' && reviewFilter !== 'enum' && overview.tables
                     .filter((tbl) => tbl.comment_status === 'draft')
                     .map((tbl) => (
@@ -347,7 +324,6 @@ export function KnowledgeReview(): React.JSX.Element {
                       </div>
                     ))}
 
-                  {/* 枚举 draft */}
                   {reviewFilter !== 'comment' && reviewFilter !== 'tag' && (overview.enums ?? [])
                     .filter((e) => e.entries.some((x) => x.status === 'draft'))
                     .map((e) => (
@@ -375,8 +351,7 @@ export function KnowledgeReview(): React.JSX.Element {
                       </div>
                     ))}
 
-                  {/* 标签 draft */}
-                  {reviewFilter !== 'comment' && reviewFilter !== 'enum' && pendingTags.map((tg) => (
+                  {reviewFilter !== 'comment' && reviewFilter !== 'enum' && reviewFilter !== 'graph' && pendingTags.map((tg) => (
                     <div key={`t-${tg.name}`} className="rv-card rv-tag">
                       <div className="rv-card-kind rv-kind-tag">{t('kb.kindTag')}</div>
                       <div className="rv-card-main">
@@ -392,6 +367,32 @@ export function KnowledgeReview(): React.JSX.Element {
                       </div>
                     </div>
                   ))}
+
+                  {reviewFilter !== 'comment' && reviewFilter !== 'tag' && reviewFilter !== 'enum' && (overview.graph?.llm_draft_edges ?? [])
+                    .map((edge, idx) => (
+                      <div key={`ge-${idx}-${edge.from_table}-${edge.to_table}`} className={`rv-card rv-graph-edge${edge.status === 'previously_rejected' ? ' previously-rejected' : ''}`}>
+                        <div className="rv-card-kind rv-kind-graph">{t('kb.kindGraph')}</div>
+                        <div className="rv-card-main">
+                          <div className="rv-card-ctx">
+                            <span className="mono">{edge.from_table}</span>
+                            {edge.from_col && <span className="rv-edge-col">.{edge.from_col}</span>}
+                            <span className="rv-edge-arrow"> → </span>
+                            <span className="mono">{edge.to_table}</span>
+                            {edge.to_col && <span className="rv-edge-col">.{edge.to_col}</span>}
+                          </div>
+                          {edge.status === 'previously_rejected' && (
+                            <div className="rv-edge-rejected-hint">{t('kb.graphEdgeRejectedHint')}</div>
+                          )}
+                          {edge.reason && <div className="rv-card-body rv-edge-reason">{edge.reason}</div>}
+                        </div>
+                        <div className="rv-card-acts">
+                          <button className="rv-btn-ok" onClick={() => void confirmGraphDraftSafe(edge.from_table)} title={edge.status === 'previously_rejected' ? t('kb.graphEdgeRestoreTitle') : t('kb.confirmTitle')}>✓</button>
+                          {edge.status !== 'previously_rejected' && (
+                            <button className="rv-btn-no" onClick={() => void rejectGraphDraftSafe(edge.from_table)}>✕</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                 </div>
 
               ) : tab === 'docs' ? (
@@ -528,11 +529,11 @@ export function KnowledgeReview(): React.JSX.Element {
                 <span>{t('kb.statsDocs')} {overview.tables.length + overview.columns.length}</span>
                 <span>{t('kb.statsTags')} {overview.tags.library.length}</span>
                 <span>{t('kb.statsEdges')} {overview.graph.edges.length}</span>
-                <span className="kb-stats-draft">{t('kb.statsDraft')} {overview.draft_count + overview.tag_draft_count + overview.enum_draft_count}</span>
+                <span className="kb-stats-draft">{t('kb.statsDraft')} {totalPending}</span>
               </div>
             </section>
 
-            {/* ============ 右：可编辑图结构（58%） ============ */}
+            {/* ============ 右：关系图谱（58%） ============ */}
             <section className="kb-right">
               <div className="kb-right-cap mono">
                 {t('kb.graphCap')}
@@ -555,6 +556,52 @@ export function KnowledgeReview(): React.JSX.Element {
           </div>
         </>
       ) : null}
+
+      {/* 重新构建二次确认 */}
+      {showRebuildConfirm && (
+        <div className="kb-dialog-mask" onClick={() => setShowRebuildConfirm(false)}>
+          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-dialog-title">{t('kb.rebuildTitle2')}</div>
+            <p className="kb-dialog-sub">{t('kb.rebuildDesc2')}</p>
+            <div className="kb-dialog-actions">
+              <button className="btn ghost" onClick={() => setShowRebuildConfirm(false)}>{t('kb.dialogCancel')}</button>
+              <button className="btn danger" onClick={() => { setShowRebuildConfirm(false); void startBuild() }}>
+                {t('kb.rebuild')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  )
+
+  /* 局部辅助（必须在 render 内声明以便使用 currentId 等闭包） */
+  function confirmGraphDraftSafe(fromTable: string): void {
+    if (currentId) void useKnowledge.getState().confirmGraphDraft(currentId, fromTable)
+  }
+  function rejectGraphDraftSafe(fromTable: string): void {
+    if (currentId) void useKnowledge.getState().rejectGraphDraft(currentId, fromTable)
+  }
+}
+
+function EnumMeaningInput({ value, onSave }: { value: string; onSave: (v: string) => void }): React.JSX.Element {
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState(value)
+  if (!editing) {
+    return (
+      <span className="rv-enum-meaning" onClick={() => { setText(value); setEditing(true) }}>
+        {value || <span className="kb-none">—</span>}
+      </span>
+    )
+  }
+  return (
+    <input
+      className="rv-enum-meaning-input"
+      value={text}
+      autoFocus
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => { setEditing(false); if (text !== value) onSave(text) }}
+      onKeyDown={(e) => { if (e.key === 'Enter') { setEditing(false); if (text !== value) onSave(text) } if (e.key === 'Escape') setEditing(false) }}
+    />
   )
 }

@@ -38,7 +38,11 @@ class ToolOutcome:
 
 ToolHandler = Callable[..., Awaitable[ToolOutcome]]
 
+TRUST_LEVELS = ("readonly", "mutating", "destructive")
+CONFIRM_MODES = ("none", "card", "admin")
+
 TOOL_SCHEMAS: list[dict] = []
+TOOL_META: dict[str, dict] = {}
 _TOOL_HANDLERS: dict[str, ToolHandler] = {}
 
 
@@ -59,15 +63,31 @@ def register_tool(
     props: dict,
     required: list[str],
     handler: ToolHandler,
+    *,
+    trust: str | None = None,
+    confirm: str = "none",
+    audit_source: str | None = None,
 ) -> None:
+    # 铁律 3：能力"不能做"的最强保证是 tool 不存在；trust 元数据是注册强制项
+    if trust not in TRUST_LEVELS:
+        raise ValueError(f"tool '{name}' 缺少合法 trust（{TRUST_LEVELS}），拒绝注册")
+    if confirm not in CONFIRM_MODES:
+        raise ValueError(f"tool '{name}' confirm 必须为 {CONFIRM_MODES}")
     TOOL_SCHEMAS.append(_tool(name, description, props, required))
     _TOOL_HANDLERS[name] = handler
+    TOOL_META[name] = {"trust": trust, "confirm": confirm, "audit_source": audit_source}
+
+
+def validate_registry() -> None:
+    missing = [n for n in _TOOL_HANDLERS if n not in TOOL_META]
+    if missing:
+        raise ValueError(f"工具缺 trust 元数据，启动自检失败: {missing}")
 
 
 def tool_schemas(readonly: bool = False) -> list[dict]:
     if not readonly:
         return list(TOOL_SCHEMAS)
-    allow = {"get_schema", "describe_table", "run_query"}
+    allow = {"get_schema", "run_query", "query_audit", "ai_review"}
     return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allow]
 
 

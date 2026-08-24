@@ -74,11 +74,27 @@ backend/app/
   ai/
     gateway.py       OpenAI-compatible LLMGateway (cloud/local) + MockProvider (no key needed)
     context.py       system prompt + schema summary + 领域标签路由 (structure only, never row data)
-    intent.py        意图→领域标签分类 (LLM 判定 / mock 关键词回退)
-    tools.py         5 tools: get_schema/describe_table/run_query/run_dml + draft_ddl(draft-only); all DB ops pass the gate
+    preflight.py     统一意图层：关键词快判 + 单次 LLM {intent,tags} + 超时降级（6 意图）
     loop.py          function-calling chat loop, SSE events (think/sql_card/text/done)
-  knowledge/         KnowledgeBase v4: 结构+向量(哈希/API)+图谱(FK+值重叠)+注释草案+确认+**领域标签(每库一套,draft→确认)+标签驱动路由(意图→标签→表+FK2步→候选子图)**；persist 到 knowledge-{conn_id}.db (SQLite: docs/edges/tags/table_tags/embeddings/table_embeddings/meta + vec0 虚表，旧 JSON 自动迁移，TABLETALK_KB_STORAGE=json 可回退)
-  audit/logger.py    JSONL audit log per executed statement
+    cost_tracker.py  每次 AI 调用记录 token/成本，存 SQLite cost.db
+    agent/dispatcher.py  intent→skill 映射 + enabled 感知 + 降级
+    tools/           11 个原子工具（register_tool 注册）
+      sql.py         run_query / run_dml / draft_ddl（过安全闸门）
+      schema_tools.py get_schema（合并旧 describe_table，可选 table 参数）
+      query_audit.py 审计日志查询（时间/verdict/连接过滤 + recent 模式）
+      ai_review.py   SQL 语义安全审查（advisory only，不具放行权）
+      kb_read.py     知识库查询（文档/标签）
+      kb_write.py    知识库维护（draft→confirm 流程）
+      graph_read.py  图谱查询（表间关联，N 跳 BFS）
+      graph_write.py 图谱维护（增/删边）
+      manage_task.py 定时任务 CRUD
+      suggest_followup.py 追问建议生成（loop 自动调用）
+    skills/          6 个内置技能（skill = 意图 = 场景指导书）
+      builtin/       query / write / report / knowledge / scheduler / refusal
+    knowledge/       知识库新模块：store.py（SQLite docs+tags）+ route
+    graph/           图谱新模块：store.py（SQLite edges + BFS 查询）
+    tasks/           定时任务：storage.py + scheduler（asyncio）
+  audit/logger.py    SQLite audit_log（兼容旧 JSONL 迁移）
 ```
 
 ### Safety gate — three tiers by origin
@@ -96,9 +112,11 @@ Key invariants:
 - Every executed statement logged to audit (statement, verdict, timestamp).
 - DDL hard boundary: the AI's function-calling toolset has **no DDL execution tool** — only `draft_ddl` (generates script, sends to editor, never executes).
 
-### AI toolset — 5 tools, no DDL execution
+### AI toolset — 11 tools, no DDL execution
 
-`get_schema` · `describe_table` · `run_query` (read-only, gated, returns columns+rowcount only) · `run_dml` (gated, preview+confirm, never auto-executes) · `draft_ddl` (draft only).
+`get_schema` · `run_query` (read-only, gated, returns columns+rowcount only) · `run_dml` (gated, preview+confirm, never auto-executes) · `draft_ddl` (draft only) · `query_audit` (审计日志查询) · `ai_review` (SQL 语义安全审查, advisory only) · `kb_read` / `kb_write` (知识库查询/维护) · `graph_read` / `graph_write` (图谱查询/维护) · `manage_task` (定时任务 CRUD) · `suggest_followup` (追问建议, loop 自动调用)
+
+6 skills (intent→skill 1:1): `query` (地板常开) · `write` · `report` · `knowledge` · `scheduler` · `refusal` (地板常开).
 
 ### Privacy red line
 
@@ -126,7 +144,7 @@ These were confirmed by reading `app/` source in 2026-08 and differ from plausib
 
 ## API surface (all under /api/v1)
 
-`GET /health` · `CRUD /connections` + `/{id}/test` · `GET /connections/{id}/schema[/{table}[/preview|/ddl]]` · `POST /query` + `/query/cancel` + `/sql/format` · `POST /ai/chat` (SSE) + `/ai/selection` · `GET /audit` · `GET/PUT /settings` · 知识库 `POST /knowledge/{id}/build|annotate|annotate-tags|confirm|reject|tags/confirm|tags/reject|tags/assign|route` + `GET /knowledge/{id}/overview|graph|retrieve|docs|tags`
+`GET /health` · `CRUD /connections` + `/{id}/test` · `GET /connections/{id}/schema[/{table}[/preview|/ddl]]` · `POST /query` + `/query/cancel` + `/sql/format` · `POST /ai/chat` (SSE) + `/ai/selection` · `GET /audit` · `GET/PUT /settings` · `GET/POST/PUT/DELETE /tasks` + `/{id}/run` · `GET /cost/summary` + `/cost/daily` · `POST /suggestions/initial`
 
 **Auth**: 中间件仅守 `/api/*`；除 `/health`、`/bootstrap` 与 OPTIONS 预检外，所有 `/api/*` 请求需带 `X-TableTalk-Token` 头（token 见 `config.get_token()`）；静态资源 / SPA 免鉴权。`/bootstrap` 向浏览器发放 token，仅本机可访问（默认绑 127.0.0.1），未来网络化部署需加门禁。
 

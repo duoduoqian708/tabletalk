@@ -85,7 +85,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
   const isSqlite = form.dialect === 'sqlite'
 
   const input = useMemo(() => ({
-    name: form.name || '未命名连接',
+    name: form.name || t('conn.modal.unnamed'),
     dialect: form.dialect,
     host: isSqlite ? '' : form.host,
     port: isSqlite ? null : Number(form.port) || undefined,

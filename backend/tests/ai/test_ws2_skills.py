@@ -1,5 +1,5 @@
-"""WS2 新内置技能验收测试：refusal 零工具（铁律3）/ strict 离线拒答 /
-schema 零向量召回 / 各技能工具集与 08 §4.4 对齐（load_result 待 WS3）。
+"""WS2 内置技能验收测试：refusal 零工具（铁律3）/ strict 离线拒答 /
+query 地板只读 / 各技能工具集与设计文档 §4/§6 对齐。
 """
 from __future__ import annotations
 
@@ -18,33 +18,35 @@ def test_refusal_skill_has_zero_tools():
     assert _names("refusal") == set()
 
 
-def test_schema_skill_tools():
-    """T2.3：schema 仅结构工具（get_schema/describe_table），无 SQL 执行工具，
-    从契约层保证结构问答不产生 sql_card。"""
-    assert _names("schema") == {"get_schema", "describe_table"}
+def test_query_skill_tools():
+    """设计文档 §4/§6：query 地板常开，工具集 = run_query, get_schema, query_audit, ai_review。"""
+    assert _names("query") == {"run_query", "get_schema", "query_audit", "ai_review"}
 
 
 def test_write_skill_tools():
-    """T2.3：write 按 08 §4.4 —— run_dml/run_query/describe_table/get_schema。"""
-    assert _names("write") == {"run_dml", "run_query", "describe_table", "get_schema"}
+    """设计文档 §4/§6：write = run_dml, draft_ddl, run_query, get_schema, ai_review。"""
+    assert _names("write") == {"run_dml", "draft_ddl", "run_query", "get_schema", "ai_review"}
 
 
-def test_ddl_skill_tools():
-    """T2.3：ddl 仅草案工具（draft_ddl），永不执行。"""
-    assert _names("ddl") == {"draft_ddl", "get_schema", "describe_table"}
+def test_knowledge_skill_tools():
+    """设计文档 §4/§6：knowledge = kb_read, kb_write, graph_read, graph_write, get_schema, run_query。"""
+    assert _names("knowledge") == {"kb_read", "kb_write", "graph_read", "graph_write", "get_schema", "run_query"}
+
+
+def test_scheduler_skill_tools():
+    """设计文档 §4/§6：scheduler = manage_task, run_query, get_schema。"""
+    assert _names("scheduler") == {"manage_task", "run_query", "get_schema"}
 
 
 def test_query_report_present_tools():
-    """T2.3：query（常开地板）按 08 §4.4 只读——get_schema/describe_table/run_query/load_result
-    （load_result 为 WS3 并入）；report 同样只读。"""
-    assert _names("query") == {"run_query", "get_schema", "describe_table", "load_result"}
+    """设计文档 §4/§6：query（地板常开）只读；report 同样只读。"""
     assert "run_dml" not in _names("query") and "draft_ddl" not in _names("query")
-    assert _names("report") == {"run_query", "get_schema", "describe_table", "load_result"}
+    assert _names("report") == {"run_query", "get_schema"}
 
 
 @pytest.mark.asyncio
 async def test_schema_intent_skips_vector_recall(app_state, conn_id, monkeypatch):
-    """T2.2：schema 意图时 vector_route_tables 不被调用（零向量召回），且零 SQL 卡。"""
+    """T2.2：纯结构问题（有哪些表）走 query 技能，skip_retrieval=True 时不触发向量召回。"""
     from app.ai.dto import ChatRequest
     from app.ai.loop import chat_stream
     from app.ai.preflight import PreflightResult
@@ -54,8 +56,8 @@ async def test_schema_intent_skips_vector_recall(app_state, conn_id, monkeypatch
         messages=[{"role": "user", "content": "有哪些表"}],
         provider="mock", include_data=False,
     )
-    req.skill_id = "schema"
-    req._preflight = PreflightResult(intent="schema", tags=[], degraded=True, is_followup=False, followup_tables=[])
+    req.skill_id = "query"
+    req._preflight = PreflightResult(intent="query", tags=[], degraded=True, is_followup=False, followup_tables=[], skip_retrieval=True)
 
     called = {"n": 0}
 
@@ -65,8 +67,7 @@ async def test_schema_intent_skips_vector_recall(app_state, conn_id, monkeypatch
 
     monkeypatch.setattr(app_state.knowledge, "vector_route_tables", fake_route)
     events = [ev async for ev in chat_stream(app_state, req)]
-    assert called["n"] == 0, "schema 意图不得触发向量召回"
-    assert not any(ev["type"] == "sql_card" for ev in events), "结构问答不应产生 SQL 卡（工具白名单已无 run_query）"
+    assert called["n"] == 0, "skip_retrieval=True 时不得触发向量召回"
 
 
 @pytest.mark.asyncio

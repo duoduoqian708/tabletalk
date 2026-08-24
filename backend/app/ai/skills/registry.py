@@ -168,6 +168,20 @@ def list_enabled_skills() -> list[Skill]:
     return [s for s in list_skills() if s.enabled]
 
 
+_org_disabled: set[str] = set()
+
+
+def is_org_disabled(skill_id: str) -> bool:
+    return skill_id in _org_disabled
+
+
+def set_org_disabled(skill_id: str, disabled: bool) -> None:
+    if disabled:
+        _org_disabled.add(skill_id)
+    else:
+        _org_disabled.discard(skill_id)
+
+
 def _tool_names() -> set[str]:
     return {t["function"]["name"] for t in TOOL_SCHEMAS}
 

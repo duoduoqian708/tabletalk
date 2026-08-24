@@ -15,24 +15,22 @@ if TYPE_CHECKING:
     from app.state import AppState
 
 # ---- 常量 ----
-VALID_INTENTS = {"query", "report", "schema", "write", "ddl", "audit", "offtopic"}
+VALID_INTENTS = {"query", "write", "report", "knowledge", "scheduler", "offtopic"}
 # 关键词快判表（集中顶部便于测试）。顺序：高特异性 → 低特异性，query 兜底最后。
 # 每项：(compiled regex, intent)
 _KEYWORD_RULES: list[tuple[re.Pattern, str]] = [
-    # schema：结构问答，跳检索零 SQL
-    (re.compile(r"有哪些表|什么结构|表结构|表关系|schema|describe\s+table|show\s+tables", re.IGNORECASE), "schema"),
-    # write：保守判定，仅这些词算写（"看看" 不算）
-    (re.compile(r"删掉|删除|改成|更新.*为|插入|写入|修改|涨价|提价|update|delete\s+from|insert\s+into", re.IGNORECASE), "write"),
-    # ddl：草案边界（放宽：建.*索引 覆盖“建个索引”）
-    (re.compile(r"加\s*.*列|建\s*.*表|建.*索引|删列|新增字段|create\s+table|alter\s+table|drop\s+table|create\s+index|索引", re.IGNORECASE), "ddl"),
-    # report：章节化报告
-    (re.compile(r"报告|出一份|趋势分析|概览|分析报告|总结报告|dashboard|insights?", re.IGNORECASE), "report"),
-    # audit：控制面批次1（实施时以 08 为准，关键词含审计回顾）
-    (re.compile(r"审计|我刚才|操作记录|被拦|被.*拦截|review|audit", re.IGNORECASE), "audit"),
-    # offtopic：平台外话题 → refusal 技能
+    # offtopic：平台外话题 → refusal 技能（最先匹配，避免"你好查一下"被判 query）
     (re.compile(r"你好|谢谢|天气|笑话|你是谁|自我介绍|写诗|讲笑话|闲聊", re.IGNORECASE), "offtopic"),
-    # query：兜底数据面（多数请求 0 次 LLM 直出）
-    (re.compile(r"查|统计|多少|平均|分组|排序|列表|按.*月|查询|select\s", re.IGNORECASE), "query"),
+    # report：章节化报告/趋势分析
+    (re.compile(r"报告|出一份|趋势分析|概览|分析报告|总结报告|dashboard|insights?", re.IGNORECASE), "report"),
+    # knowledge：知识库/图谱相关
+    (re.compile(r"知识|注释|注解|图谱|关联图|表关系|标签|domain|knowledge", re.IGNORECASE), "knowledge"),
+    # scheduler：定时任务
+    (re.compile(r"定时|每天|每周|每月|调度|cron|周期|自动跑|定期", re.IGNORECASE), "scheduler"),
+    # write：写操作（保守判定，"看看"不算写）
+    (re.compile(r"删掉|删除|改成|更新.*为|插入|写入|修改.*为|涨价|提价|update|delete\s+from|insert\s+into|建表|加.*列|新增字段|create\s+table|alter\s+table|drop\s+table|create\s+index|索引", re.IGNORECASE), "write"),
+    # query：兜底数据面（含结构问答、审计回顾、安全审查）
+    (re.compile(r"查|统计|多少|平均|分组|排序|列表|按.*月|查询|select\s|有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全", re.IGNORECASE), "query"),
 ]
 
 PREFLIGHT_TIMEOUT = 2.0  # 秒，待 Q2 确认；可配 via env TABLETALK_PREFLIGHT_TIMEOUT
@@ -51,11 +49,12 @@ def _get_timeout() -> float:
 
 @dataclass
 class PreflightResult:
-    intent: str  # query|report|schema|write|ddl|audit|offtopic
+    intent: str  # query|write|report|knowledge|scheduler|offtopic
     tags: list[str] = field(default_factory=list)
     degraded: bool = False  # True = 走了关键词降级（未调 LLM 或超时/解析失败）
     is_followup: bool = False
     followup_tables: list[str] = field(default_factory=list)
+    skip_retrieval: bool = False  # True = 结构问答/审计类，跳过向量检索管线
 
 
 def _get_confirmed_tags(state: "AppState", conn_id: str) -> list[str]:
@@ -143,7 +142,7 @@ def _detect_followup(question: str, confirmed: list[str], history_tail: list[dic
     has_domain = any(t.lower() in ql for t in confirmed) if confirmed else False
     if has_domain:
         return False, []
-    # 无领域词时：仅极短句（<10字）且不含强查询动词才视为追问，避免把“查一下产品销量”误判
+    # 无领域词时：仅极短句（<10字）且不含强查询动词才视为追问，避免把"查一下产品销量"误判
     if len(q) < 10:
         # 强查询动词出现则视为新问而非追问
         if any(k in q for k in ("查", "统计", "查询", "看看", "多少", "平均")):
@@ -160,27 +159,30 @@ def _build_prompt(redacted_q: str, history_text: str, confirmed: list[str]) -> s
         f"{history_text}"
         f"可用领域标签（只从中选 0~3 个，已确认）：{confirmed_str}\n"
         "意图集（单标签，封闭）：\n"
-        "- query：单次数据查询（查、统计、多少、按月分组等）→ 执行 SQL\n"
+        "- query：数据查询 / 表结构问答 / 审计回顾 / SQL安全审查（查、统计、多少、有哪些表、审计、审查）\n"
+        "- write：数据写操作 + 表结构变更（删掉、改成、更新为、插入、建表、加列、建索引）→ 需确认\n"
         "- report：要一份结构化分析报告/概览/趋势（报告、出一份、趋势分析）\n"
-        "- schema：问结构（有哪些表、什么结构、表关系）→ 跳过检索，不执行 SQL\n"
-        "- write：写操作（删掉、改成、更新为、插入）→ 需确认\n"
-        "- ddl：结构变更草案（加列、建表、建索引、删列、CREATE/ALTER）→ 仅草案\n"
-        "- audit：审计回顾（审计、我刚才干了什么、操作记录、被拦）\n"
+        "- knowledge：知识库 / 图谱相关（注释、标签、表间关联、知识）\n"
+        "- scheduler：定时任务管理（定时、每天、周期、自动跑）\n"
         "- offtopic：平台外话题（你好、天气、笑话、写诗）→ 拒答引导\n"
         "相邻对边界：\n"
         "- query/report：'看看订单'是query不是report；'生成月度报告'是report\n"
-        "- query/schema：'查订单有哪些列'是schema不是query\n"
-        "- query/write：'看看测试订单'是query（“看看”不算写），'删掉测试订单'才是write；宁可漏进query\n"
+        "- query/write：'看看测试订单'是query（'看看'不算写），'删掉测试订单'才是write；宁可漏进query\n"
+        "- query/knowledge：'表有哪些注释'是query；'帮我加个注释'是knowledge\n"
         "- offtopic：'你好'是offtopic，'你好，查一下订单'是query\n"
-        "只返回 JSON：{\"intent\": \"query|report|schema|write|ddl|audit|offtopic\", \"tags\": [\"标签1\"]}。拿不准 intent 返回 query。\n"
+        '只返回 JSON：{"intent": "query|write|report|knowledge|scheduler|offtopic", "tags": ["标签1"]}。拿不准 intent 返回 query。\n'
         "示例：\n"
-        "Q: 查一下订单总数 → {\"intent\":\"query\",\"tags\":[]}\n"
-        "Q: 看看测试订单 → {\"intent\":\"query\",\"tags\":[]}\n"
-        "Q: 生成销售趋势报告 → {\"intent\":\"report\",\"tags\":[]}\n"
-        "Q: 有哪些表 → {\"intent\":\"schema\",\"tags\":[]}\n"
-        "Q: 删掉测试订单 → {\"intent\":\"write\",\"tags\":[]}\n"
-        "Q: 加一列备注 → {\"intent\":\"ddl\",\"tags\":[]}\n"
-        "Q: 今天天气怎么样 → {\"intent\":\"offtopic\",\"tags\":[]}\n"
+        'Q: 查一下订单总数 → {"intent":"query","tags":[]}\n'
+        'Q: 看看测试订单 → {"intent":"query","tags":[]}\n'
+        'Q: 有哪些表 → {"intent":"query","tags":[]}\n'
+        'Q: 最近有什么操作被拦了 → {"intent":"query","tags":[]}\n'
+        'Q: 生成销售趋势报告 → {"intent":"report","tags":[]}\n'
+        'Q: 删掉测试订单 → {"intent":"write","tags":[]}\n'
+        'Q: 加一列备注 → {"intent":"write","tags":[]}\n'
+        'Q: 这张表的业务含义是什么 → {"intent":"knowledge","tags":[]}\n'
+        'Q: 帮我加个注释 → {"intent":"knowledge","tags":[]}\n'
+        'Q: 每天9点跑一次统计 → {"intent":"scheduler","tags":[]}\n'
+        'Q: 今天天气怎么样 → {"intent":"offtopic","tags":[]}\n'
     )
 
 
@@ -299,22 +301,25 @@ async def preflight(
 
     # 关键词快判：多数请求 0 次 LLM 直出（高置信直接返回）
     kw = _keyword_intent(redacted_q if redacted_q else q)
-    # 若命中且非“query 兜底”的模糊情况，直接返回（downgrade=True）
+    # 若命中且非"query 兜底"的模糊情况，直接返回（downgrade=True）
     if kw is not None:
-        # 防误判：query 的兜底不应在“拿不准”时直接命中，需确认非 mock 下 LLM 仍有机会；
+        # 防误判：query 的兜底不应在"拿不准"时直接命中，需确认非 mock 下 LLM 仍有机会；
         # 但按 08 "多数请求 0 次 LLM" → 关键词命中即直接出
         tags = _keyword_tags(q, confirmed)
         # 追问轮：若是 write 且为 followup 短句，保守降为 query（写意图保守）
         if kw == "write" and is_followup and len(q) < 20 and q.startswith(("那","按","再")):
             # "那按周统计呢" 不应判 write
             kw = "query"
-        return PreflightResult(intent=kw, tags=tags, degraded=True, is_followup=is_followup, followup_tables=followup_tables)
+        # skip_retrieval：结构问答/审计回顾/安全审查 → 跳过向量检索管线
+        _skip = bool(re.search(r"有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全", q, re.IGNORECASE)) if kw == "query" else False
+        return PreflightResult(intent=kw, tags=tags, degraded=True, is_followup=is_followup, followup_tables=followup_tables, skip_retrieval=_skip)
 
     # 无关键词命中 → LLM 路径
     if is_mock:
         # strict / mock 下不调模型，直接 query
         tags = _keyword_tags(q, confirmed)
-        return PreflightResult(intent="query", tags=tags, degraded=True, is_followup=is_followup, followup_tables=followup_tables)
+        _skip = bool(re.search(r"有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全", q, re.IGNORECASE))
+        return PreflightResult(intent="query", tags=tags, degraded=True, is_followup=is_followup, followup_tables=followup_tables, skip_retrieval=_skip)
 
     # 真实 LLM 单次调用（≤2s）
     try:
@@ -343,6 +348,23 @@ async def preflight(
         prompt = _build_prompt(redacted_q, history_text, confirmed)
         timeout = _get_timeout()
         resp = await asyncio.wait_for(provider.chat([{"role": "user", "content": prompt}], tools=None), timeout=timeout)
+        # 写 LLM 日志（intent 识别的模型调用）
+        try:
+            _pm = getattr(provider, "last_meta", None)
+            if _pm:
+                from app.ai.llm_log import LlmCallLog
+                from app.config import get_env as _ge_pfl
+                _usage_pfl = _pm.get("response_usage") or {}
+                LlmCallLog(_ge_pfl().data_dir).log(
+                    conn_id=conn_id, skill="preflight",
+                    model=_pm.get("response_model"), provider=provider_cfg.get("provider"),
+                    request_json=_pm.get("request_payload"),
+                    response_json=_pm.get("response_usage"),
+                    input_tokens=_usage_pfl.get("prompt_tokens", 0),
+                    output_tokens=_usage_pfl.get("completion_tokens", 0),
+                )
+        except Exception:
+            pass
         text = (getattr(resp, "content", "") or "").strip()
         intent, tags = _parse_llm(text, confirmed)
         # 非法值兜底：拿不准当 query（D4）
@@ -353,7 +375,8 @@ async def preflight(
         # 若 LLM 误判 write 但问题含 "看看" 且无 "删掉/改成"，降回 query
         if intent == "write" and "看看" in q and not any(k in q for k in ("删掉","改成","删除","插入","更新")):
             intent = "query"
-        return PreflightResult(intent=intent, tags=tags, degraded=False, is_followup=is_followup, followup_tables=followup_tables)
+        _skip = bool(re.search(r"有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全", q, re.IGNORECASE)) if intent == "query" else False
+        return PreflightResult(intent=intent, tags=tags, degraded=False, is_followup=is_followup, followup_tables=followup_tables, skip_retrieval=_skip)
     except (asyncio.TimeoutError, asyncio.CancelledError):
         tags = _keyword_tags(q, confirmed)
         return PreflightResult(intent="query", tags=tags, degraded=True, is_followup=is_followup, followup_tables=followup_tables)

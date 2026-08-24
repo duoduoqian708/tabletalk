@@ -3,6 +3,14 @@ import type { AiCard } from '@renderer/api/ai'
 import { useI18n } from '@renderer/store/i18n'
 
 /* 对话消息轮次（可序列化，存 localStorage） */
+export interface Subtask {
+  id: string
+  tool: string
+  label: string
+  status: string
+  details: string[]
+  blocks: import('@renderer/api/ai').Block[]
+}
 export interface Turn {
   role: 'user' | 'ai'
   text?: string
@@ -10,6 +18,8 @@ export interface Turn {
   thinks?: string[]
   cards?: AiCard[]
   steps?: { id: string; label: string; status: string; detail: string[] }[]
+  subtasks?: Subtask[]
+  scene?: string
   pending?: boolean
   running?: boolean
   /** 报告模式 turn 标记：表明这是报告流（澄清/计划/章节走 results store.report） */
@@ -18,6 +28,8 @@ export interface Turn {
   clarify?: string[]
   /** B1 出网清单 */
   manifest?: import('@renderer/api/ai').Manifest
+  /** WS4 会话 id：用于 DML 确认 token 校验 */
+  sessionId?: string | null
 }
 
 export interface Conversation {
