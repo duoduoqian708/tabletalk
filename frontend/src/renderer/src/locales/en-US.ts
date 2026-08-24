@@ -416,6 +416,17 @@ export const enUS: Messages = {
     highlightTip: 'Located',
     searchMeta: '{rows} rows · {cols} cols',
   },
+  trg2d: {
+    hint: 'Drag nodes to move · drag from table edge to link · wheel to zoom · drag blank space to pan',
+    from: 'From column (many side)',
+    to: 'To column (one side)',
+    card: 'Cardinality',
+    confirm: 'Create relation',
+    cancel: 'Cancel',
+    del: 'Delete this relation',
+    noCols: '(no column info)',
+    failed: 'Failed to create',
+  },
   kb: {
     title: 'Knowledge',
     notBuilt: 'Knowledge base not built for this source',

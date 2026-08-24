@@ -5494,3 +5494,243 @@ tr.clickable.open { background: var(--accent-dim); }
   flex-shrink: 0;
 }
 .kb-phase .kb-bar { height: 5px; }
+
+/* ═══════════════════════════════════════════════
+   TableRelationGraph2D（trg2d-）— 手写 SVG 2D 关系图
+   领域聚类布局 · 节点拖拽 · 字段级边标签 · 拖线连线面板 · 平移缩放
+   ═══════════════════════════════════════════════ */
+.trg2d {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+  overflow: hidden;
+  background:
+    radial-gradient(700px 340px at 78% -10%, var(--accent-dim), transparent 62%),
+    linear-gradient(var(--g-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--g-grid) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+  background-color: var(--g-canvas-bg);
+}
+.trg2d-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.trg2d-svg.is-panning { cursor: grabbing; }
+.trg2d-svg.is-linkzone { cursor: crosshair; }
+
+/* ── 节点 ── */
+.trg2d-node { cursor: grab; }
+.trg2d-node-body {
+  fill: var(--g-node-fill);
+  stroke: var(--g-node-stroke);
+  stroke-width: 1.2;
+  transition: fill var(--dur) var(--ease), stroke var(--dur) var(--ease);
+}
+.trg2d-node.is-hover .trg2d-node-body,
+.trg2d-node.is-src .trg2d-node-body {
+  fill: var(--void-4);
+  stroke: var(--accent);
+}
+.trg2d-node-dot { filter: drop-shadow(0 0 4px currentColor); }
+.trg2d-node-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  fill: var(--g-node-text);
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+/* 排除表：灰显半透明，整体禁交互 */
+.trg2d-node.is-excluded { opacity: 0.35; filter: grayscale(1); pointer-events: none; }
+
+/* ── 边 ── */
+.trg2d-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: var(--hit-w, 14px);
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.trg2d-edge-line {
+  fill: none;
+  stroke: var(--g-edge);
+  stroke-width: 1.3;
+  pointer-events: none;
+  transition: stroke-width var(--dur) var(--ease), stroke var(--dur) var(--ease);
+}
+.trg2d-edge:hover .trg2d-edge-line,
+.trg2d-edge.is-sel .trg2d-edge-line {
+  stroke: var(--g-edge-hot);
+  stroke-width: 2.4;
+}
+/* draft（LLM 未确认）：琥珀虚线半透明 */
+.trg2d-edge.is-draft .trg2d-edge-line {
+  stroke: var(--amber);
+  stroke-dasharray: 5 4;
+  opacity: 0.55;
+}
+.trg2d-edge.is-draft:hover .trg2d-edge-line,
+.trg2d-edge.is-draft.is-sel .trg2d-edge-line { stroke: var(--amber); opacity: 1; }
+.trg2d-edge-labelbg {
+  fill: color-mix(in srgb, var(--void-1) 88%, transparent);
+  stroke: var(--line);
+  stroke-width: 1;
+  pointer-events: none;
+}
+.trg2d-edge-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  fill: var(--ink-dim);
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.trg2d-edge.is-sel .trg2d-edge-label { fill: var(--amber); }
+.trg2d-edge-ticks line {
+  stroke: var(--ink-dim);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.trg2d-edge.is-sel .trg2d-edge-ticks line { stroke: var(--amber); }
+
+/* ── 连线预览 ── */
+.trg2d-preview path {
+  fill: none;
+  stroke: var(--g-edge-build);
+  stroke-width: 1.8;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
+.trg2d-preview-ring {
+  fill: none;
+  stroke: var(--g-edge-build);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+/* ── 提示 / 缩放角标 ── */
+.trg2d-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--void-1) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  padding: 3px 11px;
+  pointer-events: none;
+}
+.trg2d-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  background: color-mix(in srgb, var(--void-1) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: var(--r-full);
+  padding: 3px 9px;
+  pointer-events: none;
+}
+
+/* ── 删除按钮 ── */
+.trg2d-delbtn {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--red-dim);
+  background: var(--void-2);
+  color: var(--red);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--shadow-1);
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.trg2d-delbtn:hover { background: var(--red-dim); transform: translate(-50%, -50%) scale(1.12); }
+
+/* ── 连线面板 ── */
+.trg2d-panel {
+  position: absolute;
+  z-index: var(--z-pop);
+  width: 236px;
+  transform: translate(-50%, calc(-100% - 26px));
+  background: var(--void-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  animation: trg2d-pop 150ms var(--ease);
+}
+@keyframes trg2d-pop {
+  from { opacity: 0; transform: translate(-50%, calc(-100% - 20px)); }
+  to { opacity: 1; transform: translate(-50%, calc(-100% - 26px)); }
+}
+.trg2d-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-strong);
+}
+.trg2d-panel-title b {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trg2d-panel-arrow { color: var(--accent); }
+.trg2d-panel-field { display: flex; flex-direction: column; gap: 3px; }
+.trg2d-panel-field span {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.trg2d-panel-field select {
+  width: 100%;
+  background: var(--void-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 5px 7px;
+  outline: none;
+}
+.trg2d-panel-field select:focus { border-color: var(--accent); }
+.trg2d-panel-error { font-size: 11px; color: var(--red); }
+.trg2d-panel-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.trg2d-btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 5px 13px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.trg2d-btn.ghost { background: transparent; border: 1px solid var(--line-strong); color: var(--ink-dim); }
+.trg2d-btn.ghost:hover { color: var(--ink); border-color: var(--ink-faint); }
+.trg2d-btn.primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.trg2d-btn.primary:disabled { opacity: 0.55; cursor: not-allowed; }

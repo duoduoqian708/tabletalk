@@ -414,6 +414,17 @@ export const zhCN = {
     highlightTip: '已定位',
     searchMeta: '{rows} 行 · {cols} 列',
   },
+  trg2d: {
+    hint: '拖节点移动 · 从表边缘拖出连线 · 滚轮缩放 · 空白处拖动平移',
+    from: '起点字段（多侧）',
+    to: '目标字段（一侧）',
+    card: '基数',
+    confirm: '创建连线',
+    cancel: '取消',
+    del: '删除这条关系',
+    noCols: '（无字段信息）',
+    failed: '创建失败',
+  },
   kb: {
     title: '知识库',
     notBuilt: '该数据源知识库尚未构建',

@@ -202,6 +202,8 @@ export interface GraphEdge {
   cardinality?: 'n:1' | '1:1'
   reason?: string
   weight?: number | null
+  /** draft=LLM 未确认边（宿主合并 llm_draft_edges 时标记）；缺省视为 confirmed */
+  status?: 'draft' | 'confirmed'
 }
 
 export interface GraphDraftEdge {
