@@ -465,8 +465,6 @@ export const zhCN = {
     rebuildDesc2: '重新构建会清空当前知识库并从头生成。如果知识库已在正常使用（AI 检索、图谱路由），重建期间会产生短暂的不可用窗口。确定继续吗？',
     gatePendingDesc: '构建完成。请在知识库页查看内容（可修正），然后一键确认启用——确认后标签与图谱才参与 AI 路由。',
     dialogTitle: '构建知识库',
-    dialogSampleHint: '允许将样本取值发送给 AI 以辅助语义理解',
-    dialogSampleDesc: '勾选后，AI 在生成表注释和标签时可参考字段的实际取值（如 status: [0,1,2]），提升语义理解准确度。仅用于注释生成，不会发送到外部服务。',
     dialogCancel: '取消',
     dialogStart: '开始构建',
     confirmed: '已确认',

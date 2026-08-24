@@ -38,6 +38,22 @@ async def test_build_confirmation_audited(client, app_state, conn_id):
     await _drain_build(app_state, conn_id)
 
 
+async def test_build_explicit_samples_authorized_audited(client, app_state, conn_id):
+    """正路用例：显式 include_samples=true 的构建请求，审计 extra 记录授权为 true。"""
+    r = await client.post(
+        f"/api/v1/knowledge/{conn_id}/build",
+        json={"include_samples": True, "trigger": "init"},
+    )
+    assert r.status_code == 200
+    entries = app_state.audit.list(connection=conn_id, origin="kb_build")
+    assert len(entries) == 1
+    e = entries[0]
+    assert e["trigger"] == "init"
+    assert e["include_samples"] is True
+    assert "include_samples=True" in e["sql"]
+    await _drain_build(app_state, conn_id)
+
+
 async def test_build_rejects_bad_trigger(client, app_state, conn_id):
     """trigger 非法 → 422，且不留审计记录（校验先于留痕）。"""
     r = await client.post(

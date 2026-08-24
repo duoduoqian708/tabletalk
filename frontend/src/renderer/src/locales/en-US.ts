@@ -467,8 +467,6 @@ export const enUS: Messages = {
     rebuildDesc2: 'Rebuilding clears the current KB and regenerates from scratch. If the KB is in active use (AI retrieval, graph routing), there will be a short unavailability window during rebuild. Continue?',
     gatePendingDesc: 'Build done. Review content on the Knowledge page (editable), then one-click confirm — only then tags & graph join AI routing.',
     dialogTitle: 'Build Knowledge Base',
-    dialogSampleHint: 'Allow sending sample values to AI for semantic understanding',
-    dialogSampleDesc: 'When enabled, AI can reference actual field values (e.g. status: [0,1,2]) when generating table annotations and tags. Used only for annotation generation, never sent to external services.',
     dialogCancel: 'Cancel',
     dialogStart: 'Start Build',
     confirmed: 'Confirmed',

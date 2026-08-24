@@ -30,7 +30,7 @@ PHASES = [
 BuildFn = Callable[[Callable[[str, int, str | None, str | None], None]], Awaitable[dict]]
 
 
-def _new_progress(include_samples: bool = True) -> dict[str, Any]:
+def _new_progress(include_samples: bool = False) -> dict[str, Any]:
     return {
         "stage": "排队中", "percent": 0, "done": False, "error": None, "detail": None,
         "phases": [
@@ -57,7 +57,7 @@ class BuildJobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, BuildJob] = {}
 
-    def start(self, conn_id: str, build_fn: BuildFn, include_samples: bool = True) -> BuildJob:
+    def start(self, conn_id: str, build_fn: BuildFn, include_samples: bool = False) -> BuildJob:
         """启动后台构建任务；旧任务若仍在跑则标记取消（由其在下个阶段边界自杀）。"""
         old = self._jobs.get(conn_id)
         if old is not None and not old.task.done():

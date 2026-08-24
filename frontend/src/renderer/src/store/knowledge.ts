@@ -100,7 +100,7 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   async buildTask(connId, onProgress, opts) {
     set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
-      await api.build(connId, opts?.includeSamples ?? true, opts?.trigger ?? 'init')
+      await api.build(connId, opts?.includeSamples ?? false, opts?.trigger ?? 'init')
       // SSE 实时进度：推送即写 store（KbBuildGate 订阅显示），done 后退出
       await readBuildEvents(connId, (p) => {
         set({ buildProgress: p })
