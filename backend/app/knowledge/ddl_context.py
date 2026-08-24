@@ -88,6 +88,34 @@ async def generate_ddls_all(state: "AppState", conn_id: str) -> dict[str, str]:
     return await _generate_ddls_batch(state, conn_id, table_names)
 
 
+def ddl_from_schema(schema: dict[str, Any], table: str) -> str:
+    """从结构快照合成单表 CREATE TABLE 文本（实时 DDL 不可用时的回退）。"""
+    cols = [c for c in schema.get("columns", []) if c["table"] == table]
+    fks = [f for f in schema.get("foreign_keys", []) if f["table"] == table]
+    lines = [f"CREATE TABLE {table} ("]
+    defs = []
+    for c in cols:
+        parts = [c["name"], c.get("type") or "TEXT"]
+        if c.get("pk"):
+            parts.append("PRIMARY KEY")
+        if c.get("comment"):
+            parts.append(f"/* {c['comment']} */")
+        defs.append("  " + " ".join(parts))
+    for fk in fks:
+        defs.append(
+            f"  CONSTRAINT fk_{table}_{fk['column']} FOREIGN KEY ({fk['column']}) "
+            f"REFERENCES {fk['ref_table']} ({fk['ref_column']})"
+        )
+    lines.append(",\n".join(defs))
+    lines.append(");")
+    return "\n".join(lines)
+
+
+def ddls_from_schema(schema: dict[str, Any]) -> dict[str, str]:
+    """全部表的快照合成 DDL：{table_name: ddl_string}。"""
+    return {t["name"]: ddl_from_schema(schema, t["name"]) for t in schema.get("tables", [])}
+
+
 def build_ddl_overview(schema: dict[str, Any]) -> str:
     """从已有 schema 构建精简版表结构概览（不走连接池），供全局标签 prompt 使用。
 

@@ -64,24 +64,57 @@ async def test_target_table_still_ranks_first(tmp_path):
     assert docs[0].table == "customers"
 
 
-async def test_ai_draft_then_confirm(tmp_path):
+async def test_ai_draft_then_confirm_new_model(tmp_path):
+    """AI 草案落库到 ColumnInfo/TableKnowledge（v2），确认后 status=confirmed。"""
     kb = KnowledgeBase(tmp_path)
-    await kb.build("c1", _schema())
-    assert kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "订单状态草稿"}]) == 1
-    docs = await kb.retrieve("c1", query="状态", k=10)
-    assert any(d.source == "ai_draft" and d.status == "draft" for d in docs)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)  # 本例测手动草案机制，关掉 AI 阶段保证确定性
+    n = kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "订单状态草稿"}])
+    assert n == 1
+    tk = kb._tables["c1"]["orders"]
+    ci = tk.columns["status"]
+    assert ci.comment == "订单状态草稿" and ci.status == "draft"
+    # 确认单列
     assert kb.confirm("c1", "orders", "status") == 1
-    docs2 = await kb.retrieve("c1", query="状态", k=10)
-    assert any(d.status == "confirmed" for d in docs2)
+    assert ci.status == "confirmed"
+    # 再注释不覆盖已确认内容
+    kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "覆盖尝试"}])
+    assert ci.comment == "订单状态草稿"
 
 
-async def test_reject_removes_draft(tmp_path):
+async def test_table_level_annotation_and_confirm_all(tmp_path):
+    """表级注释草案 → confirm(table) 确认表+全部列；confirm_all 全库确认。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)  # 本例测手动草案机制，关掉 AI 阶段保证确定性
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "comment": "订单主表草案"},
+        {"table": "orders", "column": "id", "comment": "订单ID"},
+        {"table": "customers", "column": "name", "comment": "客户姓名"},
+    ])
+    assert kb.confirm("c1", "orders") == 2  # 表注释 + id 列
+    tk = kb._tables["c1"]["orders"]
+    assert tk.status == "confirmed" and tk.columns["id"].status == "confirmed"
+    assert kb.pending_counts("c1")["draft_docs"] == 1
+    counts = kb.confirm_all("c1")
+    assert counts["docs"] == 1 and counts["tags"] >= 0
+    assert all(t.status == "confirmed" for t in kb._tables["c1"].values())
+    assert kb.pending_counts("c1")["draft_docs"] == 0
+
+
+async def test_reject_clears_annotation(tmp_path):
+    """拒绝（✕）：整条 AI 注释撤下回 none；values/example 一并清空。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())
-    kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "会被拒绝的草稿"}])
-    drafts = [d for d in kb._drafts["c1"]]
-    assert kb.reject("c1", drafts[0].id) is True
-    assert len(kb._drafts["c1"]) == 0
+    kb.annotate_drafts("c1", [{
+        "table": "orders", "column": "status",
+        "comment": "会被撤下的注释", "values": "P=待付款", "example": "P",
+    }])
+    assert kb.reject("c1", "orders", "status") == 1
+    ci = kb._tables["c1"]["orders"].columns["status"]
+    assert ci.status == "none" and ci.comment == "" and ci.values == "" and ci.example == ""
+    # 表级撤下
+    kb.annotate_drafts("c1", [{"table": "orders", "comment": "表注释"}])
+    assert kb.reject_comment("c1", "orders") == 1
+    assert kb._tables["c1"]["orders"].comment == ""
 
 
 async def test_artifact_persists_across_instances(tmp_path):
@@ -94,9 +127,11 @@ async def test_artifact_persists_across_instances(tmp_path):
     assert kb2.is_built("c1")  # artifact 存在 → 无需重采样即可检索
     docs = await kb2.retrieve("c1", query="订单", k=10)
     assert any("orders" in d.title for d in docs)
-    # 确认状态在 artifact 中保留
-    col = next(c for c in kb2.overview("c1")["columns"] if c["name"] == "status")
-    assert col["status"] == "confirmed"
+    # 确认状态在 artifact（v2 表级知识）中保留
+    ov = kb2.overview("c1")
+    tbl = next(t for t in ov["tables"] if t["name"] == "orders")
+    col = next(c for c in tbl["columns"] if c["name"] == "status")
+    assert col["status"] == "confirmed" and col["comment"] == "订单状态草稿"
     # 图谱 FK 边保留了
     assert any(e["kind"] == "fk" for e in kb2.graph("c1")["edges"])
 

@@ -70,12 +70,14 @@ async def test_confirm_all_confirms_drafts_and_tags(client, conn_id):
     r = await client.post(f"/api/v1/knowledge/{conn_id}/confirm-all")
     assert r.json()["docs"] > 0
     assert r.json()["tags"] > 0
-    # 全部 confirmed（确认语义：AI 草案确认后视为用户认可，source→user）
+    # 全部 confirmed（v2：确认闸后表块定稿、无残留草案；AI 注释在 TableKnowledge/ColumnInfo 上）
     tags = (await client.get(f"/api/v1/knowledge/{conn_id}/tags")).json()
     assert all(t["status"] == "confirmed" for t in tags["library"])
-    docs = (await client.get(f"/api/v1/knowledge/{conn_id}/docs")).json()
-    userish = [d for d in docs["docs"] if d["source"] == "user"]
-    assert userish and all(d["status"] == "confirmed" for d in userish)
+    ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    assert all(t["comment_status"] == "confirmed" for t in ov["tables"])
+    assert all(c["status"] != "draft" for t in ov["tables"] for c in t["columns"])
+    st2 = (await client.get(f"/api/v1/knowledge/{conn_id}/status")).json()
+    assert st2["pending"]["draft_docs"] == 0
 
 
 async def test_test_draft_sqlite_ok(client, demo_db):

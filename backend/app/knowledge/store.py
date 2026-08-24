@@ -1,22 +1,21 @@
-"""知识库 v3：结构 + 向量 + 图谱 + AI 草案 + 人工确认。
+"""知识库 v3 存储模型 v2：按表组织（TableKnowledge/ColumnInfo）。
 
-数据源接入 → build()（结构抽取 + 采样 + 图谱构建 + 向量索引 + 持久化）→
-annotate_drafts()（AI 生成中文注释草案）→ confirm()（人工确认/拒绝）→
-retrieve()（已确认优先 + 图谱扩展）喂给 AI 上下文。
+数据源接入 → build()（结构抽取 + 采样 + 逐表 AI 注释[含取值对照/示例] + 图谱 +
+向量索引 + 持久化）→ 审查工作台逐列 ✓/✕ 确认 → retrieve()/route_tables()
+喂给 AI 上下文。
 
-隐私：采样只存本地（图谱值重叠用）；发送给模型的注释 prompt 是否含样本值由
-`kb_ai_annotation_samples` 门控；嵌入默认离线哈希，真语义嵌入由设置选择（可本地）。
+隐私：采样只存本地；发送给模型的注释 prompt 是否含样本值由 `kb_ai_annotation_samples`
+门控（未授权 → 无样本 → values/example 为空）；嵌入默认离线哈希，真语义嵌入由设置选择。
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
 import re
 import threading
 import time
 import uuid
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +29,67 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ColumnInfo:
+    """列级知识（v2）：结构壳（type/pk/fk/db_comment）+ AI/人工知识字段。"""
+    name: str
+    type: str = ""
+    pk: bool = False
+    fk: bool = False
+    db_comment: str = ""
+    comment: str = ""      # 业务含义（AI 生成 → 人工确认）
+    values: str = ""       # 取值对照 "P=待付款；S=已发货；R=已退货"
+    example: str = ""      # 示例值（首个非空样本，截断 60 字符）
+    status: str = "none"   # none | draft | confirmed（comment+values 整体确认）
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ColumnInfo":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
+class TableKnowledge:
+    """表级知识（快照 v2 的核心存储单元，一表一块）。"""
+    name: str
+    db_comment: str = ""
+    column_count: int = 0
+    comment: str = ""
+    status: str = "none"   # none | draft | confirmed（表级注释状态）
+    columns: dict[str, ColumnInfo] = field(default_factory=dict)
+    ddl: str = ""
+    excluded: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "db_comment": self.db_comment,
+            "column_count": self.column_count,
+            "comment": self.comment,
+            "status": self.status,
+            "columns": {k: v.to_dict() for k, v in self.columns.items()},
+            "ddl": self.ddl,
+            "excluded": self.excluded,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "TableKnowledge":
+        cols = {k: ColumnInfo.from_dict(v) for k, v in (d.get("columns") or {}).items()}
+        return cls(
+            name=d.get("name", ""),
+            db_comment=d.get("db_comment", ""),
+            column_count=int(d.get("column_count", 0) or 0),
+            comment=d.get("comment", ""),
+            status=d.get("status", "none"),
+            columns=cols,
+            ddl=d.get("ddl", ""),
+            excluded=bool(d.get("excluded")),
+        )
+
+
 class KnowledgeBase:
     def __init__(self, data_dir: Path, runtime: "SettingsStore | None" = None) -> None:
         self._data_dir = data_dir
@@ -39,14 +99,13 @@ class KnowledgeBase:
         self._emb: Embedder = HashingEmbedder()
         self._auto: dict[str, list[KnowledgeDoc]] = {}
         self._user: dict[str, list[KnowledgeDoc]] = {}
-        self._drafts: dict[str, list[KnowledgeDoc]] = {}
         self._samples: dict[str, dict[str, dict[str, list[Any]]]] = {}  # conn -> table -> column -> [values]
         self._graph: dict[str, dict[str, Any]] = {}                       # conn -> {edges}
         self._vec: dict[str, dict[str, list[float]]] = {}                 # conn -> doc_id -> 向量
         self._tags: dict[str, dict[str, dict[str, Any]]] = {}               # conn -> tag名 -> {description,status}
         self._table_tags: dict[str, dict[str, list[str]]] = {}            # conn -> table -> [tag名]
-        self._enums: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}  # conn -> table -> column -> [{value,meaning,status}]
-        self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（审查视图用）
+        self._tables: dict[str, dict[str, TableKnowledge]] = {}           # conn -> 表名 -> TableKnowledge（v2 核心存储）
+        self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（增量 diff/图谱校验用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（向量路由用）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
         self._schema_fingerprint_map: dict[str, str] = {}                 # conn -> 结构指纹（增量对比）
@@ -68,11 +127,11 @@ class KnowledgeBase:
         return st
 
     def _load_conn(self, conn_id: str) -> None:
-        """从存储后端恢复一个连接的知识库（含旧 JSON artifact 自动迁移）。"""
+        """从存储后端恢复一个连接的知识库（v2 快照；旧版本工件已在存储层作废为空）。"""
         if conn_id in self._auto:
             return
         snap = self._storage(conn_id).load()
-        if not snap.auto and not snap.drafts and not snap.user and not snap.edges:
+        if not snap.tables and not snap.auto and not snap.user and not snap.edges:
             return
         def _docs_(items: list[dict]) -> list[KnowledgeDoc]:
             out = []
@@ -84,7 +143,6 @@ class KnowledgeBase:
             return out
 
         self._auto[conn_id] = _docs_(snap.auto)
-        self._drafts[conn_id] = _docs_(snap.drafts)
         self._user[conn_id] = _docs_(snap.user)
         self._samples[conn_id] = snap.samples
         self._graph[conn_id] = {"edges": snap.edges}
@@ -92,7 +150,9 @@ class KnowledgeBase:
         self._table_vec[conn_id] = snap.table_vec
         self._tags[conn_id] = snap.tags
         self._table_tags[conn_id] = snap.table_tags
-        self._enums[conn_id] = snap.enums
+        self._tables[conn_id] = {
+            name: TableKnowledge.from_dict(d) for name, d in snap.tables.items()
+        }
         self._schema[conn_id] = snap.schema
         self._artifact_fingerprint[conn_id] = snap.emb_fingerprint
         self._schema_fingerprint_map[conn_id] = snap.schema_fingerprint
@@ -108,8 +168,8 @@ class KnowledgeBase:
         try:
             from app.knowledge.storage import KbSnapshot
             snap = KbSnapshot(
+                tables={name: tk.to_dict() for name, tk in self._tables.get(conn_id, {}).items()},
                 auto=[d.to_dict() for d in self._auto.get(conn_id, [])],
-                drafts=[d.to_dict() for d in self._drafts.get(conn_id, [])],
                 user=[d.to_dict() for d in self._user.get(conn_id, [])],
                 samples=self._samples.get(conn_id, {}),
                 edges=self._graph.get(conn_id, {"edges": []}).get("edges", []),
@@ -117,7 +177,6 @@ class KnowledgeBase:
                 table_vec=self._table_vec.get(conn_id, {}),
                 tags=self._tags.get(conn_id, {}),
                 table_tags=self._table_tags.get(conn_id, {}),
-                enums=self._enums.get(conn_id, {}),
                 schema=self._schema.get(conn_id, {}),
                 emb_fingerprint=self._artifact_fingerprint.get(conn_id, ""),
                 schema_fingerprint=self._schema_fingerprint_map.get(conn_id, ""),
@@ -197,6 +256,45 @@ class KnowledgeBase:
             if not self._is_tombstoned(conn_id, e):
                 edges.append(e)
         return {"edges": edges}
+
+    # ---------- 表壳同步（v2 模型：结构壳刷新，知识字段保留） ----------
+    def _sync_table_shells(
+        self, conn_id: str, schema: dict[str, Any],
+        drop: set[str] | None = None,
+    ) -> None:
+        """从 schema 建/同步 TableKnowledge 壳。
+
+        - 结构字段（type/pk/fk/db_comment/column_count）以 schema 为准刷新；
+        - 知识字段（comment/values/example/status）保留（重建/增量不清掉人工成果）；
+        - drop: 增量删除的表落壳；schema 中已消失的列从壳中移除。
+        """
+        tabs = self._tables.setdefault(conn_id, {})
+        for t in (drop or set()):
+            tabs.pop(t, None)
+        tables_idx = {t["name"]: t for t in schema.get("tables", [])}
+        cols_by_table: dict[str, list[dict[str, Any]]] = {}
+        for c in schema.get("columns", []):
+            cols_by_table.setdefault(c["table"], []).append(c)
+        for name, tinfo in tables_idx.items():
+            tk = tabs.get(name)
+            if tk is None:
+                tk = tabs[name] = TableKnowledge(name=name)
+            tk.db_comment = tinfo.get("comment", "")
+            tk.column_count = int(tinfo.get("column_count", 0) or 0)
+            alive: set[str] = set()
+            for c in cols_by_table.get(name, []):
+                cname = c["name"]
+                ci = tk.columns.get(cname)
+                if ci is None:
+                    ci = tk.columns[cname] = ColumnInfo(name=cname)
+                ci.type = c.get("type", "")
+                ci.pk = bool(c.get("pk"))
+                ci.fk = bool(c.get("fk"))
+                ci.db_comment = c.get("comment", "")
+                alive.add(cname)
+            for cname in list(tk.columns):
+                if cname not in alive:
+                    del tk.columns[cname]
 
     # ---------- 构建 ----------
     def _embedder(self) -> Embedder:
@@ -306,18 +404,24 @@ class KnowledgeBase:
             ],
             "foreign_keys": schema.get("foreign_keys", []),
         }
+        # 表壳同步（v2）：结构字段刷新，已确认/草案知识跨重建保留
+        self._sync_table_shells(conn_id, schema)
         if samples is not None:
             self._samples[conn_id] = samples
         if on_progress:
             on_progress("发现结构", 10, None)
 
-        # ---- AI 语义增强：逐表注释 + 全局标签 ----
+        # ---- AI 语义增强：逐表注释（含取值对照/示例）+ 全局标签 ----
         ai_docs_added = 0
         ai_tags_added = 0
-        ai_enums_added = 0
         if enable_ai_annotation:
             from app.knowledge.annotator import annotate_domain, annotate_tables
-            from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all, truncate_samples
+            from app.knowledge.ddl_context import (
+                build_ddl_overview,
+                ddls_from_schema,
+                generate_ddls_all,
+                truncate_samples,
+            )
 
             # 阶段一：逐表 AI 处理（on_progress 逐表回调，phase="annotate"）
             if on_progress:
@@ -325,7 +429,21 @@ class KnowledgeBase:
             try:
                 from app.state import get_state as _get_state
                 _st = _get_state()
-                ddl_map = await generate_ddls_all(_st, conn_id)
+                ddl_map: dict[str, str] = {}
+                try:
+                    ddl_map = await generate_ddls_all(_st, conn_id)
+                except Exception as e:
+                    logger.warning(
+                        "[kb.build] conn=%s 实时 DDL 获取失败，回退结构快照合成：%s", conn_id, e)
+                # 回退补齐：实时拿不到的表用结构快照合成（注释管线不因 DDL 中断）
+                snap_schema = self._schema[conn_id]
+                for tname, ddl in ddls_from_schema(snap_schema).items():
+                    ddl_map.setdefault(tname, ddl)
+                # DDL 进 TableKnowledge（payload 用，spec §4）
+                for tname, ddl in ddl_map.items():
+                    tk = self._tables.get(conn_id, {}).get(tname)
+                    if tk is not None:
+                        tk.ddl = ddl
                 # 授权才发送；出网唯一防护是值级截断（用户决策：无列级过滤）
                 effective_samples = (
                     truncate_samples(self._samples.get(conn_id, {})) if include_samples else None
@@ -334,7 +452,7 @@ class KnowledgeBase:
                     _st, conn_id, ddl_map, self._schema[conn_id],
                     samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
                 )
-                logger.info("[kb.build] conn=%s 阶段=annotate 完成：ai_docs=%s", conn_id, ai_docs_added)
+                logger.info("[kb.build] conn=%s 阶段=annotate 完成：items=%s", conn_id, ai_docs_added)
             except Exception as e:
                 logger.warning("[kb.build] conn=%s 阶段=annotate AI注释异常：%s", conn_id, e)
                 if on_progress:
@@ -381,23 +499,6 @@ class KnowledgeBase:
             if on_progress:
                 on_progress("AI 关系识别", 100, None, phase="graph")
 
-            # 阶段四：枚举字典（需数据授权；未授权跳过——枚举解释必须发送取值）
-            if include_samples:
-                if on_progress:
-                    on_progress("枚举字典", 0, None, phase="enums")
-                try:
-                    from app.knowledge.annotator import annotate_enums_core
-                    enum_result = await annotate_enums_core(
-                        _st, conn_id, self._schema[conn_id],
-                        self._samples.get(conn_id, {}),
-                    )
-                    ai_enums_added = enum_result.get("added", 0)
-                    logger.info("[kb.build] conn=%s 阶段=enums 完成：enums=%s", conn_id, ai_enums_added)
-                except Exception as e:
-                    logger.warning("[kb.build] conn=%s 阶段=enums 枚举抽取异常：%s", conn_id, e)
-                if on_progress:
-                    on_progress("枚举字典", 100, None, phase="enums")
-
         # ---- 构图（程序 FK 边） ----
         if on_progress:
             on_progress("构图", 40, None)
@@ -406,9 +507,7 @@ class KnowledgeBase:
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
         self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        # 枚举消费：历史 confirmed 枚举并入列文档 body（本轮新产出的 draft 不入文档）
-        self._apply_enum_bodies(conn_id)
-        # 向量化（含 AI 生成的 draft 文档）
+        # 向量化（结构文档桥接；Task 2 统一重做为表级 chunk）
         if on_progress:
             on_progress("向量化", 45, None)
         await self._embed_docs(conn_id, self._docs(conn_id), on_progress=on_progress, p0=45, p1=75)
@@ -422,15 +521,14 @@ class KnowledgeBase:
         # 记录嵌入模型用量（ApiEmbedder 累计 usage → llm_log）
         self._log_embedding_usage(conn_id, "build")
         logger.info(
-            "[kb.build] conn=%s build 完成：docs=%s ai_docs=%s tags=%s graph=%s enums=%s",
-            conn_id, len(self._auto[conn_id]), ai_docs_added, ai_tags_added,
-            len(self._graph.get(conn_id, {}).get("edges", [])), ai_enums_added,
+            "[kb.build] conn=%s build 完成：tables=%s docs=%s ai_items=%s tags=%s graph=%s",
+            conn_id, len(self._tables.get(conn_id, {})), len(self._auto[conn_id]), ai_docs_added,
+            ai_tags_added, len(self._graph.get(conn_id, {}).get("edges", [])),
         )
         return {
             "docs": len(self._auto[conn_id]),
             "ai_docs_added": ai_docs_added,
             "ai_tags_added": ai_tags_added,
-            "enums_added": ai_enums_added,
             "graph_edges": len(self._graph.get(conn_id, {}).get("edges", [])),
             "sample_cols": sum(
                 len(cols) for cols in self._samples.get(conn_id, {}).values()
@@ -533,11 +631,11 @@ class KnowledgeBase:
     ) -> dict[str, Any]:
         """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。
 
-        - 新增/变化表：重生成 auto 文档（draft/user 不动）+ 重嵌入 + 表级向量
-        - 删除表：auto 文档 archived（保留可回溯），移除表级向量与相关边
+        - 新增/变化表：重生成 auto 文档 + 表壳刷新 + 变化表重注释 + 重嵌入 + 表级向量
+        - 删除表：auto 文档 archived（保留可回溯），移除表壳/表级向量与相关边
         - 图：基于新 schema + 合并样本全量重构图（快；墓碑自动遵守）
         - include_samples: 数据授权门控（None=沿用运行时设置 kb_ai_annotation_samples）；
-          未授权时变化表不重提枚举、不发样本注释（枚举解释/注释均需发送数据）
+          未授权时变化表不发样本注释（values/example 无从产生，仅凭结构注释）
         - 返回 diff 摘要
         """
         if include_samples is None:
@@ -561,6 +659,8 @@ class KnowledgeBase:
             ],
             "foreign_keys": new_schema.get("foreign_keys", []),
         }
+        # 表壳同步（v2）：删表落壳、变化表结构刷新；已确认知识保留
+        self._sync_table_shells(conn_id, new_schema, drop=set(diff["removed_tables"]))
         if samples:
             merged = {**self._samples.get(conn_id, {}), **samples}
             # 删除的表样本一并移除（否则 overlap 边残留）
@@ -608,8 +708,6 @@ class KnowledgeBase:
             auto.extend(new_docs)
             docs_added = len(new_docs)
             self._auto[conn_id] = auto
-            # 枚举消费：变化表新文档并入 confirmed 枚举（重嵌入前，向量随新 body 计算）
-            self._apply_enum_bodies(conn_id, rebuild_tables)
             # 重嵌入：移除这些文档的旧向量，嵌入新文档
             vec = self._vec.get(conn_id, {})
             for d in new_docs:
@@ -623,15 +721,32 @@ class KnowledgeBase:
         # 4. 增量 AI 注释：只为新增/变化表生成 AI 注释（不重做全库）
         ai_docs_added = 0
         ai_tags_added = 0
-        ai_enums_added = 0
         if rebuild_tables:
             try:
                 from app.knowledge.annotator import annotate_domain, annotate_tables
-                from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all, truncate_samples
+                from app.knowledge.ddl_context import (
+                    build_ddl_overview,
+                    ddls_from_schema,
+                    generate_ddls_all,
+                    truncate_samples,
+                )
                 from app.state import get_state as _get_state
                 _st = _get_state()
-                # DDL 为变化表生成注释
-                ddl_map = await generate_ddls_all(_st, conn_id)
+                # DDL 为变化表生成注释；实时获取失败回退结构快照合成（与全量构建同语义）
+                try:
+                    ddl_map = await generate_ddls_all(_st, conn_id)
+                except Exception as e:
+                    logger.warning(
+                        "[kb.incr] conn=%s 实时 DDL 获取失败，回退结构快照合成：%s", conn_id, e)
+                    ddl_map = {}
+                for tname, ddl in ddls_from_schema(self._schema[conn_id]).items():
+                    ddl_map.setdefault(tname, ddl)
+                # DDL 进 TableKnowledge（与全量构建同款）
+                for tname, ddl in ddl_map.items():
+                    if tname in rebuild_tables:
+                        tk = self._tables.get(conn_id, {}).get(tname)
+                        if tk is not None:
+                            tk.ddl = ddl
                 # 只给变化表生成 AI 注释
                 changed_ddl_map = {t: ddl_map[t] for t in ddl_map if t in rebuild_tables}
                 if changed_ddl_map:
@@ -651,40 +766,9 @@ class KnowledgeBase:
                         schema=self._schema[conn_id], ddl_overview=overview_text,
                     )
                     ai_tags_added = domain_result.get("new_tags", 0)
-                logger.info("[kb.incr] conn=%s AI注释完成：ai_docs=%s new_tags=%s", conn_id, ai_docs_added, ai_tags_added)
+                logger.info("[kb.incr] conn=%s AI注释完成：items=%s new_tags=%s", conn_id, ai_docs_added, ai_tags_added)
             except Exception as e:
                 logger.warning("[kb.incr] conn=%s 增量AI注释/标签异常：%s", conn_id, e)
-            # 变化表枚举重提（数据授权门控；独立容错不影响注释/标签流程）。
-            # samples 用合并后的 all_samples；schema 用新 schema 的变化表子集（只重提变化表）。
-            if include_samples:
-                try:
-                    from app.knowledge.annotator import annotate_enums_core
-                    sub_schema = {
-                        "tables": [
-                            t for t in new_schema.get("tables", [])
-                            if t["name"] in rebuild_tables
-                        ],
-                        "columns": [
-                            c for c in self._schema[conn_id].get("columns", [])
-                            if c["table"] in rebuild_tables
-                        ],
-                        "foreign_keys": [],
-                    }
-                    enum_result = await annotate_enums_core(
-                        _st, conn_id, sub_schema, all_samples,
-                    )
-                    ai_enums_added = enum_result.get("added", 0)
-                    logger.info("[kb.incr] conn=%s 枚举重提完成：enums=%s", conn_id, ai_enums_added)
-                except Exception as e:
-                    logger.warning("[kb.incr] conn=%s 枚举重提异常：%s", conn_id, e)
-            # 嵌入新增的 AI draft 文档
-            if ai_docs_added:
-                try:
-                    new_drafts = [d for d in self._drafts.get(conn_id, []) if d.source == "ai_draft"]
-                    if new_drafts:
-                        await self._embed_docs(conn_id, new_drafts)
-                except Exception as e:
-                    logger.warning("[kb.incr] conn=%s draft 文档嵌入失败：%s", conn_id, e)
 
         # 5. 图谱：新 schema + 合并样本全量重构图（FK 边同步 + 墓碑遵守）
         self._graph[conn_id] = self._build_graph(conn_id, new_schema, all_samples)
@@ -695,9 +779,9 @@ class KnowledgeBase:
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
         logger.info(
-            "[kb.incr] conn=%s 增量同步完成：+表%s -表%s 变更表%s docs=%s enums=%s",
+            "[kb.incr] conn=%s 增量同步完成：+表%s -表%s 变更表%s docs=%s ai_items=%s",
             conn_id, len(diff["added_tables"]), len(diff["removed_tables"]),
-            len(rebuild_tables), docs_added, ai_enums_added,
+            len(rebuild_tables), docs_added, ai_docs_added,
         )
         return {
             "changed": True,
@@ -705,26 +789,40 @@ class KnowledgeBase:
             "tables_added": len(diff["added_tables"]),
             "tables_removed": len(diff["removed_tables"]),
             "tables_changed": len(rebuild_tables),
-            "enums_added": ai_enums_added,
             **diff,
         }
+
+    def _table_embed_text(self, conn_id: str, name: str, tinfo: dict[str, Any],
+                          cols: list[dict[str, Any]]) -> str:
+        """表级向量文本（Task 2 表级 chunk 重做前的桥接）：优先 v2 TableKnowledge。"""
+        tk = self._tables.get(conn_id, {}).get(name)
+        table_tags = self._table_tags.get(conn_id, {})
+        lib = self._tags.get(conn_id, {})
+        confirmed = [n for n in table_tags.get(name, []) if lib.get(n, {}).get("status") == "confirmed"]
+        if tk is not None:
+            col_txt = "，".join(
+                f"{ci.name}（{ci.type}"
+                f"{'：' + ci.comment if ci.comment else ''}"
+                f"{'；可选值 ' + ci.values if ci.values else ''}）"
+                for ci in tk.columns.values()
+            )
+            comment = tk.comment or tk.db_comment
+            return f"{name} 表：{col_txt}；注释：{comment}；领域标签：{'、'.join(confirmed)}"
+        col_txt = "，".join(
+            f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
+            for c in cols
+        )
+        return f"{name} 表：{col_txt}；注释：{tinfo.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
 
     async def _embed_table_docs_for(self, conn_id: str, schema: dict[str, Any], tables: set[str]) -> None:
         """只重算指定表的表级向量（增量用）。"""
         snap = self._schema.get(conn_id, {})
         columns = snap.get("columns", [])
-        table_tags = self._table_tags.get(conn_id, {})
-        lib = self._tags.get(conn_id, {})
         vecs = dict(self._table_vec.get(conn_id, {}))
         for t in tables:
             tinfo = next((x for x in snap.get("tables", []) if x.get("name") == t), {})
             cols = [c for c in columns if c.get("table") == t]
-            col_txt = "，".join(
-                f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
-                for c in cols
-            )
-            confirmed = [n for n in table_tags.get(t, []) if lib.get(n, {}).get("status") == "confirmed"]
-            text = f"{t} 表：{col_txt}；注释：{tinfo.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
+            text = self._table_embed_text(conn_id, t, tinfo, cols)
             try:
                 vecs[t] = await self._emb.embed(text)
             except Exception as e:
@@ -780,8 +878,6 @@ class KnowledgeBase:
         columns = snap.get("columns", [])
         if not tables:
             return
-        table_tags = self._table_tags.get(conn_id, {})
-        lib = self._tags.get(conn_id, {})
         vecs: dict[str, list[float]] = {}
         n = len(tables)
         for i, t in enumerate(tables):
@@ -791,12 +887,7 @@ class KnowledgeBase:
             if not name:
                 continue
             cols = [c for c in columns if c.get("table") == name]
-            col_txt = "，".join(
-                f"{c.get('name')}（{c.get('type')}{'：' + c.get('comment', '') if c.get('comment') else ''}）"
-                for c in cols
-            )
-            confirmed = [n for n in table_tags.get(name, []) if lib.get(n, {}).get("status") == "confirmed"]
-            text = f"{name} 表：{col_txt}；注释：{t.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
+            text = self._table_embed_text(conn_id, name, t, cols)
             try:
                 vecs[name] = await self._emb.embed(text)
             except Exception as e:
@@ -889,11 +980,14 @@ class KnowledgeBase:
 
     # ---------- 检索 ----------
     def _docs(self, conn_id: str) -> list[KnowledgeDoc]:
-        """全部活跃文档（过滤 archived——已删除表的归档文档不参与检索/向量/列表）。"""
+        """全部活跃文档（过滤 archived——已删除表的归档文档不参与检索/向量/列表）。
+
+        v2 起无独立草稿文档：AI 注释在 TableKnowledge/ColumnInfo 上（Task 2 随
+        表级 chunk 统一进检索）；此处保留结构文档 + 用户手写笔记的桥接检索。
+        """
         return [
             d for d in (
                 self._auto.get(conn_id, [])
-                + self._drafts.get(conn_id, [])
                 + self._user.get(conn_id, [])
             )
             if not d.archived
@@ -984,57 +1078,80 @@ class KnowledgeBase:
             lines.append(f"- [{d.kind}]{mark} {d.title}: {d.body}")
         return "\n".join(lines)
 
-    # ---------- AI 草案 + 人工确认 ----------
+    # ---------- AI 草案落库 + 人工确认（v2：写 TableKnowledge/ColumnInfo） ----------
     def annotate_drafts(self, conn_id: str, items: list[dict[str, Any]]) -> int:
-        """保存 AI 生成的注释草案（status=draft），待人工确认。items: [{table,column,comment}]"""
-        existing = {d.id for d in self._drafts.get(conn_id, [])}
-        added = 0
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        """AI 注释草案入库（status=draft），待人工确认。
+
+        items: [{table, column|None, comment, values?, example?}]。
+        - 列项 → ColumnInfo(comment/values/example)；表级 → TableKnowledge.comment；
+        - 已确认（confirmed）内容不被草案覆盖；
+        - 表/列不在库中（敏感过滤/已删除）忽略。
+        """
+        tabs = self._tables.get(conn_id, {})
+        applied = 0
         for it in items:
             table = it.get("table")
-            column = it.get("column")
-            comment = (it.get("comment") or "").strip()
+            comment = str(it.get("comment") or "").strip()
             if not table or not comment:
                 continue
-            if column:
-                did = f"ai-{table}-{column}"
-                title = f"{table}.{column}"
-                kind = "column"
-            else:
-                did = f"ai-tbl-{table}"
-                title = f"表 {table}"
-                kind = "table"
-            if did in existing:
+            tk = tabs.get(table)
+            if tk is None:
                 continue
-            self._drafts.setdefault(conn_id, []).append(KnowledgeDoc(
-                id=did, conn_id=conn_id, kind=kind, title=title, body=comment,
-                table=table, column=column, tags=[table, column or "", "注释"],
-                source="ai_draft", status="draft", updated_at=now,
-            ))
-            existing.add(did)
-            added += 1
-        if added:
+            column = it.get("column")
+            if column:
+                ci = tk.columns.get(column)
+                if ci is None:
+                    continue
+                if ci.status == "confirmed":
+                    continue  # 已确认内容不被草案覆盖
+                ci.comment = comment
+                ci.values = str(it.get("values") or "").strip()
+                ci.example = str(it.get("example") or "").strip()[:60]
+                ci.status = "draft"
+            else:
+                if tk.status == "confirmed":
+                    continue  # 已确认内容不被草案覆盖
+                tk.comment = comment
+                tk.status = "draft"
+            applied += 1
+        if applied:
             self._save_conn(conn_id)
-        return added
+        return applied
 
     def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
-        """人工确认草案 → 权威。不指定 table 则确认全部草案。"""
-        drafts = self._drafts.get(conn_id, [])
-        targets = [
-            d for d in drafts
-            if (table is None or d.table == table) and (column is None or d.column == column)
-        ]
-        for d in targets:
-            d.status = "confirmed"
-            d.source = "user"
-        if targets:
+        """人工确认草案 → 权威（v2：状态机 none/draft → confirmed）。
+
+        column 指定 → 单列（仅 draft 计数）；只给 table → 该表注释及其全部列；
+        都不给 → 全库。表级 none（无 AI 注释的空内容表）同样定稿但不计数——
+        确认闸后全库无残留草案。
+        """
+        tabs = self._tables.get(conn_id, {})
+        targets = [tabs[table]] if table and table in tabs else (
+            [] if table else list(tabs.values())
+        )
+        n = 0
+        for tk in targets:
+            if column:
+                ci = tk.columns.get(column)
+                if ci and ci.status == "draft":
+                    ci.status = "confirmed"
+                    n += 1
+                continue
+            if tk.status == "draft":
+                n += 1
+            tk.status = "confirmed"  # none=空内容直接定稿；draft=草案确认
+            for ci in tk.columns.values():
+                if ci.status == "draft":
+                    ci.status = "confirmed"
+                    n += 1
+        if n:
             self._save_conn(conn_id)
-        return len(targets)
+        return n
 
     def confirm_all(self, conn_id: str) -> dict[str, int]:
-        """确认闸（构建后一键启用）：批量确认全部草案文档 + 全部 draft 标签 + 全部 draft 枚举。
+        """确认闸（构建后一键启用）：批量确认全部草案注释（表+列）+ 全部 draft 标签。
 
-        标签确认后才参与"问题→选表"路由；文档确认后检索优先。
+        标签确认后才参与"问题→选表"路由；注释确认后进入权威知识卡。
         kb_status → ready 由调用方（api 层）负责。
         """
         n_docs = self.confirm(conn_id)
@@ -1042,16 +1159,12 @@ class KnowledgeBase:
         for name in list(self._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
-        n_enums = 0
-        for table, cols in self._enums.get(conn_id, {}).items():
-            for column in list(cols.keys()):
-                n_enums += self.confirm_enum(conn_id, table, column)
-        return {"docs": n_docs, "tags": n_tags, "enums": n_enums}
+        return {"docs": n_docs, "tags": n_tags}
 
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
-        for d in (self._auto, self._user, self._drafts, self._samples, self._graph,
-                  self._vec, self._tags, self._table_tags, self._enums, self._schema,
+        for d in (self._auto, self._user, self._samples, self._graph,
+                  self._vec, self._tags, self._table_tags, self._tables, self._schema,
                   self._table_vec, self._artifact_fingerprint, self._vstore,
                   self._schema_fingerprint_map, self._edge_tombstones, self._synced_at,
                   self._llm_graph_edges, self._llm_edge_tombstones):
@@ -1140,37 +1253,43 @@ class KnowledgeBase:
         return self._synced_at.get(conn_id, "")
 
     def pending_counts(self, conn_id: str) -> dict[str, int]:
-        """待确认数（确认闸 UI 用）：草案文档 + draft 标签 + draft 枚举 + LLM draft 边。"""
-        enum_drafts = sum(
-            1 for cols in self._enums.get(conn_id, {}).values()
-            for entries in cols.values()
-            for e in entries if e.get("status") == "draft"
-        )
+        """待确认数（确认闸 UI 用）：draft 注释（表+列）+ draft 标签 + LLM draft 边。"""
+        n_comments = 0
+        for tk in self._tables.get(conn_id, {}).values():
+            if tk.status == "draft":
+                n_comments += 1
+            n_comments += sum(1 for ci in tk.columns.values() if ci.status == "draft")
         return {
-            "draft_docs": len(self._drafts.get(conn_id, [])),
+            "draft_docs": n_comments,
             "draft_tags": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
-            "draft_enums": enum_drafts,
             "llm_graph_draft": len(self._llm_graph_edges.get(conn_id, [])),
         }
 
-    def reject(self, conn_id: str, doc_id: str) -> bool:
-        drafts = self._drafts.get(conn_id, [])
-        before = len(drafts)
-        self._drafts[conn_id] = [d for d in drafts if d.id != doc_id]
-        if len(self._drafts[conn_id]) != before:
-            self._save_conn(conn_id)
-            return True
-        return False
-
     def reject_comment(self, conn_id: str, table: str, column: str | None = None) -> int:
-        """按表/列拒绝草案注释（审查页用）。"""
-        drafts = self._drafts.get(conn_id, [])
-        targets = [d for d in drafts if d.table == table and d.column == column]
-        kept = [d for d in drafts if d not in targets]
-        if len(kept) != len(drafts):
-            self._drafts[conn_id] = kept
+        """拒绝草案注释（审查页逐列 ✕）：AI 内容整条撤下回 none。"""
+        tk = self._tables.get(conn_id, {}).get(table)
+        if tk is None:
+            return 0
+        n = 0
+        if column:
+            ci = tk.columns.get(column)
+            if ci and ci.status != "none":
+                ci.comment = ""
+                ci.values = ""
+                ci.example = ""
+                ci.status = "none"
+                n += 1
+        elif tk.status != "none" or tk.comment:
+            tk.comment = ""
+            tk.status = "none"
+            n += 1
+        if n:
             self._save_conn(conn_id)
-        return len(targets)
+        return n
+
+    def reject(self, conn_id: str, table: str, column: str | None = None) -> int:
+        """拒绝草案注释（v2：按表/列撤下；旧 doc_id 版本随草稿文档退役）。"""
+        return self.reject_comment(conn_id, table, column)
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
     def upsert_tags(self, conn_id: str, tags: list[dict[str, Any]]) -> int:
@@ -1259,171 +1378,6 @@ class KnowledgeBase:
 
     def confirmed_tags(self, conn_id: str) -> list[str]:
         return [n for n, v in self._tags.get(conn_id, {}).items() if v.get("status") == "confirmed"]
-
-    # ---------- 枚举（列级取值字典：value -> meaning，draft→人工确认） ----------
-    def annotate_enums(self, conn_id: str, items: list[dict[str, Any]]) -> int:
-        """AI 提案的列级枚举字典入库（status=draft）。items: [{table, column, entries:[{value, meaning}]}]。
-        (table, column, value) 去重，已存在（任意状态）的 value 跳过。"""
-        conn = self._enums.setdefault(conn_id, {})
-        added = 0
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
-        for it in items:
-            table = it.get("table")
-            column = it.get("column")
-            entries = it.get("entries") or []
-            if not table or not column or not entries:
-                continue
-            col = conn.setdefault(table, {}).setdefault(column, [])
-            seen = {(e.get("value")) for e in col}
-            for e in entries:
-                value = e.get("value")
-                if value is None or value == "":
-                    continue
-                if value in seen:
-                    continue
-                seen.add(value)
-                col.append({
-                    "value": value,
-                    "meaning": (e.get("meaning") or "").strip(),
-                    "status": "draft",
-                    "updated_at": now,
-                })
-                added += 1
-        if added:
-            self._save_conn(conn_id)
-        return added
-
-    def enum_drafts(self, conn_id: str) -> list[dict[str, Any]]:
-        """枚举 draft 列表（按列聚合），供审阅队列。"""
-        out: list[dict[str, Any]] = []
-        for table, cols in self._enums.get(conn_id, {}).items():
-            for column, entries in cols.items():
-                drafts = [e for e in entries if e.get("status") == "draft"]
-                if drafts:
-                    out.append({"table": table, "column": column, "entries": drafts})
-        return out
-
-    def confirm_enum(self, conn_id: str, table: str, column: str) -> int:
-        """确认某列全部 draft 枚举 → confirmed。"""
-        col = self._enums.get(conn_id, {}).get(table, {}).get(column)
-        if not col:
-            return 0
-        n = 0
-        for e in col:
-            if e.get("status") == "draft":
-                e["status"] = "confirmed"
-                n += 1
-        if n:
-            self._refresh_col_doc(conn_id, table, column)  # confirmed 对照并入列文档
-            self._save_conn(conn_id)
-        return n
-
-    def reject_enum(self, conn_id: str, table: str, column: str) -> int:
-        """拒绝某列全部枚举条目（含已确认——拒绝即整列撤下，文档中的取值对照同步移除）。"""
-        cols = self._enums.get(conn_id, {}).get(table)
-        if not cols or column not in cols:
-            return 0
-        removed = len(cols[column])
-        del cols[column]
-        if removed:
-            self._refresh_col_doc(conn_id, table, column)  # 撤下取值对照，body/向量恢复
-            self._save_conn(conn_id)
-        return removed
-
-    def save_enum(self, conn_id: str, table: str, column: str, value: str, meaning: str) -> bool:
-        """编辑某枚举值的 meaning（确认前人工修正）。"""
-        col = self._enums.get(conn_id, {}).get(table, {}).get(column)
-        if not col:
-            return False
-        for e in col:
-            if e.get("value") == value:
-                e["meaning"] = (meaning or "").strip()
-                e["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-                self._refresh_col_doc(conn_id, table, column)
-                self._save_conn(conn_id)
-                return True
-        return False
-
-    # ---------- 枚举消费：confirmed 对照并入列注释文档（向量检索/to_context 天然携带） ----------
-    def _enum_suffix(self, conn_id: str, table: str, column: str) -> str:
-        """该列 confirmed 枚举的「。取值：V=M、…」后缀（draft 不入文档；无 confirmed 返回空）。"""
-        entries = self._enums.get(conn_id, {}).get(table, {}).get(column, [])
-        pairs = "、".join(
-            f"{e['value']}={e['meaning']}"
-            for e in entries
-            if e.get("status") == "confirmed" and e.get("meaning")
-        )
-        return f"。取值：{pairs}" if pairs else ""
-
-    def _compose_col_body(self, conn_id: str, table: str, column: str) -> str | None:
-        """由当前 schema 快照重建列文档基础 body 并追加 confirmed 枚举对照（与 _from_schema 同格式）。"""
-        col = next(
-            (c for c in self._schema.get(conn_id, {}).get("columns", [])
-             if c.get("table") == table and c.get("name") == column),
-            None,
-        )
-        if col is None:
-            return None
-        marks = [m for m, f in (("主键", col.get("pk")), ("外键", col.get("fk"))) if f]
-        body = f"{table}.{column} 列，类型 {col.get('type', '')}"
-        if marks:
-            body += "（" + "、".join(marks) + "）"
-        if col.get("comment"):
-            body += f"。列注释：{col['comment']}"
-        return body + self._enum_suffix(conn_id, table, column)
-
-    def _apply_enum_bodies(self, conn_id: str, tables: set[str] | None = None) -> bool:
-        """批量把 confirmed 枚举并入列文档 body（build/incremental 在向量化前调用）。
-
-        tables=None 处理全部列文档；否则只处理指定表。返回是否有变更。
-        """
-        changed = False
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
-        for d in self._auto.get(conn_id, []):
-            if d.archived or d.kind != "column":
-                continue
-            if tables is not None and d.table not in tables:
-                continue
-            new_body = self._compose_col_body(conn_id, d.table or "", d.column or "")
-            if new_body is not None and new_body != d.body:
-                d.body = new_body
-                d.updated_at = now
-                changed = True
-        return changed
-
-    def _refresh_col_doc(self, conn_id: str, table: str, column: str) -> None:
-        """单列枚举变更后同步列文档 body；该文档已有向量时调度单文档重嵌。"""
-        doc = next(
-            (d for d in self._auto.get(conn_id, [])
-             if d.kind == "column" and d.table == table and d.column == column and not d.archived),
-            None,
-        )
-        if doc is None:
-            return
-        new_body = self._compose_col_body(conn_id, table, column)
-        if new_body is None or new_body == doc.body:
-            return
-        doc.body = new_body
-        doc.updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-        self._save_conn(conn_id)
-        if self._vec.get(conn_id, {}).get(doc.id):
-            self._schedule_reembed(conn_id, doc)
-
-    def _schedule_reembed(self, conn_id: str, doc: KnowledgeDoc) -> None:
-        """在运行中的事件循环调度重嵌；同步上下文（无循环）就地执行保持确定性。"""
-        try:
-            asyncio.get_running_loop().create_task(self._reembed_one(conn_id, doc))
-        except RuntimeError:
-            asyncio.run(self._reembed_one(conn_id, doc))
-
-    async def _reembed_one(self, conn_id: str, doc: KnowledgeDoc) -> None:
-        try:
-            vec = await self._emb.embed(self._doc_text(doc))  # 与 _embed_docs 同款文本拼接
-            self._vec.setdefault(conn_id, {})[doc.id] = vec
-            self._rebuild_vstore(conn_id)
-            self._save_conn(conn_id)
-        except Exception as e:
-            logger.warning("[kb.reembed] conn=%s 单文档重嵌失败 doc=%s：%s", conn_id, doc.id, e)
 
     def _fk_adj(self, conn_id: str) -> dict[str, set[str]]:
         adj: dict[str, set[str]] = {}
@@ -1560,67 +1514,59 @@ class KnowledgeBase:
 
     # ---------- 审查视图 ----------
     def overview(self, conn_id: str) -> dict[str, Any]:
-        """人工审查页的数据：表/列注释解析（含草案与确认状态）+ 领域标签 + 图谱 + 采样统计。"""
+        """人工审查页的数据（v2 按表组织）：表块含逐列注释/取值对照/示例与确认状态。"""
         snap = self._schema.get(conn_id, {})
-        auto = {d.id: d for d in self._auto.get(conn_id, [])}
-        drafts = {d.id: d for d in self._drafts.get(conn_id, [])}
-        users = {d.id: d for d in self._user.get(conn_id, [])}
-
-        def comment_for(table: str, column: str | None) -> dict[str, Any]:
-            # 优先级：用户手写 > AI 已确认 > AI 草案 > 结构注释
-            candidates = [
-                d for d in list(users.values()) + list(drafts.values()) + list(auto.values())
-                if d.table == table and d.column == column and d.kind in ("column", "table", "note")
-            ]
-            if not candidates:
-                return {"text": "", "status": "none", "source": ""}
-            best = max(candidates, key=lambda d: (d.status == "confirmed", d.source == "user"))
-            return {"text": best.body, "status": best.status, "source": best.source}
+        kind_by_table = {t["name"]: t.get("kind", "table") for t in snap.get("tables", [])}
+        lib = self._tags.get(conn_id, {})
 
         def table_tags(table: str) -> list[dict[str, Any]]:
-            lib = self._tags.get(conn_id, {})
             return [
                 {"name": n, "status": lib.get(n, {}).get("status", "draft")}
                 for n in self._table_tags.get(conn_id, {}).get(table, []) if n in lib
             ]
 
-        tables = []
-        for t in snap.get("tables", []):
-            c = comment_for(t["name"], None)
-            tables.append({
-                "name": t["name"],
-                "kind": t.get("kind", "table"),
-                "column_count": t.get("column_count", 0),
-                "comment": c["text"], "comment_status": c["status"],
-                "tags": table_tags(t["name"]),
-            })
-
-        columns = []
-        for c in snap.get("columns", []):
-            m = comment_for(c["table"], c["name"])
-            columns.append({
-                "table": c["table"], "name": c["name"],
-                "type": c.get("type", ""), "pk": c.get("pk", False), "fk": c.get("fk", False),
-                "comment": m["text"], "status": m["status"],
+        excluded = set(self.excluded_tables(conn_id))
+        draft_count = 0
+        tables_out: list[dict[str, Any]] = []
+        for tk in self._tables.get(conn_id, {}).values():
+            if tk.status == "draft":
+                draft_count += 1
+            cols = []
+            for ci in tk.columns.values():
+                if ci.status == "draft":
+                    draft_count += 1
+                cols.append({
+                    "name": ci.name, "type": ci.type,
+                    "pk": ci.pk, "fk": ci.fk,
+                    "db_comment": ci.db_comment,
+                    "comment": ci.comment,
+                    "values": ci.values,
+                    "example": ci.example,
+                    "status": ci.status,
+                })
+            tables_out.append({
+                "name": tk.name,
+                "kind": kind_by_table.get(tk.name, "table"),
+                "db_comment": tk.db_comment,
+                "column_count": tk.column_count,
+                "comment": tk.comment,
+                "comment_status": tk.status,
+                "tags": table_tags(tk.name),
+                "excluded": tk.name in excluded,
+                "ddl": tk.ddl,
+                "columns": cols,
             })
 
         return {
-            "tables": tables,
-            "columns": columns,
+            "tables": tables_out,
             "graph": {
                 "edges": self._graph.get(conn_id, {"edges": []}).get("edges", []),
-                "excluded": self.excluded_tables(conn_id),
+                "excluded": sorted(excluded),
                 "llm_draft_edges": self._llm_graph_edges.get(conn_id, []),
             },
             "tags": self.tags(conn_id),
-            "enums": self.enum_drafts(conn_id),
-            "draft_count": len(self._drafts.get(conn_id, [])),
-            "tag_draft_count": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
-            "enum_draft_count": sum(
-                1 for cols in self._enums.get(conn_id, {}).values()
-                for entries in cols.values()
-                for e in entries if e.get("status") == "draft"
-            ),
+            "draft_count": draft_count,
+            "tag_draft_count": sum(1 for v in lib.values() if v.get("status") == "draft"),
             "sample_cols": sum(len(cols) for cols in self._samples.get(conn_id, {}).values()),
             "embedding_provider": (
                 self._runtime.get().embedding_provider if self._runtime else "hash"

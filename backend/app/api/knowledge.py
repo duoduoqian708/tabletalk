@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.core.schema import get_schema, sample_values
 from app.core.sensitive import filter_sensitive
-from app.knowledge.annotator import annotate_domain, annotate_enums, annotate_knowledge
+from app.knowledge.annotator import annotate_domain, annotate_knowledge
 from app.state import get_state
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,8 @@ class ConfirmRequest(BaseModel):
 
 
 class RejectRequest(BaseModel):
-    doc_id: str
+    table: str
+    column: str | None = None
 
 
 class RejectCommentRequest(BaseModel):
@@ -94,18 +95,6 @@ class GraphExcludeRequest(BaseModel):
 class BuildRequest(BaseModel):
     include_samples: bool = False   # spec §3.8：默认不勾，零实例数据出网需显式授权
     trigger: str = "init"   # init | rebuild
-
-
-class EnumConfirmRequest(BaseModel):
-    table: str
-    column: str
-
-
-class EnumSaveRequest(BaseModel):
-    table: str
-    column: str
-    value: str
-    meaning: str
 
 
 def _have(conn_id: str) -> None:
@@ -161,7 +150,7 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
             include_samples=include_samples,
         )
 
-    state.build_jobs.start(conn_id, _run, include_samples=body.include_samples)
+    state.build_jobs.start(conn_id, _run)
     logger.info(
         "[kb.api] conn=%s 启动构建 trigger=%s include_samples=%s",
         conn_id, body.trigger, body.include_samples,
@@ -291,10 +280,9 @@ async def overview(conn_id: str) -> dict:
         # 未构建：返回空结构 + kb_status，前端据此弹构建窗（不再隐式同步构建）
         return {
             "built": False, "kb_status": cfg.kb_status,
-            "tables": [], "columns": [], "graph": {"edges": []},
+            "tables": [], "graph": {"edges": []},
             "tags": {"library": [], "tables": {}},
-            "enums": [],
-            "draft_count": 0, "tag_draft_count": 0, "enum_draft_count": 0, "sample_cols": 0,
+            "draft_count": 0, "tag_draft_count": 0, "sample_cols": 0,
             "embedding_provider": state.runtime.get().embedding_provider,
         }
     # 重启后工件存在但未加载进内存：恢复后再出 overview（否则表列表为空）
@@ -441,16 +429,16 @@ async def confirm(conn_id: str, body: ConfirmRequest) -> dict:
 
 @router.post("/{conn_id}/reject")
 async def reject(conn_id: str, body: RejectRequest) -> dict:
-    """拒绝/丢弃一条草案。"""
+    """拒绝草案注释（按表/列撤下：AI 内容清空回 none）。"""
     _have(conn_id)
     state = get_state()
-    ok = state.knowledge.reject(conn_id, body.doc_id)
-    return {"rejected": ok}
+    n = state.knowledge.reject(conn_id, body.table, body.column)
+    return {"rejected": n}
 
 
 @router.post("/{conn_id}/reject-comment")
 async def reject_comment(conn_id: str, body: RejectCommentRequest) -> dict:
-    """按表/列拒绝草案注释（审查页）。"""
+    """拒绝草案注释（审查页逐列 ✕）。"""
     _have(conn_id)
     state = get_state()
     n = state.knowledge.reject_comment(conn_id, body.table, body.column)
@@ -471,41 +459,6 @@ async def annotate_tags(conn_id: str) -> dict:
     _have(conn_id)
     state = get_state()
     return await annotate_domain(state, conn_id)
-
-
-@router.post("/{conn_id}/annotate-enums")
-async def annotate_enums_endpoint(conn_id: str) -> dict:
-    """AI 生成列级枚举取值字典（draft），写入知识库待人工确认。"""
-    _have(conn_id)
-    state = get_state()
-    return await annotate_enums(state, conn_id)
-
-
-@router.post("/{conn_id}/enums/confirm")
-async def confirm_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
-    """确认某列全部 draft 枚举 → confirmed。"""
-    _have(conn_id)
-    state = get_state()
-    n = state.knowledge.confirm_enum(conn_id, body.table, body.column)
-    return {"confirmed": n}
-
-
-@router.post("/{conn_id}/enums/reject")
-async def reject_enum(conn_id: str, body: EnumConfirmRequest) -> dict:
-    """拒绝某列全部枚举条目（含已确认）→ 移除，列文档取值对照同步撤下。"""
-    _have(conn_id)
-    state = get_state()
-    n = state.knowledge.reject_enum(conn_id, body.table, body.column)
-    return {"rejected": n}
-
-
-@router.post("/{conn_id}/enums/save")
-async def save_enum(conn_id: str, body: EnumSaveRequest) -> dict:
-    """编辑某枚举值的 meaning（确认前人工修正）。"""
-    _have(conn_id)
-    state = get_state()
-    ok = state.knowledge.save_enum(conn_id, body.table, body.column, body.value, body.meaning)
-    return {"saved": ok}
 
 
 @router.post("/{conn_id}/tags/confirm")

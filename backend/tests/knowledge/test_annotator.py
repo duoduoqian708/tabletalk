@@ -66,14 +66,13 @@ async def test_annotate_knowledge_truncates_samples_before_send(app_state):
             {"table": "orders", "name": "status", "type": "varchar(16)", "pk": False, "fk": False, "comment": ""},
         ],
     }
+    # v2：草案落 ColumnInfo，需先有表壳（离线构建即建壳；DDL 实时获取失败自动回退快照合成）
+    await st.knowledge.build("c-anno", schema, enable_ai_annotation=False)
     res = await annotate_knowledge(
         st, "c-anno", include_samples=True, schema=schema,
         samples={"orders": {"status": [long_val]}},
     )
     assert res["added"] > 0
-    body = next(
-        d.body for d in st.knowledge.list_docs("c-anno")
-        if d.column == "status" and d.source == "ai_draft"
-    )
+    body = st.knowledge._tables["c-anno"]["orders"].columns["status"].comment
     assert long_val[:60] in body   # 截断值进入草案（= 发送内容）
     assert long_val not in body    # 原始长句不出网/不入库

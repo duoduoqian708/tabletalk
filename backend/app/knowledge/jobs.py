@@ -21,25 +21,23 @@ logger = logging.getLogger(__name__)
 
 STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向量化", "落盘"]
 
-# 四阶段进度条（同一弹窗内四条独立进度；enums 条目仅在授权样本出网时出现——
-# 未授权时枚举字典不生成，展示该条只会是永不前进的假进度）
+# 三阶段进度条（同一弹窗内三条独立进度；取值对照/示例已并入阶段一逐表注释——
+# 由数据授权门控决定是否产生 values/example，不再有独立枚举阶段）
 PHASES = [
     {"key": "annotate", "label": "AI 正在处理"},
     {"key": "tags", "label": "AI 标签提取"},
     {"key": "graph", "label": "AI 关系识别"},
-    {"key": "enums", "label": "AI 枚举字典"},
 ]
 
 BuildFn = Callable[[Callable[[str, int, str | None, str | None], None]], Awaitable[dict]]
 
 
-def _new_progress(include_samples: bool = False) -> dict[str, Any]:
+def _new_progress() -> dict[str, Any]:
     return {
         "stage": "排队中", "percent": 0, "done": False, "error": None, "detail": None,
         "phases": [
             {"key": p["key"], "label": p["label"], "percent": 0, "detail": None}
             for p in PHASES
-            if include_samples or p["key"] != "enums"
         ],
     }
 
@@ -47,10 +45,10 @@ def _new_progress(include_samples: bool = False) -> dict[str, Any]:
 class BuildJob:
     __slots__ = ("conn_id", "task", "progress", "started_at", "cancelled", "event")
 
-    def __init__(self, conn_id: str, task: asyncio.Task, include_samples: bool = True) -> None:
+    def __init__(self, conn_id: str, task: asyncio.Task) -> None:
         self.conn_id = conn_id
         self.task = task
-        self.progress = _new_progress(include_samples)
+        self.progress = _new_progress()
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.cancelled = False
         self.event = asyncio.Event()  # 进度更新通知（SSE 推送用）
@@ -60,12 +58,12 @@ class BuildJobManager:
     def __init__(self) -> None:
         self._jobs: dict[str, BuildJob] = {}
 
-    def start(self, conn_id: str, build_fn: BuildFn, include_samples: bool = False) -> BuildJob:
+    def start(self, conn_id: str, build_fn: BuildFn) -> BuildJob:
         """启动后台构建任务；旧任务若仍在跑则标记取消（由其在下个阶段边界自杀）。"""
         old = self._jobs.get(conn_id)
         if old is not None and not old.task.done():
             old.cancelled = True
-        job = BuildJob(conn_id, None, include_samples=include_samples)  # type: ignore[arg-type]  # task 下面赋值
+        job = BuildJob(conn_id, None)  # type: ignore[arg-type]  # task 下面赋值
         self._jobs[conn_id] = job
         job.task = asyncio.create_task(run_build_job(job, build_fn))
         return job
@@ -136,10 +134,10 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
         if _is_current():
             state.connections.set_kb_status(conn_id, "pending_review")
         logger.info(
-            "[kb.build] conn=%s 任务完成：docs=%s ai_docs=%s tags=%s enums=%s edges=%s",
+            "[kb.build] conn=%s 任务完成：docs=%s ai_items=%s tags=%s edges=%s",
             conn_id,
             stats.get("docs", 0), stats.get("ai_docs_added", 0), stats.get("ai_tags_added", 0),
-            stats.get("enums_added", 0), stats.get("graph_edges", 0),
+            stats.get("graph_edges", 0),
         )
         return stats
     except asyncio.CancelledError:

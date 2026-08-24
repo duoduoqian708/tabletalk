@@ -64,7 +64,11 @@ def _parse_items(text: str) -> list[dict[str, Any]]:
         comment = str(it.get("comment", "")).strip()
         if not comment:
             continue
-        out.append({"table": it["table"], "column": it.get("column"), "comment": comment})
+        item: dict[str, Any] = {"table": it["table"], "column": it.get("column"), "comment": comment}
+        values = str(it.get("values") or "").strip()  # 取值对照（可选，"P=待付款；S=已发货"）
+        if values:
+            item["values"] = values
+        out.append(item)
     return out
 
 
@@ -94,13 +98,45 @@ def _mock_comments(schema: dict[str, Any], samples: dict[str, dict[str, list[Any
 
 # ---------- 单表 DDL annotation（构建管线调用） ----------
 
+ENUM_MAX_VALUES = 50  # 单列去重取值数超过此数视为非枚举（长文本/主键），不产 values
+
+
+def _first_example(samples: dict[str, list[Any]] | None, column: str) -> str:
+    """示例值：该列首个非空样本，截断 60 字符（无样本/未授权 → 空，天然门控）。"""
+    for v in (samples or {}).get(column, []) or []:
+        if v is not None and str(v) != "":
+            return str(v)[:60]
+    return ""
+
+
+def _distinct_values(samples: dict[str, list[Any]] | None, column: str) -> list[str]:
+    """去重取值（保序），供低基数离散列的 values 对照生成。"""
+    seen: list[str] = []
+    for v in (samples or {}).get(column, []) or []:
+        if v is None:
+            continue
+        s = str(v)
+        if s and s not in seen:
+            seen.append(s)
+            if len(seen) > ENUM_MAX_VALUES:
+                break
+    return seen
+
+
+def _mock_values_for(column: str, samples: dict[str, list[Any]] | None) -> str:
+    """mock：对去重值 ∈ [2,50] 的列生成确定性占位对照（真实含义待人工确认）。"""
+    distinct = _distinct_values(samples, column)
+    if not (2 <= len(distinct) <= ENUM_MAX_VALUES):
+        return ""
+    return "；".join(f"{v}={v}（业务含义待确认）" for v in distinct)
+
 
 def _mock_table_comments_from_ddl(
     table_name: str,
     columns: list[dict[str, Any]],
     samples: dict[str, list[Any]] | None,
 ) -> list[dict[str, Any]]:
-    """mock：为单表生成伪注释（无 LLM 时的 fallback）。"""
+    """mock：为单表生成伪注释（无 LLM 时的 fallback）；低基数列附 values/example。"""
     items: list[dict[str, Any]] = []
     for c in columns:
         extra = ""
@@ -108,10 +144,17 @@ def _mock_table_comments_from_ddl(
             vals = [str(v) for v in (samples or {}).get(c["name"], []) if v is not None][:3]
             if vals:
                 extra = f"，示例取值如 {vals}"
-        items.append({
+        item: dict[str, Any] = {
             "table": table_name, "column": c["name"],
             "comment": f"列 {c['name']}，类型 {c.get('type', '')}{extra}。",
-        })
+        }
+        values = _mock_values_for(c["name"], samples)
+        if values:
+            item["values"] = values
+        example = _first_example(samples, c["name"])
+        if example:
+            item["example"] = example
+        items.append(item)
     return items
 
 
@@ -126,7 +169,9 @@ async def annotate_table(
     """为单张表生成列级注释（DDL 做上下文，可选样本值）。
 
     无论表已有注释与否，都让 AI 生成语义注释（有注释时 AI 参考但不盲信）。
-    返回 items 列表（未落库，由调用方统一 annotate_drafts）。
+    返回 items 列表（未落库，由调用方统一 annotate_drafts）：
+    [{table, column, comment, values?, example?}]。
+    values/example 仅在授权样本（include_samples）时产生——天然门控。
     """
     rt = state.runtime.get()
     columns = [c for c in schema.get("columns", []) if c["table"] == table_name]
@@ -151,7 +196,7 @@ async def annotate_table(
     if existing_lines:
         existing_ref = "\n【已有注释（仅供参考，可能过时或不准确，请结合字段名和上下文独立判断）】\n" + "\n".join(existing_lines)
 
-    # 样本值段
+    # 样本值段（授权才有样本 → values/example 的天然门控）
     samples_ref = ""
     if table_samples:
         sample_lines = []
@@ -162,22 +207,36 @@ async def annotate_table(
                 if val_strs:
                     sample_lines.append(f"- {c['name']}: {val_strs}")
         if sample_lines:
-            samples_ref = "\n【样本取值（用于辅助理解字段含义）】\n" + "\n".join(sample_lines)
+            samples_ref = (
+                "\n【样本取值（用于辅助理解字段含义；低基数离散列请归纳取值对照）】\n"
+                + "\n".join(sample_lines)
+            )
 
     prompt = (
         "你是数据库语义分析专家。请根据建表 DDL 为每列生成准确的中文业务语义注释。\n"
         "注释应简洁（一句话），说明该字段的业务用途，不要复述列名或类型。\n"
+        "若样本显示某列是低基数离散取值（如状态/类型/标志位），请在该列的 values 字段给出"
+        "取值对照，格式为「代码=含义」并用分号分隔（如 P=待付款；S=已发货）；"
+        "主键、金额、时间等高基数列省略 values。\n"
         f"{existing_ref}"
         f"{samples_ref}\n"
         "【建表 DDL】\n"
         f"{table_ddl}\n\n"
         "请为每列生成注释。返回 JSON 数组，元素形如 "
-        '{"table": "表名", "column": "列名", "comment": "一句话中文注释"}。\n'
+        '{"table": "表名", "column": "列名", "comment": "一句话中文注释", '
+        '"values": "可选。代码=含义，分号分隔"}。\n'
         "只返回 JSON，不要多余文字。"
     )
     provider = gw.build_provider(provider_cfg)
     resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
-    return _parse_items(resp.content or "")
+    items = _parse_items(resp.content or "")
+    # example 从样本提取（后端规范化，不依赖 LLM）：首个非空值截断 60
+    for it in items:
+        if it.get("column"):
+            example = _first_example(table_samples, it["column"])
+            if example:
+                it["example"] = example
+    return items
 
 
 async def annotate_tables(
@@ -402,138 +461,6 @@ async def annotate_domain(
         "new_tags": len(tag_props),
         "library_size": len(state.knowledge.tags(conn_id)["library"]),
     }
-
-
-# ---------- 枚举取值字典生成（KC3） ----------
-
-ENUM_MAX_VALUES = 50  # 单列去重取值超过此数视为非枚举（长文本/主键），不抽
-
-
-def _distinct_enum_values(samples: dict[str, list[Any]], table: str, column: str) -> list[str]:
-    vals = samples.get(table, {}).get(column) if samples else None
-    if not vals:
-        return []
-    seen: list[str] = []
-    for v in vals:
-        if v is None:
-            continue
-        s = str(v)
-        if s not in seen:
-            seen.append(s)
-        if len(seen) >= ENUM_MAX_VALUES:
-            break
-    return seen
-
-
-def _mock_enums(schema: dict[str, Any], samples: dict[str, dict[str, list[Any]]]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for c in schema["columns"]:
-        table, column = c["table"], c["name"]
-        distinct = _distinct_enum_values(samples, table, column)
-        if not (2 <= len(distinct) <= ENUM_MAX_VALUES):
-            continue
-        items.append({
-            "table": table, "column": column,
-            "entries": [{"value": v, "meaning": f"{v}（{column} 的枚举取值，业务含义待确认）"} for v in distinct],
-        })
-    return items
-
-
-def _parse_enum_items(text: str) -> list[dict[str, Any]]:
-    t = text.strip()
-    if t.startswith("```"):
-        t = re.sub(r"^```(?:json)?\s*", "", t)
-        t = re.sub(r"\s*```$", "", t)
-    try:
-        data = json.loads(t)
-    except Exception:
-        m = re.search(r"\[.*\]", t, re.S)
-        if not m:
-            return []
-        try:
-            data = json.loads(m.group(0))
-        except Exception:
-            return []
-    if not isinstance(data, list):
-        return []
-    out: list[dict[str, Any]] = []
-    for it in data:
-        if not isinstance(it, dict) or not it.get("table") or not it.get("column"):
-            continue
-        entries = it.get("entries") or []
-        if not isinstance(entries, list):
-            continue
-        clean = [{"value": str(e.get("value", "")), "meaning": str(e.get("meaning", "")).strip()}
-                 for e in entries if isinstance(e, dict) and e.get("value") not in (None, "")]
-        if clean:
-            out.append({"table": it["table"], "column": it["column"], "entries": clean})
-    return out
-
-
-async def annotate_enums_core(
-    state: "AppState",
-    conn_id: str,
-    schema: dict[str, Any],
-    samples: dict[str, dict[str, list[Any]]],
-) -> dict[str, Any]:
-    """枚举抽取核心：调用方已备好 schema/samples。
-
-    授权门控在调用方（build 流水线按 include_samples 决定是否调用本函数）。
-    枚举解释必须发送去重取值才有意义；按用户决策不做列级过滤，出网唯一防护是
-    truncate_samples 值级截断（60 字符）。截断副本贯穿候选判定/mock/prompt/入库
-    四路，保证字典键与发送内容一致。mock 网关时生成确定性占位含义。
-    """
-    from app.knowledge.ddl_context import truncate_samples  # noqa: PLC0415
-    safe = truncate_samples(samples)
-
-    enum_cols = [
-        c for c in schema.get("columns", [])
-        if 2 <= len(_distinct_enum_values(safe, c["table"], c["name"])) <= ENUM_MAX_VALUES
-    ]
-    if not enum_cols:
-        logger.info("[kb.enums] conn=%s 无符合枚举特征的列（取值需 2~%s 个），零产出", conn_id, ENUM_MAX_VALUES)
-        return {"columns": 0, "entries": 0, "added": 0}
-    logger.info("[kb.enums] conn=%s 开始枚举抽取：候选列=%s", conn_id, len(enum_cols))
-
-    rt = state.runtime.get()
-    provider_cfg = rt.provider_config()
-    if gw.is_effective_mock(provider_cfg):
-        logger.debug("[kb.enums] conn=%s mock 占位枚举", conn_id)
-        items = _mock_enums(schema, safe)
-    else:
-        col_lines = []
-        for c in enum_cols:
-            distinct = _distinct_enum_values(safe, c["table"], c["name"])
-            col_lines.append(f"- {c['table']}.{c['name']}（类型 {c.get('type','')}）取值样本: {distinct}")
-        prompt = (
-            "你是数据库知识构建助手。下面给出若干列及其出现的取值样本。请为【每个取值】给出简短中文业务含义。\n"
-            "返回 JSON 数组，元素形如 "
-            "{\"table\":\"表名\",\"column\":\"列名\",\"entries\":[{\"value\":\"取值\",\"meaning\":\"中文含义\"}]}。\n"
-            "只返回 JSON，不要多余文字。\n" + "\n".join(col_lines)
-        )
-        provider = gw.build_provider(provider_cfg)
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
-        items = _parse_enum_items(resp.content or "")
-        if not items:
-            logger.warning("[kb.enums] conn=%s LLM 返回解析为空（枚举字典，候选列=%s）", conn_id, len(enum_cols))
-
-    added = state.knowledge.annotate_enums(conn_id, items)
-    logger.info("[kb.enums] conn=%s 枚举抽取完成：columns=%s added=%s", conn_id, len(items), added)
-    return {"columns": len(items), "entries": added, "added": added}
-
-
-async def annotate_enums(state: "AppState", conn_id: str) -> dict[str, Any]:
-    """兼容包装：自行取 schema + 采样后调核心函数（供既有独立 API 端点使用）。"""
-    schema = await get_schema(state, conn_id)
-    rt = state.runtime.get()
-    samples: dict[str, dict[str, list[Any]]] = {}
-    if rt.kb_sample_rows > 0:
-        for t in schema["tables"]:
-            try:
-                samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-            except Exception:
-                samples[t["name"]] = {}
-    return await annotate_enums_core(state, conn_id, schema, samples)
 
 
 # ---------- LLM 图谱识别（两轮：全局扫描 + 候选验证） ----------

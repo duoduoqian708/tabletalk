@@ -37,19 +37,26 @@ def _f32_list(blob: bytes) -> list[float]:
     return list(struct.unpack(f"<{n}f", blob))
 
 
+KB_SNAPSHOT_VERSION = 2
+
+
 @dataclass
 class KbSnapshot:
-    """一个连接的知识库全量快照（与存储格式无关的中间表示）。"""
-    auto: list[dict] = field(default_factory=list)
-    drafts: list[dict] = field(default_factory=list)
-    user: list[dict] = field(default_factory=list)
+    """一个连接的知识库全量快照（与存储格式无关的中间表示）。
+
+    v2：知识按表组织（tables: name -> TableKnowledge.asdict()，含逐列
+    ColumnInfo）。v1 工件（列碎片 doc + _enums 字典）作废不迁移。
+    """
+    version: int = KB_SNAPSHOT_VERSION
+    tables: dict[str, Any] = field(default_factory=dict)   # name -> TableKnowledge dict
+    auto: list[dict] = field(default_factory=list)   # 结构文档（Task 2 向量化重做前的桥接）
+    user: list[dict] = field(default_factory=list)   # 用户手写笔记（usr-，跨版本保留）
     samples: dict[str, Any] = field(default_factory=dict)
     edges: list[dict] = field(default_factory=list)
     vec: dict[str, list[float]] = field(default_factory=dict)
     table_vec: dict[str, list[float]] = field(default_factory=dict)
     tags: dict[str, Any] = field(default_factory=dict)
     table_tags: dict[str, list[str]] = field(default_factory=dict)
-    enums: dict[str, Any] = field(default_factory=dict)
     schema: dict[str, Any] = field(default_factory=dict)
     emb_fingerprint: str = ""
     schema_fingerprint: str = ""          # 结构指纹（增量对比用）
@@ -93,7 +100,7 @@ class JsonStorage:
 
     def load(self) -> KbSnapshot:
         snap = KbSnapshot()
-        # 用户手写标注（跨连接共享文件）
+        # 用户手写标注（跨连接共享文件，格式跨版本稳定 → 旧工件作废也保留）
         if self._user_path.exists():
             try:
                 data = json.loads(self._user_path.read_text(encoding="utf-8"))
@@ -104,15 +111,19 @@ class JsonStorage:
         if self._artifact_path.exists():
             try:
                 data = json.loads(self._artifact_path.read_text(encoding="utf-8"))
+                if data.get("version") != KB_SNAPSHOT_VERSION:
+                    logger.warning(
+                        "[kb.storage] conn=%s 旧工件作废，请重新构建", self._conn_id,
+                    )
+                    return snap
+                snap.tables = data.get("tables", {})
                 snap.auto = data.get("auto", [])
-                snap.drafts = data.get("drafts", [])
                 snap.samples = data.get("samples", {})
                 snap.edges = data.get("graph", {}).get("edges", [])
                 snap.vec = data.get("vec", {})
                 snap.table_vec = data.get("table_vec", {})
                 snap.tags = data.get("tags", {})
                 snap.table_tags = data.get("table_tags", {})
-                snap.enums = data.get("enums", {})
                 snap.schema = data.get("schema", {})
                 snap.emb_fingerprint = data.get("emb_fingerprint", "")
                 snap.schema_fingerprint = data.get("schema_fingerprint", "")
@@ -138,15 +149,15 @@ class JsonStorage:
                 logger.warning("[kb.storage] %s 用户标注写盘失败：%s", self._user_path.name, e)
         self._artifact_path.write_text(
             json.dumps({
+                "version": KB_SNAPSHOT_VERSION,
+                "tables": snap.tables,
                 "auto": snap.auto,
-                "drafts": snap.drafts,
                 "samples": snap.samples,
                 "graph": {"edges": snap.edges},
                 "vec": snap.vec,
                 "table_vec": snap.table_vec,
                 "tags": snap.tags,
                 "table_tags": snap.table_tags,
-                "enums": snap.enums,
                 "schema": snap.schema,
                 "emb_fingerprint": snap.emb_fingerprint,
                 "schema_fingerprint": snap.schema_fingerprint,
@@ -196,7 +207,6 @@ class SqliteStorage:
 
     def __init__(self, data_dir: Path, conn_id: str) -> None:
         self._path = data_dir / f"knowledge-{conn_id}.db"
-        self._legacy_json = data_dir / f"knowledge-{conn_id}.json"
         self._user_json = data_dir / "knowledge.json"
         self._conn_id = conn_id
         self._lock = threading.Lock()
@@ -245,18 +255,9 @@ class SqliteStorage:
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
 
-    # ---- 迁移：旧 JSON artifact → SQLite ----
+    # ---- 读取 ----
     def load(self) -> KbSnapshot:
-        if not self._path.exists() and self._legacy_json.exists():
-            self._migrate_from_json()
         return self._read()
-
-    def _migrate_from_json(self) -> None:
-        legacy = JsonStorage(self._path.parent, self._conn_id)
-        snap = legacy.load()
-        if not snap.auto and not snap.edges and not snap.user:
-            return  # 空 artifact 不迁移
-        self.save(snap)
 
     def _read(self) -> KbSnapshot:
         snap = KbSnapshot()
@@ -265,6 +266,12 @@ class SqliteStorage:
         try:
             conn = self._conn()
             try:
+                # 版本门控：v1 工件（无 version 或 version<2）作废不迁移，按空库处理
+                if self._meta(conn, "version") != str(KB_SNAPSHOT_VERSION):
+                    logger.warning(
+                        "[kb.storage] conn=%s 旧工件作废，请重新构建", self._conn_id,
+                    )
+                    return snap
                 snap.emb_fingerprint = self._meta(conn, "emb_fingerprint")
                 snap.schema_fingerprint = self._meta(conn, "schema_fingerprint")
                 snap.synced_at = self._meta(conn, "synced_at")
@@ -282,7 +289,7 @@ class SqliteStorage:
                     d.setdefault("conn_id", self._conn_id)
                     d.setdefault("updated_at", "")
                     d["archived"] = bool(d.get("archived"))
-                    (snap.drafts if d["source"] == "ai_draft" else snap.auto if d["source"] != "user" else snap.user).append(d)
+                    (snap.auto if d["source"] != "user" else snap.user).append(d)
                 for row in conn.execute("SELECT * FROM edges"):
                     e = dict(row)
                     e["from"] = e.pop("from_table")
@@ -292,9 +299,9 @@ class SqliteStorage:
                     snap.tags[row["name"]] = {"description": row["description"] or "", "status": row["status"]}
                 for row in conn.execute("SELECT table_name, tags FROM table_tags"):
                     snap.table_tags[row["table_name"]] = json.loads(row["tags"] or "[]")
-                enums_json = self._meta(conn, "enums")
-                if enums_json:
-                    snap.enums = json.loads(enums_json)
+                tables_json = self._meta(conn, "tables")
+                if tables_json:
+                    snap.tables = json.loads(tables_json)
                 for row in conn.execute("SELECT doc_id, vec FROM embeddings"):
                     snap.vec[row["doc_id"]] = _f32_list(row["vec"])
                 for row in conn.execute("SELECT table_name, vec FROM table_embeddings"):
@@ -314,7 +321,7 @@ class SqliteStorage:
             finally:
                 conn.close()
         except Exception as e:
-            logger.warning("[kb.storage] %s SQLite artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
+            logger.warning("[kb.storage] %s SQLite artifact 读取失败（按空库处理）：%s", self._path.name, e)
         return snap
 
     @staticmethod
@@ -335,16 +342,15 @@ class SqliteStorage:
                 conn.execute("DELETE FROM embeddings")
                 conn.execute("DELETE FROM table_embeddings")
                 conn.execute("DELETE FROM meta")
-                for src, docs in (("auto", snap.auto), ("drafts", snap.drafts), ("user", snap.user)):
-                    for d in docs:
-                        conn.execute(
-                            "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at, archived) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (d.get("id"), d.get("kind"), d.get("title"), d.get("body"),
-                             d.get("table"), d.get("column"), d.get("status"), d.get("source", src),
-                             json.dumps(d.get("tags") or [], ensure_ascii=False),
-                             d.get("conn_id"), d.get("updated_at", ""), int(bool(d.get("archived")))),
-                        )
+                for d in snap.auto + snap.user:
+                    conn.execute(
+                        "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at, archived) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (d.get("id"), d.get("kind"), d.get("title"), d.get("body"),
+                         d.get("table"), d.get("column"), d.get("status"), d.get("source", "auto"),
+                         json.dumps(d.get("tags") or [], ensure_ascii=False),
+                         d.get("conn_id"), d.get("updated_at", ""), int(bool(d.get("archived")))),
+                    )
                 for e in snap.edges:
                     conn.execute(
                         "INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, shared) VALUES (?,?,?,?,?,?,?)",
@@ -361,6 +367,7 @@ class SqliteStorage:
                     conn.execute("INSERT INTO embeddings (doc_id, vec) VALUES (?,?)", (doc_id, _f32_blob(vec)))
                 for table, vec in snap.table_vec.items():
                     conn.execute("INSERT INTO table_embeddings (table_name, vec) VALUES (?,?)", (table, _f32_blob(vec)))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('version', ?)", (str(KB_SNAPSHOT_VERSION),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('emb_fingerprint', ?)", (snap.emb_fingerprint,))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema_fingerprint', ?)", (snap.schema_fingerprint,))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('synced_at', ?)", (snap.synced_at,))
@@ -374,7 +381,7 @@ class SqliteStorage:
                              (json.dumps(snap.llm_edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
-                conn.execute("INSERT INTO meta (key, value) VALUES ('enums', ?)", (json.dumps(snap.enums, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('tables', ?)", (json.dumps(snap.tables, ensure_ascii=False),))
                 # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）
                 if self._vec_ok:
                     conn.execute("DELETE FROM doc_vec")

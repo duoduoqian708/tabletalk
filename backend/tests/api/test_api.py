@@ -284,14 +284,16 @@ async def test_knowledge_graph_and_overview(client, conn_id):
     g = await client.get(f"/api/v1/knowledge/{conn_id}/graph")
     assert g.json()["built"] is True
     assert any(e["kind"] == "fk" for e in g.json()["edges"])
-    # 审查视图：表/列 + 确认状态字段
+    # 审查视图（v2 按表组织）：表块含列数组与确认状态字段
     ov = await client.get(f"/api/v1/knowledge/{conn_id}/overview")
     o = ov.json()
     assert o["built"] is True
     assert len(o["tables"]) > 0
     assert "comment_status" in o["tables"][0]
     assert "tags" in o["tables"][0]
-    assert "type" in o["columns"][0]
+    assert "columns" in o["tables"][0]
+    assert "type" in o["tables"][0]["columns"][0]
+    assert "values" in o["tables"][0]["columns"][0] and "example" in o["tables"][0]["columns"][0]
 
 
 async def test_knowledge_tags_flow(client, conn_id):
@@ -319,17 +321,17 @@ async def test_knowledge_tags_flow(client, conn_id):
     d = await client.post(f"/api/v1/knowledge/{conn_id}/tags/reject", json={"name": other})
     assert d.json()["rejected"] is True
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate", json={"include_samples": False})
-    assert r.json()["items"] > 0  # items 可能为0（build 已创建全部 draft），重点是后续 docs 检查
-    # 草案状态 = draft
-    docs = await client.get(f"/api/v1/knowledge/{conn_id}/docs")
-    drafts = [d for d in docs.json()["docs"] if d["source"] == "ai_draft"]
-    assert drafts and all(d["status"] == "draft" for d in drafts)
+    assert r.json()["items"] > 0  # items 可能为0（build 已创建全部 draft），重点是后续状态检查
+    # 草案状态 = draft（v2：草案在 TableKnowledge/ColumnInfo，不再有 ai_draft 文档）
+    ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    drafts = [c for t in ov["tables"] for c in t["columns"] if c["status"] == "draft"]
+    assert drafts
     # 确认全部 → 变 confirmed
     c = await client.post(f"/api/v1/knowledge/{conn_id}/confirm", json={})
     assert c.json()["confirmed"] >= 1
-    docs2 = await client.get(f"/api/v1/knowledge/{conn_id}/docs")
-    confirmed = [d for d in docs2.json()["docs"] if d["source"] == "ai_draft"]
-    assert all(d["status"] == "confirmed" for d in confirmed)
+    ov2 = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    confirmed_cols = [c for t in ov2["tables"] for c in t["columns"]]
+    assert all(c["status"] == "confirmed" for c in confirmed_cols)
 
 
 async def test_sql_format(client):
