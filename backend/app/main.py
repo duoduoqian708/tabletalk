@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,8 +33,8 @@ def _ensure_demo_db() -> None:
         db = get_env().data_dir / "demo.db"
         if not db.exists():
             build_demo_db(db)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).warning("演示库播种失败（不阻塞启动）：%s", e)
 
 
 @asynccontextmanager
@@ -57,6 +59,12 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # 根日志无 handler 时配置一次（幂等守卫）：否则模块 logger 的 INFO 不会显示
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=os.environ.get("TABLETALK_LOG_LEVEL", "INFO"),
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
     env = get_env()
     app = FastAPI(title="tabletalk sidecar", version="0.1.0", lifespan=lifespan)
     app.add_middleware(

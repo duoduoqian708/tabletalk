@@ -13,8 +13,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any, Awaitable, Callable
+
+logger = logging.getLogger(__name__)
 
 STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向量化", "落盘"]
 
@@ -132,8 +135,15 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
         job.event.set()
         if _is_current():
             state.connections.set_kb_status(conn_id, "pending_review")
+        logger.info(
+            "[kb.build] conn=%s 任务完成：docs=%s ai_docs=%s tags=%s enums=%s edges=%s",
+            conn_id,
+            stats.get("docs", 0), stats.get("ai_docs_added", 0), stats.get("ai_tags_added", 0),
+            stats.get("enums_added", 0), stats.get("graph_edges", 0),
+        )
         return stats
     except asyncio.CancelledError:
+        logger.info("[kb.build] conn=%s 构建取消", conn_id)
         # 用户取消（或旧任务被替换）：仅当前任务才清理状态，避免污染新任务
         if _is_current():
             state.knowledge.clear(conn_id)
@@ -142,6 +152,7 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
         job.event.set()
         raise
     except Exception as e:  # noqa: BLE001
+        logger.warning("[kb.build] conn=%s 构建失败：%s", conn_id, e)
         if _is_current():
             state.connections.set_kb_status(conn_id, "none")
         job.progress.update({"stage": "失败", "percent": 0, "done": True, "error": str(e)})
@@ -185,23 +196,25 @@ class SyncLoop:
             try:
                 schema = await get_schema(state, c.id)
                 if not state.knowledge.needs_sync(c.id, schema):
+                    logger.debug("[kb.sync] conn=%s 结构无变化，跳过", c.id)
                     continue
                 samples = {}
                 if rt.kb_sample_rows > 0:
                     for t in schema["tables"]:
                         try:
                             samples[t["name"]] = await sample_values(state, c.id, t["name"], rt.kb_sample_rows)
-                        except Exception:
+                        except Exception as e:
+                            logger.warning("[kb.sync] conn=%s 抽样失败 table=%s：%s", c.id, t["name"], e)
                             samples[t["name"]] = {}
                 result = await state.knowledge.sync(c.id, schema, samples)
                 if result.get("changed"):
-                    import logging
-                    logging.getLogger(__name__).info(
-                        "[kb.sync] %s 增量同步：+%s表 -%s表 变更%s表",
-                        c.name, result.get("tables_added", 0),
+                    logger.info(
+                        "[kb.sync] %s(%s) 增量同步：+%s表 -%s表 变更%s表",
+                        c.name, c.id, result.get("tables_added", 0),
                         result.get("tables_removed", 0), result.get("tables_changed", 0),
                     )
-            except Exception:  # noqa: BLE001 - 单个连接失败不影响其他
+            except Exception as e:  # noqa: BLE001 - 单个连接失败不影响其他
+                logger.warning("[kb.sync] 连接 %s(%s) 同步检查失败：%s", c.name, c.id, e)
                 continue
 
     async def _run(self) -> None:
@@ -211,8 +224,8 @@ class SyncLoop:
                     await self.tick()
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[kb.sync] tick 异常：%s", e)
                 await asyncio.sleep(self._sleep)
         except asyncio.CancelledError:
             pass

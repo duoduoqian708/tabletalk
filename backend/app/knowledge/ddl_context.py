@@ -5,11 +5,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.state import AppState
+
+logger = logging.getLogger(__name__)
 
 # 构建图谱时过滤的噪音列（时间戳/审计人/软删除标记），减少 LLM 干扰
 NOISE_COLUMNS: set[str] = {
@@ -80,6 +83,7 @@ async def generate_ddls_all(state: "AppState", conn_id: str) -> dict[str, str]:
     schema = await get_schema(state, conn_id)
     table_names = [t["name"] for t in schema.get("tables", [])]
     if not table_names:
+        logger.info("[kb.ddl] conn=%s schema 无表，DDL 为空", conn_id)
         return {}
     return await _generate_ddls_batch(state, conn_id, table_names)
 
@@ -142,6 +146,7 @@ async def _generate_ddls_batch(state: "AppState", conn_id: str, tables: list[str
             for tbl in tables:
                 tab = table_map.get(tbl)
                 if tab is None:
+                    logger.warning("[kb.ddl] conn=%s 表 %s 在库中未找到，DDL 跳过", conn_id, tbl)
                     continue
                 cols = [c for c in all_columns if c.table == tbl]
                 tbl_fks = fks_by_table.get(tbl, [])

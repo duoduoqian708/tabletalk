@@ -10,12 +10,15 @@ k-hop 提供标准递归 CTE 查询，向量提供 vec0 虚拟表查询（sqlite
 from __future__ import annotations
 
 import json
+import logging
 import os
 import struct
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 try:
     import sqlite_vec  # type: ignore
@@ -95,8 +98,8 @@ class JsonStorage:
             try:
                 data = json.loads(self._user_path.read_text(encoding="utf-8"))
                 snap.user = data.get(self._conn_id, [])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[kb.storage] %s 用户标注读取失败：%s", self._user_path.name, e)
         # 连接 artifact
         if self._artifact_path.exists():
             try:
@@ -118,8 +121,8 @@ class JsonStorage:
                 snap.synced_at = data.get("synced_at", "")
                 snap.llm_graph_edges = data.get("llm_graph_edges", [])
                 snap.llm_edge_tombstones = data.get("llm_edge_tombstones", [])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[kb.storage] %s artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
         return snap
 
     def save(self, snap: KbSnapshot) -> None:
@@ -131,8 +134,8 @@ class JsonStorage:
                     data = json.loads(self._user_path.read_text(encoding="utf-8"))
                 data[self._conn_id] = snap.user
                 self._user_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("[kb.storage] %s 用户标注写盘失败：%s", self._user_path.name, e)
         self._artifact_path.write_text(
             json.dumps({
                 "auto": snap.auto,
@@ -310,8 +313,8 @@ class SqliteStorage:
                     snap.llm_edge_tombstones = json.loads(llm_tombstones_json)
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[kb.storage] %s SQLite artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
         return snap
 
     @staticmethod

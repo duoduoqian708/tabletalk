@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,8 @@ from app.core.schema import get_schema, sample_values
 from app.core.sensitive import filter_sensitive
 from app.knowledge.annotator import annotate_domain, annotate_enums, annotate_knowledge
 from app.state import get_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
@@ -159,6 +162,10 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
         )
 
     state.build_jobs.start(conn_id, _run, include_samples=body.include_samples)
+    logger.info(
+        "[kb.api] conn=%s 启动构建 trigger=%s include_samples=%s",
+        conn_id, body.trigger, body.include_samples,
+    )
     return {"job_id": conn_id, "kb_status": "building", "stage": "排队中"}
 
 
@@ -242,6 +249,7 @@ async def sync_kb(conn_id: str) -> dict:
         raise HTTPException(status_code=409, detail="构建/同步已在运行")
     schema = await _kb_schema(state, conn_id, refresh=True)  # 手动检查：强制最新结构
     if not state.knowledge.needs_sync(conn_id, schema):
+        logger.debug("[kb.api] conn=%s 手动同步：结构无变化", conn_id)
         return {
             "changed": False, "tables_added": 0, "tables_removed": 0,
             "tables_changed": 0, "message": "结构无变化",
@@ -252,9 +260,16 @@ async def sync_kb(conn_id: str) -> dict:
         for t in schema["tables"]:
             try:
                 samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-            except Exception:
+            except Exception as e:
+                logger.warning("[kb.api] conn=%s 抽样失败 table=%s：%s", conn_id, t["name"], e)
                 samples[t["name"]] = {}
-    return await state.knowledge.sync(conn_id, schema, samples)
+    result = await state.knowledge.sync(conn_id, schema, samples)
+    logger.info(
+        "[kb.api] conn=%s 手动同步结果：changed=%s +%s表 -%s表 变更%s表",
+        conn_id, result.get("changed"), result.get("tables_added", 0),
+        result.get("tables_removed", 0), result.get("tables_changed", 0),
+    )
+    return result
 
 
 @router.post("/{conn_id}/confirm-all")

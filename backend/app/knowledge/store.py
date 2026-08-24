@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import threading
@@ -25,6 +26,8 @@ from app.knowledge.vectorstore import NumpyVectorStore, VectorChunk, VectorStore
 
 if TYPE_CHECKING:
     from app.core.settings import SettingsStore
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeBase:
@@ -125,8 +128,8 @@ class KnowledgeBase:
                 llm_edge_tombstones=self._llm_edge_tombstones.get(conn_id, []),
             )
             self._storage(conn_id).save(snap)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[kb.store] conn=%s 快照落盘失败：%s", conn_id, e)
 
     # ---------- 自动抽取 ----------
     @staticmethod
@@ -219,8 +222,8 @@ class KnowledgeBase:
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=0,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[kb.store] conn=%s 记录嵌入用量失败：%s", conn_id, e)
 
     def _emb_fingerprint(self) -> str:
         """当前嵌入配置指纹：hash | api:model@base_url。用户更换嵌入模型后指纹变化 → 触发向量重嵌。"""
@@ -282,7 +285,8 @@ class KnowledgeBase:
             try:
                 snap = self._storage(conn_id).load()
                 self._edge_tombstones[conn_id] = snap.edge_tombstones or []
-            except Exception:
+            except Exception as e:
+                logger.warning("[kb.build] conn=%s 读取历史墓碑失败：%s", conn_id, e)
                 self._edge_tombstones[conn_id] = []
         if on_progress:
             on_progress("发现结构", 5, None)
@@ -330,7 +334,9 @@ class KnowledgeBase:
                     _st, conn_id, ddl_map, self._schema[conn_id],
                     samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
                 )
-            except Exception:
+                logger.info("[kb.build] conn=%s 阶段=annotate 完成：ai_docs=%s", conn_id, ai_docs_added)
+            except Exception as e:
+                logger.warning("[kb.build] conn=%s 阶段=annotate AI注释异常：%s", conn_id, e)
                 if on_progress:
                     on_progress("AI 正在处理", 100, None, phase="annotate")
 
@@ -344,8 +350,9 @@ class KnowledgeBase:
                     schema=self._schema[conn_id], ddl_overview=overview_text,
                 )
                 ai_tags_added = domain_result.get("new_tags", 0)
-            except Exception:
-                pass
+                logger.info("[kb.build] conn=%s 阶段=tags 完成：new_tags=%s", conn_id, ai_tags_added)
+            except Exception as e:
+                logger.warning("[kb.build] conn=%s 阶段=tags 标签提取异常：%s", conn_id, e)
             if on_progress:
                 on_progress("AI 标签提取", 100, None, phase="tags")
 
@@ -368,8 +375,9 @@ class KnowledgeBase:
                     if self._llm_edge_key(e) in tombstone_keys:
                         e["status"] = "previously_rejected"
                 self._llm_graph_edges[conn_id] = llm_edges
-            except Exception:
-                pass
+                logger.info("[kb.build] conn=%s 阶段=graph 完成：llm_edges=%s", conn_id, len(llm_edges))
+            except Exception as e:
+                logger.warning("[kb.build] conn=%s 阶段=graph 关系识别异常：%s", conn_id, e)
             if on_progress:
                 on_progress("AI 关系识别", 100, None, phase="graph")
 
@@ -384,8 +392,9 @@ class KnowledgeBase:
                         self._samples.get(conn_id, {}),
                     )
                     ai_enums_added = enum_result.get("added", 0)
-                except Exception:
-                    pass
+                    logger.info("[kb.build] conn=%s 阶段=enums 完成：enums=%s", conn_id, ai_enums_added)
+                except Exception as e:
+                    logger.warning("[kb.build] conn=%s 阶段=enums 枚举抽取异常：%s", conn_id, e)
                 if on_progress:
                     on_progress("枚举字典", 100, None, phase="enums")
 
@@ -412,6 +421,11 @@ class KnowledgeBase:
         self._save_conn(conn_id)
         # 记录嵌入模型用量（ApiEmbedder 累计 usage → llm_log）
         self._log_embedding_usage(conn_id, "build")
+        logger.info(
+            "[kb.build] conn=%s build 完成：docs=%s ai_docs=%s tags=%s graph=%s enums=%s",
+            conn_id, len(self._auto[conn_id]), ai_docs_added, ai_tags_added,
+            len(self._graph.get(conn_id, {}).get("edges", [])), ai_enums_added,
+        )
         return {
             "docs": len(self._auto[conn_id]),
             "ai_docs_added": ai_docs_added,
@@ -637,8 +651,9 @@ class KnowledgeBase:
                         schema=self._schema[conn_id], ddl_overview=overview_text,
                     )
                     ai_tags_added = domain_result.get("new_tags", 0)
-            except Exception:
-                pass
+                logger.info("[kb.incr] conn=%s AI注释完成：ai_docs=%s new_tags=%s", conn_id, ai_docs_added, ai_tags_added)
+            except Exception as e:
+                logger.warning("[kb.incr] conn=%s 增量AI注释/标签异常：%s", conn_id, e)
             # 变化表枚举重提（数据授权门控；独立容错不影响注释/标签流程）。
             # samples 用合并后的 all_samples；schema 用新 schema 的变化表子集（只重提变化表）。
             if include_samples:
@@ -659,16 +674,17 @@ class KnowledgeBase:
                         _st, conn_id, sub_schema, all_samples,
                     )
                     ai_enums_added = enum_result.get("added", 0)
-                except Exception:
-                    pass
+                    logger.info("[kb.incr] conn=%s 枚举重提完成：enums=%s", conn_id, ai_enums_added)
+                except Exception as e:
+                    logger.warning("[kb.incr] conn=%s 枚举重提异常：%s", conn_id, e)
             # 嵌入新增的 AI draft 文档
             if ai_docs_added:
                 try:
                     new_drafts = [d for d in self._drafts.get(conn_id, []) if d.source == "ai_draft"]
                     if new_drafts:
                         await self._embed_docs(conn_id, new_drafts)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("[kb.incr] conn=%s draft 文档嵌入失败：%s", conn_id, e)
 
         # 5. 图谱：新 schema + 合并样本全量重构图（FK 边同步 + 墓碑遵守）
         self._graph[conn_id] = self._build_graph(conn_id, new_schema, all_samples)
@@ -678,6 +694,11 @@ class KnowledgeBase:
         self._synced_at[conn_id] = now
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
+        logger.info(
+            "[kb.incr] conn=%s 增量同步完成：+表%s -表%s 变更表%s docs=%s enums=%s",
+            conn_id, len(diff["added_tables"]), len(diff["removed_tables"]),
+            len(rebuild_tables), docs_added, ai_enums_added,
+        )
         return {
             "changed": True,
             "docs_added": docs_added,
@@ -706,7 +727,8 @@ class KnowledgeBase:
             text = f"{t} 表：{col_txt}；注释：{tinfo.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
             try:
                 vecs[t] = await self._emb.embed(text)
-            except Exception:
+            except Exception as e:
+                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, t, e)
                 vecs[t] = [0.0]
         self._table_vec[conn_id] = vecs
 
@@ -731,12 +753,19 @@ class KnowledgeBase:
         new_fp = self._schema_fingerprint(schema)
         old_fp = self._schema_fingerprint_map.get(conn_id, "")
         if new_fp == old_fp:
+            logger.debug("[kb.sync] conn=%s 结构无变化，跳过增量", conn_id)
             return {"changed": False, "fingerprint": new_fp, "tables_added": 0, "tables_removed": 0, "tables_changed": 0}
         if not self._auto.get(conn_id):
             # 未构建过的连接不应走增量（调用方应保证 ready）；防御性直接全量
+            logger.warning("[kb.sync] conn=%s 无已构建工件，防御性回退全量构建", conn_id)
             return await self.build(conn_id, schema, samples, include_samples=include_samples)
         result = await self.incremental_build(conn_id, schema, samples, include_samples=include_samples)
         result["fingerprint"] = new_fp
+        logger.info(
+            "[kb.sync] conn=%s 增量同步：+表%s -表%s 变更表%s",
+            conn_id, result.get("tables_added", 0),
+            result.get("tables_removed", 0), result.get("tables_changed", 0),
+        )
         return result
 
     async def _embed_table_docs(self, conn_id: str, schema: dict[str, Any],
@@ -770,7 +799,8 @@ class KnowledgeBase:
             text = f"{name} 表：{col_txt}；注释：{t.get('comment', '')}；领域标签：{'、'.join(confirmed)}"
             try:
                 vecs[name] = await self._emb.embed(text)
-            except Exception:
+            except Exception as e:
+                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, name, e)
                 vecs[name] = [0.0]
         self._table_vec[conn_id] = vecs
 
@@ -784,7 +814,8 @@ class KnowledgeBase:
                 on_progress("向量化", p0 + (p1 - p0) * i // max(1, n), None)
             try:
                 vecs[did] = await self._emb.embed(text)
-            except Exception:
+            except Exception as e:
+                logger.warning("[kb.embed] conn=%s 文档向量失败 doc=%s：%s", conn_id, did, e)
                 vecs[did] = [0.0]
         self._vec[conn_id] = {**self._vec.get(conn_id, {}), **vecs}
 
@@ -1391,8 +1422,8 @@ class KnowledgeBase:
             self._vec.setdefault(conn_id, {})[doc.id] = vec
             self._rebuild_vstore(conn_id)
             self._save_conn(conn_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[kb.reembed] conn=%s 单文档重嵌失败 doc=%s：%s", conn_id, doc.id, e)
 
     def _fk_adj(self, conn_id: str) -> dict[str, set[str]]:
         adj: dict[str, set[str]] = {}

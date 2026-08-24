@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,8 @@ from app.core.schema import get_schema, sample_values
 
 if TYPE_CHECKING:
     from app.state import AppState
+
+logger = logging.getLogger(__name__)
 
 
 def _prompt_schema(schema: dict[str, Any], samples: dict[str, dict[str, list[Any]]]) -> str:
@@ -134,6 +137,7 @@ async def annotate_table(
 
     provider_cfg = rt.provider_config()
     if gw.is_effective_mock(provider_cfg):
+        logger.debug("[kb.annotate] conn=%s mock 伪注释 table=%s", conn_id, table_name)
         return _mock_table_comments_from_ddl(table_name, columns, table_samples)
 
     # 构建已有注释参考段（仅标注哪些列有注释，AI 参考但不盲信）
@@ -194,6 +198,7 @@ async def annotate_tables(
     items_all: list[dict[str, Any]] = []
     table_names = [t["name"] for t in schema.get("tables", []) if t["name"] in ddl_map]
     n = max(1, len(table_names))
+    logger.info("[kb.annotate] conn=%s 开始逐表注释：tables=%s", conn_id, len(table_names))
     for i, tbl in enumerate(table_names):
         if on_progress:
             on_progress("AI 正在处理", p0 + (p1 - p0) * i // n, tbl, phase="annotate")
@@ -201,10 +206,16 @@ async def annotate_tables(
             tbl_items = await annotate_table(
                 state, conn_id, tbl, ddl_map[tbl], schema, samples,
             )
+            if not tbl_items:
+                logger.debug("[kb.annotate] conn=%s 单表注释为空 table=%s", conn_id, tbl)
             items_all.extend(tbl_items)
-        except Exception:
+        except Exception as e:
+            logger.warning("[kb.annotate] conn=%s 单表注释失败 table=%s：%s", conn_id, tbl, e)
             continue
+    if not items_all and table_names:
+        logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
     added = state.knowledge.annotate_drafts(conn_id, items_all)
+    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s", conn_id, len(items_all), added)
     return added
 
 
@@ -337,7 +348,9 @@ async def annotate_domain(
     ) or "（暂无）"
 
     rt = state.runtime.get()
+    logger.info("[kb.tags] conn=%s 开始领域标签提取：tables=%s", conn_id, len(schema.get("tables", [])))
     if gw.is_effective_mock(rt.provider_config()):
+        logger.debug("[kb.tags] conn=%s mock 伪标签", conn_id)
         items = _mock_domain_tags(schema)
     else:
         if ddl_overview:
@@ -358,6 +371,8 @@ async def annotate_domain(
         provider = gw.build_provider(rt.provider_config())
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
         items = _parse_domain_items(resp.content or "")
+        if not items:
+            logger.warning("[kb.tags] conn=%s LLM 返回解析为空（领域标签）", conn_id)
 
     # 落库：表描述草案 + 标签草案 + 打标
     desc_drafts = [
@@ -377,6 +392,10 @@ async def annotate_domain(
     for it in items:
         state.knowledge.assign_table_tags(conn_id, it["table"], it["tags"])
 
+    logger.info(
+        "[kb.tags] conn=%s 标签提取完成：tables=%s desc=%s new_tags=%s",
+        conn_id, len(items), len(desc_drafts), len(tag_props),
+    )
     return {
         "tables": len(items),
         "descriptions": len(desc_drafts),
@@ -472,11 +491,14 @@ async def annotate_enums_core(
         if 2 <= len(_distinct_enum_values(safe, c["table"], c["name"])) <= ENUM_MAX_VALUES
     ]
     if not enum_cols:
+        logger.info("[kb.enums] conn=%s 无符合枚举特征的列（取值需 2~%s 个），零产出", conn_id, ENUM_MAX_VALUES)
         return {"columns": 0, "entries": 0, "added": 0}
+    logger.info("[kb.enums] conn=%s 开始枚举抽取：候选列=%s", conn_id, len(enum_cols))
 
     rt = state.runtime.get()
     provider_cfg = rt.provider_config()
     if gw.is_effective_mock(provider_cfg):
+        logger.debug("[kb.enums] conn=%s mock 占位枚举", conn_id)
         items = _mock_enums(schema, safe)
     else:
         col_lines = []
@@ -492,8 +514,11 @@ async def annotate_enums_core(
         provider = gw.build_provider(provider_cfg)
         resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
         items = _parse_enum_items(resp.content or "")
+        if not items:
+            logger.warning("[kb.enums] conn=%s LLM 返回解析为空（枚举字典，候选列=%s）", conn_id, len(enum_cols))
 
     added = state.knowledge.annotate_enums(conn_id, items)
+    logger.info("[kb.enums] conn=%s 枚举抽取完成：columns=%s added=%s", conn_id, len(items), added)
     return {"columns": len(items), "entries": added, "added": added}
 
 
@@ -622,7 +647,12 @@ async def annotate_graph(
     """
     rt = state.runtime.get()
     provider_cfg = rt.provider_config()
+    logger.info(
+        "[kb.graph] conn=%s 开始关系识别：tables=%s fks=%s",
+        conn_id, len(schema.get("tables", [])), len(schema.get("foreign_keys", [])),
+    )
     if gw.is_effective_mock(provider_cfg):
+        logger.debug("[kb.graph] conn=%s mock FK 边", conn_id)
         if on_progress:
             on_progress("AI 关系识别", 100, None, phase="graph")
         return _mock_graph_edges(schema)
@@ -647,6 +677,9 @@ async def annotate_graph(
         [{"role": "user", "content": global_prompt}], tools=None,
     )
     global_edges = _parse_graph_edges(global_resp.content or "")
+    if not global_edges:
+        logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·全局扫描）", conn_id)
+    logger.debug("[kb.graph] conn=%s 全局扫描边数=%s", conn_id, len(global_edges))
     # 标记来源
     for e in global_edges:
         e["source"] = "llm_global"
@@ -656,6 +689,7 @@ async def annotate_graph(
     # ---- 第二轮：候选验证（精确度优先） ----
     candidates = _generate_candidate_pairs(schema)
     if not candidates:
+        logger.info("[kb.graph] conn=%s 无程序候选对，仅用全局扫描边 %s 条", conn_id, len(global_edges))
         return global_edges
 
     # 标记已被全局扫描覆盖的候选对
@@ -674,6 +708,7 @@ async def annotate_graph(
             unverified.append(c)
 
     if not unverified:
+        logger.info("[kb.graph] conn=%s 候选对均已被全局扫描覆盖，边 %s 条", conn_id, len(global_edges))
         return global_edges
 
     # 构建待验证候选的上下文（只给相关表的结构）
@@ -716,6 +751,8 @@ async def annotate_graph(
         [{"role": "user", "content": verify_prompt}], tools=None,
     )
     verified_edges = _parse_graph_edges(verify_resp.content or "")
+    if not verified_edges:
+        logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·候选验证 %s 条）", conn_id, len(unverified))
     for e in verified_edges:
         e["source"] = "llm_verify"
         # 如果 LLM 返回了 status=rejected，过滤掉
@@ -726,4 +763,6 @@ async def annotate_graph(
 
     # 合并两轮结果（全局扫描 + 候选验证，去重）
     all_edges = global_edges + [e for e in verified_edges if e.get("status") != "rejected"]
+    logger.info("[kb.graph] conn=%s 关系识别完成：global=%s verified=%s total=%s",
+                conn_id, len(global_edges), len(verified_edges), len(all_edges))
     return all_edges

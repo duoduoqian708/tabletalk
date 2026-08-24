@@ -9,11 +9,14 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 import zlib
 from typing import Protocol
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 DIM = 256
 
@@ -55,13 +58,21 @@ class ApiEmbedder:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{self.base_url}/embeddings",
-                headers=headers,
-                json={"model": self.model, "input": [text]},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/embeddings",
+                    headers=headers,
+                    json={"model": self.model, "input": [text]},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except httpx.HTTPError as e:
+                status = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
+                logger.warning(
+                    "[kb.embedding] embed 请求失败 model=%s base=%s status=%s：%s",
+                    self.model, self.base_url, status, e,
+                )
+                raise
         vec = data["data"][0]["embedding"]
         # 解析 usage（OpenAI 兼容 /embeddings 响应含 usage 字段）
         usage = data.get("usage")
@@ -74,6 +85,7 @@ class ApiEmbedder:
             self.total_usage["total_tokens"] += self.last_usage["total_tokens"]
         else:
             self.last_usage = None
+        logger.debug("[kb.embedding] model=%s tokens=%s", self.model, self.total_usage["total_tokens"])
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
 
