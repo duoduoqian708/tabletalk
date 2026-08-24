@@ -117,7 +117,7 @@ class Settings:
     embedding_base_url: str = ""
     embedding_model: str = "bge-m3"
     embedding_api_key: str = ""
-    kb_sample_rows: int = 10
+    kb_sample_rows: int = 15
     kb_ai_annotation_samples: bool = False
 
     def __post_init__(self) -> None:
@@ -150,7 +150,7 @@ class Settings:
             embedding_base_url=os.environ.get("TABLETALK_EMBEDDING_BASE_URL", ""),
             embedding_model=os.environ.get("TABLETALK_EMBEDDING_MODEL", "bge-m3"),
             embedding_api_key=os.environ.get("TABLETALK_EMBEDDING_API_KEY", ""),
-            kb_sample_rows=int(os.environ.get("TABLETALK_KB_SAMPLE_ROWS", "10")),
+            kb_sample_rows=int(os.environ.get("TABLETALK_KB_SAMPLE_ROWS", "15")),
             kb_ai_annotation_samples=os.environ.get("TABLETALK_KB_AI_ANNOTATION_SAMPLES", "") == "1",
         )
 

@@ -425,7 +425,7 @@ class SettingsStore:
             gate_review_threshold=data.get("gate_review_threshold", 1000),
             gate_rules=data.get("gate_rules", {}),
             policy=policy,
-            kb_sample_rows=data.get("kb_sample_rows", 10),
+            kb_sample_rows=data.get("kb_sample_rows", 15),
             kb_ai_annotation_samples=data.get("kb_ai_annotation_samples", False),
             privacy_mode=pm,
             query_max_rows=data.get("query_max_rows", 1000),
