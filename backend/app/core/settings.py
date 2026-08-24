@@ -68,7 +68,7 @@ class RuntimeSettings:
     gate_review_threshold: int = 1000
     gate_rules: dict[str, bool] = field(default_factory=dict)
     policy: Policy = field(default_factory=Policy)
-    kb_sample_rows: int = 10
+    kb_sample_rows: int = 15
     kb_ai_annotation_samples: bool = False
     kb_sync_minutes: int = 30
     privacy_mode: str = "standard"
