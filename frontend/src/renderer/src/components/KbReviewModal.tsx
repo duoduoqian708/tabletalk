@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import * as kbApi from '@renderer/api/knowledge'
-import type { ReviewTable } from '@renderer/api/types'
+import type { KbTableView } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
@@ -43,7 +43,7 @@ export function KbReviewModal(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, load, confirmComment, rejectComment,
-    confirmTag, rejectTag, saveEnum, saveNote, confirmAll, confirmGraphDraft, rejectGraphDraft } = useKnowledge()
+    confirmTag, rejectTag, saveNote, confirmAll, confirmGraphDraft, rejectGraphDraft } = useKnowledge()
 
   /* ── UI state ── */
   const [selTag, setSelTag] = useState<string | null>(null)
@@ -90,7 +90,7 @@ export function KbReviewModal(): React.JSX.Element | null {
 
   const filteredTables = useMemo(() => {
     if (!overview) return []
-    let ts: ReviewTable[] = overview.tables
+    let ts: KbTableView[] = overview.tables
     if (selTag) {
       const members = new Set(overview.tags.tables[selTag] ?? [])
       ts = ts.filter(tb => members.has(tb.name))
@@ -126,7 +126,7 @@ export function KbReviewModal(): React.JSX.Element | null {
     (relSt === 'all' || r.status === relSt)), [allRelations, relSrc, relSt])
 
   const totalPending = (overview?.draft_count ?? 0) + (overview?.tag_draft_count ?? 0)
-    + (overview?.enum_draft_count ?? 0) + (overview?.graph?.llm_draft_edges?.length ?? 0)
+    + (overview?.graph?.llm_draft_edges?.length ?? 0)
 
   /* ── 动作 ── */
   async function doCreateTag(): Promise<void> {
@@ -199,7 +199,7 @@ export function KbReviewModal(): React.JSX.Element | null {
     }
   }
 
-  const primaryBand = (tbl: ReviewTable): string => {
+  const primaryBand = (tbl: KbTableView): string => {
     for (const tg of tbl.tags) {
       if (overview?.tags.library.some(v => v.name === tg.name)) return bandColor(tagColor(tg.name))
     }
@@ -280,8 +280,8 @@ export function KbReviewModal(): React.JSX.Element | null {
               {filteredTables.length === 0 && <div className="krm-empty">没有匹配的表</div>}
               {filteredTables.map(tbl => {
                 const open = openCard === tbl.name
-                const draftCols = overview.columns.filter(c => c.table === tbl.name && c.status === 'draft').length
-                const tableEnums = (overview.enums ?? []).filter(e => e.table === tbl.name)
+                const draftCols = tbl.columns.filter(c => c.status === 'draft').length
+                const pending = draftCols + (tbl.comment_status === 'draft' ? 1 : 0)
                 return (
                   <div key={tbl.name} className="krm-card" style={{ borderLeft: `3px solid ${primaryBand(tbl)}`, borderColor: open ? 'rgba(46,230,168,0.25)' : undefined }}>
                     <div className="krm-card-head-row" onClick={() => setOpenCard(open ? null : tbl.name)}>
@@ -292,48 +292,54 @@ export function KbReviewModal(): React.JSX.Element | null {
                         const c = tagColor(tg.name)
                         return <span key={tg.name} className="krm-pill" style={{ color: c, background: tintBg(c) }}>{tg.name}</span>
                       })}
-                      {draftCols > 0
-                        ? <span className="krm-badge warn">{draftCols} 字段待确认</span>
+                      {pending > 0
+                        ? <span className="krm-badge warn">{pending} 待确认</span>
                         : <span className="krm-badge ok">✓ 已确认</span>}
                     </div>
                     {open && (
                       <div className="krm-card-body">
                         <div>
-                          <div className="krm-sec">列属性</div>
+                          <div className="krm-sec">表注释 · 列属性</div>
+                          {tbl.comment_status === 'draft' && (
+                            <div className="krm-tblcomment">
+                              <span className="krm-tblcomment-label">AI 表注释（草案）</span>
+                              <span style={{ display: 'flex', gap: 3 }}>
+                                <button className="krm-mini ok" onClick={() => void confirmComment(currentId, tbl.name)}>✓</button>
+                                <button className="krm-mini no" onClick={() => void rejectComment(currentId, tbl.name)}>✕</button>
+                              </span>
+                            </div>
+                          )}
                           <div className="krm-cols">
-                            {overview.columns.filter(c => c.table === tbl.name).map(col => (
-                              <div key={col.name} className="krm-col-row" style={{ opacity: col.status === 'rejected' ? 0.45 : 1 }}>
-                                <span className="krm-cn">{col.name}</span>
-                                <span className="krm-ct">{col.type}</span>
-                                <span style={{ color: col.pk ? 'var(--amber)' : 'transparent', fontWeight: 700, fontSize: 9 }}>{col.pk ? 'PK' : '·'}</span>
-                                <span style={{ color: col.fk ? 'var(--accent)' : 'transparent', fontWeight: 700, fontSize: 9 }}>{col.fk ? 'FK' : '·'}</span>
-                                <span className="krm-cc" style={{ color: col.status === 'draft' ? 'var(--amber)' : col.status === 'rejected' ? 'var(--ink-faint)' : 'var(--ink-dim)' }}>{col.comment || '—'}</span>
-                                <span style={{ display: 'flex', gap: 3 }}>
-                                  {col.status !== 'confirmed' && (
-                                    <button className="krm-mini ok" onClick={() => void confirmComment(currentId, col.table, col.name)}>✓</button>
+                            {tbl.columns.map(col => (
+                              <div key={col.name} className="krm-colwrap">
+                                <div className={`krm-col-row ${col.status}`}>
+                                  <span className="krm-cn">{col.name}</span>
+                                  <span className="krm-ct">{col.type}</span>
+                                  <span style={{ color: col.pk ? 'var(--amber)' : 'transparent', fontWeight: 700, fontSize: 9 }}>PK</span>
+                                  <span style={{ color: col.fk ? 'var(--accent)' : 'transparent', fontWeight: 700, fontSize: 9 }}>FK</span>
+                                  <span className="krm-cc" style={{ color: col.status === 'draft' ? 'var(--amber)' : col.status === 'none' ? 'var(--ink-faint)' : 'var(--ink-dim)' }}>{col.comment || '—'}</span>
+                                  {col.status === 'draft' ? (
+                                    <span style={{ display: 'flex', gap: 3 }}>
+                                      <button className="krm-mini ok" title="确认整列（注释+可选值）" onClick={() => void confirmComment(currentId, tbl.name, col.name)}>✓</button>
+                                      <button className="krm-mini no" title="整列撤下（注释/可选值/示例清空）" onClick={() => void rejectComment(currentId, tbl.name, col.name)}>✕</button>
+                                    </span>
+                                  ) : (
+                                    <span className={`krm-colst ${col.status}`}>{col.status === 'confirmed' ? '✓' : ''}</span>
                                   )}
-                                  {col.status !== 'rejected' && col.status !== 'none' && (
-                                    <button className="krm-mini no" onClick={() => void rejectComment(currentId, col.table, col.name)}>✕</button>
-                                  )}
-                                </span>
+                                </div>
+                                {(col.values || col.example) && (
+                                  <div className="krm-colmeta">
+                                    {col.values && <span className="krm-cvals" title={col.values}>可选值 {col.values}</span>}
+                                    {col.example && <span className="krm-cexample" title={col.example}>示例 {col.example}</span>}
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
+                          {draftCols > 0 && (
+                            <div className="krm-colhint">✕ 会将整列撤下（注释/可选值/示例清空）；✓ 确认注释与可选值</div>
+                          )}
                         </div>
-                        {tableEnums.length > 0 && (
-                          <div>
-                            <div className="krm-sec">枚举字典</div>
-                            {tableEnums.map(en => (
-                              <div key={en.column} className="krm-enum">
-                                <div className="krm-enum-head">{tbl.name}.{en.column}</div>
-                                {en.entries.map(entry => (
-                                  <EnumRow key={entry.value} connId={currentId} table={tbl.name} column={en.column}
-                                    entry={entry} onSave={(m) => void saveEnum(currentId, tbl.name, en.column, entry.value, m)} />
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        )}
                         <div>
                           <div className="krm-sec">用户备注</div>
                           {noteEditing === tbl.name ? (
@@ -471,34 +477,6 @@ export function KbReviewModal(): React.JSX.Element | null {
             </div>
           </div>
         </>
-      )}
-    </div>
-  )
-}
-
-/* ── 枚举行 ── */
-function EnumRow({ connId, table, column, entry, onSave }: {
-  connId: string
-  table: string
-  column: string
-  entry: { value: string; meaning: string; status: string }
-  onSave: (meaning: string) => void
-}): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(entry.meaning)
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, padding: '2px 0' }}>
-      <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--orange)', fontWeight: 500, minWidth: 76 }}>{entry.value}</span>
-      {editing ? (
-        <input autoFocus value={text} onChange={e => setText(e.target.value)}
-          onBlur={() => { setEditing(false); if (text !== entry.meaning) onSave(text) }}
-          onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setText(entry.meaning); setEditing(false) } }}
-          style={{ background: 'var(--void-3)', border: '1px solid var(--accent)', borderRadius: 4, color: 'var(--ink)', fontSize: 11.5, padding: '1px 6px', flex: 1, outline: 'none' }} />
-      ) : (
-        <span onClick={() => { setText(entry.meaning); setEditing(true) }}
-          style={{ color: entry.status === 'draft' ? 'var(--amber)' : 'var(--ink-dim)', cursor: 'text', flex: 1 }}>
-          {entry.meaning || '—'}
-        </span>
       )}
     </div>
   )

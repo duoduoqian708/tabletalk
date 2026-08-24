@@ -34,9 +34,6 @@ interface KnowledgeState {
   rejectComment: (connId: string, table: string, column?: string) => Promise<void>
   confirmTag: (connId: string, name: string) => Promise<void>
   rejectTag: (connId: string, name: string) => Promise<void>
-  confirmEnum: (connId: string, table: string, column: string) => Promise<void>
-  rejectEnum: (connId: string, table: string, column: string) => Promise<void>
-  saveEnum: (connId: string, table: string, column: string, value: string, meaning: string) => Promise<void>
   assignTags: (connId: string, table: string, tags: string[]) => Promise<void>
   saveNote: (connId: string, table: string, note: string) => Promise<void>
   confirmAll: (connId: string) => Promise<void>
@@ -148,21 +145,6 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
 
   async rejectTag(connId, name) {
     await api.rejectTag(connId, name)
-    await get().load(connId)
-  },
-
-  async confirmEnum(connId, table, column) {
-    await api.confirmEnum(connId, table, column)
-    await get().load(connId)
-  },
-
-  async rejectEnum(connId, table, column) {
-    await api.rejectEnum(connId, table, column)
-    await get().load(connId)
-  },
-
-  async saveEnum(connId, table, column, value, meaning) {
-    await api.saveEnum(connId, table, column, value, meaning)
     await get().load(connId)
   },
 

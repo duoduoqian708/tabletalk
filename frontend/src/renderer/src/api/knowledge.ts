@@ -39,18 +39,6 @@ export function tags(connId: string): Promise<TagLibrary> {
   return request(`/api/v1/knowledge/${connId}/tags`)
 }
 
-export function confirmEnum(connId: string, table: string, column: string): Promise<{ confirmed: number }> {
-  return request(`/api/v1/knowledge/${connId}/enums/confirm`, { method: 'POST', body: JSON.stringify({ table, column }) })
-}
-
-export function rejectEnum(connId: string, table: string, column: string): Promise<{ rejected: number }> {
-  return request(`/api/v1/knowledge/${connId}/enums/reject`, { method: 'POST', body: JSON.stringify({ table, column }) })
-}
-
-export function saveEnum(connId: string, table: string, column: string, value: string, meaning: string): Promise<{ saved: boolean }> {
-  return request(`/api/v1/knowledge/${connId}/enums/save`, { method: 'POST', body: JSON.stringify({ table, column, value, meaning }) })
-}
-
 export function confirmTag(connId: string, name: string): Promise<{ confirmed: boolean }> {
   return request(`/api/v1/knowledge/${connId}/tags/confirm`, { method: 'POST', body: JSON.stringify({ name }) })
 }
@@ -112,20 +100,16 @@ export function routeTables(connId: string, tagNames: string[]): Promise<RouteRe
   return request(`/api/v1/knowledge/${connId}/route`, { method: 'POST', body: JSON.stringify({ table: '', tags: tagNames }) })
 }
 
-/** 知识文档 top-N 检索（关键词 + 向量 + 图谱邻居扩散的混合打分）。 */
-export interface KbDoc {
-  id: string
-  kind: string
-  title: string
-  body: string
-  table: string | null
-  column: string | null
-  status: string
-  source: string
-  tags: string[]
+/** 检索命中的表知识卡（v2 一表一卡：text=可读表描述，payload=结构化信息）。 */
+export interface KbCard {
+  table: string
+  text: string
+  payload: { ddl?: string; tags?: string[]; layout?: Record<string, unknown>; draft_count?: number; updated_at?: string }
+  score: number
 }
 
-export function retrieve(connId: string, q: string, k = 10): Promise<{ count: number; docs: KbDoc[] }> {
+/** 知识检索（关键词 + 向量 + 图谱邻居扩散的混合打分）→ 表知识卡。 */
+export function retrieve(connId: string, q: string, k = 10): Promise<{ count: number; cards: KbCard[] }> {
   return request(`/api/v1/knowledge/${connId}/retrieve?q=${encodeURIComponent(q)}&k=${k}`)
 }
 
@@ -136,6 +120,8 @@ export interface GraphEdgeInput {
   from_col?: string | null
   to_col?: string | null
   weight?: number | null
+  /** 边 v2 基数（默认 n:1，from 恒为多侧） */
+  cardinality?: 'n:1' | '1:1'
 }
 
 export function addEdge(connId: string, edge: GraphEdgeInput): Promise<{ edge: GraphEdge; graph: { edges: GraphEdge[] } }> {

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { retrieve, type KbDoc } from '@renderer/api/knowledge'
+import { Fragment, useEffect, useState } from 'react'
+import { retrieve, type KbCard } from '@renderer/api/knowledge'
 import type { RouteResult } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
@@ -46,7 +46,7 @@ export function KnowledgeReview(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, error, load, buildProgress,
-    confirmComment, rejectComment, confirmTag, rejectTag, confirmEnum, rejectEnum, saveEnum,
+    confirmComment, rejectComment, confirmTag, rejectTag,
     assignTags, saveNote, addEdge, removeEdge, setExcluded } = useKnowledge()
   const { t } = useI18n()
   const openBuildDialog = useKbGate((s) => s.openBuildDialog)
@@ -59,20 +59,18 @@ export function KnowledgeReview(): React.JSX.Element {
   const [tab, setTab] = useState<'docs' | 'tags' | 'review'>(() => {
     const draftCount = overview?.draft_count ?? 0
     const tagDraftCount = overview?.tag_draft_count ?? 0
-    const enumDraftCount = overview?.enum_draft_count ?? 0
     const graphDraftCount = overview?.graph?.llm_draft_edges?.length ?? 0
-    return (draftCount + tagDraftCount + enumDraftCount + graphDraftCount) > 0 ? 'review' : 'docs'
+    return (draftCount + tagDraftCount + graphDraftCount) > 0 ? 'review' : 'docs'
   })
-  const [reviewFilter, setReviewFilter] = useState<'all' | 'comment' | 'tag' | 'enum' | 'graph'>('all')
+  const [reviewFilter, setReviewFilter] = useState<'all' | 'comment' | 'tag' | 'graph'>('all')
   const [kq, setKq] = useState('')
-  const [kdocs, setKdocs] = useState<KbDoc[] | null>(null)
+  const [kcards, setKcards] = useState<KbCard[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
 
   const totalPending = (overview?.draft_count ?? 0)
     + (overview?.tag_draft_count ?? 0)
-    + (overview?.enum_draft_count ?? 0)
     + (overview?.graph?.llm_draft_edges?.length ?? 0)
 
   async function doSearch(): Promise<void> {
@@ -81,9 +79,9 @@ export function KnowledgeReview(): React.JSX.Element {
     setSearching(true)
     try {
       const r = await retrieve(currentId, q, 10)
-      setKdocs(r.docs)
+      setKcards(r.cards)
     } catch {
-      setKdocs([])
+      setKcards([])
     } finally {
       setSearching(false)
     }
@@ -220,21 +218,23 @@ export function KnowledgeReview(): React.JSX.Element {
                   {searching ? t('kb.searching') : t('kb.search')}
                 </button>
               </div>
-              {kdocs && (
+              {kcards && (
                 <div className="review-results">
                   <div className="rr-h mono">
-                    {t('kb.searchResults', { n: kdocs.length })}
-                    <button className="rr-x" onClick={() => setKdocs(null)}>✕</button>
+                    {t('kb.searchResults', { n: kcards.length })}
+                    <button className="rr-x" onClick={() => setKcards(null)}>✕</button>
                   </div>
-                  {kdocs.length === 0 ? (
+                  {kcards.length === 0 ? (
                     <div className="rr-empty mono">{t('kb.noMatch')}</div>
                   ) : (
-                    kdocs.map((d) => (
-                      <div key={d.id} className="rr-item">
-                        <span className={`rr-kind mono ${d.kind}`}>{d.kind}</span>
-                        <span className="rr-title mono">{d.title}</span>
-                        <span className="rr-body">{d.body}</span>
-                        <span className={`rr-status mono ${d.status}`}>{d.status === 'confirmed' ? t('kb.confirmed') : t('kb.draft')}</span>
+                    kcards.map((c) => (
+                      <div key={c.table} className="rr-item">
+                        <span className="rr-kind mono table">table</span>
+                        <span className="rr-title mono">{c.table}</span>
+                        <span className="rr-body">{c.text}</span>
+                        <span className={`rr-status mono ${(c.payload?.draft_count ?? 0) > 0 ? 'draft' : 'confirmed'}`}>
+                          {(c.payload?.draft_count ?? 0) > 0 ? t('kb.draft') : t('kb.confirmed')}
+                        </span>
                       </div>
                     ))
                   )}
@@ -252,10 +252,10 @@ export function KnowledgeReview(): React.JSX.Element {
               </div>
 
               {tab === 'review' ? (
-                /* ============ 审阅队列（多态：注释/标签/枚举） ============ */
+                /* ============ 审阅队列（多态：注释/标签/关系草案） ============ */
                 <div className="kb-review-queue">
                   <div className="rv-filter-bar">
-                    {(['all', 'comment', 'tag', 'enum', 'graph'] as const).map((f) => (
+                    {(['all', 'comment', 'tag', 'graph'] as const).map((f) => (
                       <button key={f} className={`rv-filter-btn${reviewFilter === f ? ' on' : ''}`}
                         onClick={() => setReviewFilter(f)}>
                         {t(`kb.filter.${f}`)}
@@ -274,7 +274,7 @@ export function KnowledgeReview(): React.JSX.Element {
                     </div>
                   )}
 
-                  {reviewFilter !== 'tag' && reviewFilter !== 'enum' && overview.tables
+                  {reviewFilter !== 'tag' && reviewFilter !== 'graph' && overview.tables
                     .filter((tbl) => tbl.comment_status === 'draft')
                     .map((tbl) => (
                       <div key={`c-${tbl.name}`} className="rv-card rv-comment">
@@ -290,42 +290,7 @@ export function KnowledgeReview(): React.JSX.Element {
                       </div>
                     ))}
 
-                  {reviewFilter !== 'comment' && reviewFilter !== 'tag' && (overview.enums ?? [])
-                    .filter((e) => e.entries.some((x) => x.status === 'draft'))
-                    .map((e) => (
-                      <div key={`e-${e.table}-${e.column}`} className="rv-card rv-enum">
-                        <div className="rv-card-kind rv-kind-enum">{t('kb.kindEnum')}</div>
-                        <div className="rv-card-main">
-                          <div className="rv-card-ctx">{t('kb.ctxTable')} <b>{e.table}</b> · {t('kb.ctxColumn')} <b>{e.column}</b></div>
-                          <div className="rv-enum-list">
-                            {e.entries.map((entry) => (
-                              <div key={entry.value} className="rv-enum-row">
-                                <span className="rv-enum-val mono">{entry.value}</span>
-                                <span className="rv-enum-arrow">→</span>
-                                {entry.status === 'draft' ? (
-                                  <EnumMeaningInput
-                                    value={entry.meaning}
-                                    onSave={(meaning) => void saveEnum(currentId, e.table, e.column, entry.value, meaning)}
-                                  />
-                                ) : (
-                                  <>
-                                    <span className="rv-enum-meaning">{entry.meaning || <span className="kb-none">—</span>}</span>
-                                    <span className="rv-enum-state mono">{t('kb.confirmed')}</span>
-                                  </>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                          <div className="rv-enum-reject-hint">{t('kb.enumRejectHint')}</div>
-                        </div>
-                        <div className="rv-card-acts">
-                          <button className="rv-btn-ok" onClick={() => void confirmEnum(currentId, e.table, e.column)}>✓</button>
-                          <button className="rv-btn-no" onClick={() => void rejectEnum(currentId, e.table, e.column)}>✕</button>
-                        </div>
-                      </div>
-                    ))}
-
-                  {reviewFilter !== 'comment' && reviewFilter !== 'enum' && reviewFilter !== 'graph' && pendingTags.map((tg) => (
+                  {reviewFilter !== 'comment' && reviewFilter !== 'tag' && reviewFilter !== 'graph' && pendingTags.map((tg) => (
                     <div key={`t-${tg.name}`} className="rv-card rv-tag">
                       <div className="rv-card-kind rv-kind-tag">{t('kb.kindTag')}</div>
                       <div className="rv-card-main">
@@ -342,7 +307,7 @@ export function KnowledgeReview(): React.JSX.Element {
                     </div>
                   ))}
 
-                  {reviewFilter !== 'comment' && reviewFilter !== 'tag' && reviewFilter !== 'enum' && (overview.graph?.llm_draft_edges ?? [])
+                  {reviewFilter !== 'comment' && reviewFilter !== 'tag' && (overview.graph?.llm_draft_edges ?? [])
                     .map((edge, idx) => (
                       <div key={`ge-${idx}-${edge.from_table}-${edge.to_table}`} className={`rv-card rv-graph-edge${edge.status === 'previously_rejected' ? ' previously-rejected' : ''}`}>
                         <div className="rv-card-kind rv-kind-graph">{t('kb.kindGraph')}</div>
@@ -370,12 +335,19 @@ export function KnowledgeReview(): React.JSX.Element {
                 </div>
 
               ) : tab === 'docs' ? (
+                /* ============ 按表内容块（v2：表头 + 字段行，含可选值/示例） ============ */
                 <div className="rv-table-list kb-docs">
-                   {overview.tables.map((tbl) => (
+                   {overview.tables.map((tbl) => {
+                    const draftCols = tbl.columns.filter((c) => c.status === 'draft').length
+                    const draftTotal = draftCols + (tbl.comment_status === 'draft' ? 1 : 0)
+                    return (
                     <div key={tbl.name} className="rv-table" data-tname={tbl.name}>
                       <div className="rv-table-row" onClick={() => toggleExpand(tbl.name)}>
                         <span className="caret">{expanded.has(tbl.name) ? '▾' : '▸'}</span>
                         <span className="tname mono">{tbl.name}</span>
+                        {draftTotal > 0 && (
+                          <span className="rv-draft-cnt mono" title={t('kb.statsDraft')}>{draftTotal}</span>
+                        )}
                         <span className="tcols mono">{tbl.column_count}</span>
                         <span className={`st-dot ${tbl.comment_status}`} />
                       </div>
@@ -439,25 +411,38 @@ export function KnowledgeReview(): React.JSX.Element {
                       </div>
                       {expanded.has(tbl.name) && (
                         <div className="rv-cols">
-                          {overview.columns.filter((c) => c.table === tbl.name).map((c) => (
-                            <div key={c.name} className="rv-col">
-                              <span className="cname mono">{c.name}</span>
-                              <span className="ctype mono">{c.type}</span>
-                              {c.pk && <span className="ckey mono">PK</span>}
-                              {c.fk && <span className="ckey mono">FK</span>}
-                              <span className="ccomment">{c.comment || ''}</span>
-                              {c.status === 'draft' && (
-                                <span className="mini-acts">
-                                  <button onClick={() => confirmComment(currentId, c.table, c.name)}>{t('common.confirm')}</button>
-                                  <button onClick={() => rejectComment(currentId, c.table, c.name)}>{t('kb.reject')}</button>
+                          {tbl.columns.map((c) => (
+                            <Fragment key={c.name}>
+                              <div className={`rv-col ${c.status}`}>
+                                <span className={`st-dot ${c.status}`} />
+                                <span className="cname mono">{c.name}</span>
+                                <span className="ctype mono">{c.type}</span>
+                                {c.pk && <span className="ckey mono">PK</span>}
+                                {c.fk && <span className="ckey fk mono">FK</span>}
+                                <span className="ccomment" title={c.db_comment ? `${t('kb.colDbComment')} ${c.db_comment}` : undefined}>
+                                  {c.comment || ''}
                                 </span>
+                                {c.status === 'draft' && (
+                                  <span className="mini-acts">
+                                    <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name, c.name)}>✓</button>
+                                    <button title={t('kb.rejectTitle')} onClick={() => rejectComment(currentId, tbl.name, c.name)}>✕</button>
+                                  </span>
+                                )}
+                              </div>
+                              {(c.values || c.example) && (
+                                <div className="rv-col-meta">
+                                  {c.values && <span className="cvals" title={c.values}>{t('kb.colValues')}：{c.values}</span>}
+                                  {c.example && <span className="cexample mono" title={c.example}>{t('kb.colExample')} {c.example}</span>}
+                                </div>
                               )}
-                            </div>
+                            </Fragment>
                           ))}
+                          {draftCols > 0 && <div className="rv-cols-hint">{t('kb.colRejectHint')}</div>}
                         </div>
                       )}
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="rv-taglib">
@@ -500,7 +485,7 @@ export function KnowledgeReview(): React.JSX.Element {
               )}
 
               <div className="kb-stats mono">
-                <span>{t('kb.statsDocs')} {overview.tables.length + overview.columns.length}</span>
+                <span>{t('kb.statsDocs')} {overview.tables.length + overview.tables.reduce((n, tb) => n + tb.columns.length, 0)}</span>
                 <span>{t('kb.statsTags')} {overview.tags.library.length}</span>
                 <span>{t('kb.statsEdges')} {overview.graph.edges.length}</span>
                 <span className="kb-stats-draft">{t('kb.statsDraft')} {totalPending}</span>
@@ -540,26 +525,4 @@ export function KnowledgeReview(): React.JSX.Element {
   function rejectGraphDraftSafe(fromTable: string): void {
     if (currentId) void useKnowledge.getState().rejectGraphDraft(currentId, fromTable)
   }
-}
-
-function EnumMeaningInput({ value, onSave }: { value: string; onSave: (v: string) => void }): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
-  const [text, setText] = useState(value)
-  if (!editing) {
-    return (
-      <span className="rv-enum-meaning" onClick={() => { setText(value); setEditing(true) }}>
-        {value || <span className="kb-none">—</span>}
-      </span>
-    )
-  }
-  return (
-    <input
-      className="rv-enum-meaning-input"
-      value={text}
-      autoFocus
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => { setEditing(false); if (text !== value) onSave(text) }}
-      onKeyDown={(e) => { if (e.key === 'Enter') { setEditing(false); if (text !== value) onSave(text) } if (e.key === 'Escape') setEditing(false) }}
-    />
-  )
 }

@@ -158,45 +158,50 @@ export interface TagInfo {
   status: 'draft' | 'confirmed'
 }
 
-export interface EnumEntry {
-  value: string
-  meaning: string
-  status: 'draft' | 'confirmed'
-}
+/** 知识条目状态机（v2：comment+values 整体确认） */
+export type KbItemStatus = 'none' | 'draft' | 'confirmed'
 
-export interface EnumColumn {
-  table: string
-  column: string
-  entries: EnumEntry[]
-}
-
-export interface ReviewTable {
-  name: string
-  kind: string
-  column_count: number
-  comment: string
-  comment_status: string
-  tags: { name: string; status: string }[]
-}
-
-export interface ReviewColumn {
-  table: string
+/** 字段级知识视图（对照后端 store.overview() 的 columns 输出） */
+export interface KbColumnView {
   name: string
   type: string
   pk: boolean
   fk: boolean
+  /** 数据库自带注释（参考源） */
+  db_comment: string
+  /** 业务含义（AI 生成 → 人工确认） */
   comment: string
-  status: string
+  /** 可选值对照 "P=待付款; S=已发货"（授权采样构建时非空） */
+  values: string
+  /** 示例值（首个非空样本，截断 60 字符） */
+  example: string
+  status: KbItemStatus
 }
 
+/** 表级知识块（一表一块）：字段行挂在其下 */
+export interface KbTableView {
+  name: string
+  kind: string
+  db_comment: string
+  column_count: number
+  comment: string
+  comment_status: KbItemStatus
+  tags: { name: string; status: string }[]
+  excluded: boolean
+  ddl: string
+  columns: KbColumnView[]
+}
+
+/** 边 v2：字段级端点 + 基数；from 恒为多侧 */
 export interface GraphEdge {
   from: string
   from_col?: string | null
   to: string
   to_col?: string | null
-  kind: 'fk' | 'overlap' | 'user'
+  kind: 'fk' | 'overlap' | 'user' | 'llm'
+  cardinality?: 'n:1' | '1:1'
+  reason?: string
   weight?: number | null
-  shared?: number | null
 }
 
 export interface GraphDraftEdge {
@@ -213,15 +218,12 @@ export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
   synced_at?: string
-  tables: ReviewTable[]
-  columns: ReviewColumn[]
+  tables: KbTableView[]
   graph: { edges: GraphEdge[]; excluded?: string[]; llm_draft_edges?: GraphDraftEdge[] }
   tags: { library: TagInfo[]; tables: Record<string, string[]> }
-  enums: EnumColumn[]
+  /** 待确认草案数（表+列注释） */
   draft_count: number
   tag_draft_count: number
-  enum_draft_count: number
-  sample_cols: number
   embedding_provider: string
 }
 
@@ -237,7 +239,8 @@ export interface BuildProgress {
 export interface KbStatus {
   kb_status: string
   kb_updated_at: string
-  pending: { draft_docs: number; draft_tags: number }
+  /** {draft_docs: 表+列注释草案, draft_tags, llm_graph_draft} */
+  pending: { draft_docs: number; draft_tags: number; llm_graph_draft: number }
   building: boolean
 }
 
