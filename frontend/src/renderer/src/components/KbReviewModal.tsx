@@ -4,6 +4,7 @@ import type { ReviewTable } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
+import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
 
 /* ═══════════════════════════════════════════════
@@ -66,10 +67,12 @@ export function KbReviewModal(): React.JSX.Element | null {
   useEffect(() => { saveColorMap(colorMap) }, [colorMap])
 
   useEffect(() => { if (currentId) void load(currentId) }, [currentId, load])
+  useEffect(() => { closeReview() }, [currentId])
 
   const tagColor = (name: string): string =>
     colorMap[name] ?? TAG_COLORS[Math.abs(hashStr(name)) % TAG_COLORS.length]
 
+  const { t } = useI18n()
   const reviewOpen = useKbGate((s) => s.reviewOpen)
   const closeReview = useKbGate((s) => s.closeReview)
 
@@ -189,6 +192,8 @@ export function KbReviewModal(): React.JSX.Element | null {
       await confirmAll(currentId)
       toastMsg('知识库已确认并启用')
       closeReview()
+    } catch (e) {
+      toastMsg(t('kb.confirmFail', { msg: (e as Error).message }))
     } finally {
       setConfirming(false)
     }

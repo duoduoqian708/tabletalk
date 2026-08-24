@@ -3,6 +3,7 @@ import { retrieve, type KbDoc } from '@renderer/api/knowledge'
 import type { RouteResult } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
+import { useKbGate } from '@renderer/store/kbgate'
 import { useI18n } from '@renderer/store/i18n'
 import { toastMsg } from '@renderer/utils/toast'
 import { GraphEditor } from './GraphEditor'
@@ -44,10 +45,12 @@ const KB_BADGE: Record<string, { text: string; cls: string }> = {
 export function KnowledgeReview(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
-  const { overview, loading, busy, error, load, buildTask, annotateTags, annotateEnums,
+  const { overview, loading, busy, error, load, buildProgress,
     confirmComment, rejectComment, confirmTag, rejectTag, confirmEnum, rejectEnum, saveEnum,
     assignTags, saveNote, addEdge, removeEdge, setExcluded } = useKnowledge()
   const { t } = useI18n()
+  const openBuildDialog = useKbGate((s) => s.openBuildDialog)
+  const buildPct = buildProgress?.percent ?? null
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [routeSel, setRouteSel] = useState<Set<string>>(new Set())
@@ -64,11 +67,8 @@ export function KnowledgeReview(): React.JSX.Element {
   const [kq, setKq] = useState('')
   const [kdocs, setKdocs] = useState<KbDoc[] | null>(null)
   const [searching, setSearching] = useState(false)
-  const [buildPct, setBuildPct] = useState<number | null>(null)
-  const [syncing, setSyncing] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
-  const [showRebuildConfirm, setShowRebuildConfirm] = useState(false)
 
   const totalPending = (overview?.draft_count ?? 0)
     + (overview?.tag_draft_count ?? 0)
@@ -131,32 +131,6 @@ export function KnowledgeReview(): React.JSX.Element {
   const badge = KB_BADGE[kbStatus] ?? { text: kbStatus, cls: 'kb-badge' }
   const notBuilt = overview !== null && overview.built === false
 
-  async function startBuild(): Promise<void> {
-    if (!currentId) return
-    setBuildPct(0)
-    await buildTask(currentId, (p) => setBuildPct(p))
-    setBuildPct(null)
-  }
-
-  async function doSync(): Promise<void> {
-    if (!currentId) return
-    setSyncing(true)
-    try {
-      const { syncKb } = await import('@renderer/api/knowledge')
-      const r = await syncKb(currentId)
-      if (r.changed) {
-        toastMsg(t('kb.syncedToast', { added: r.tables_added, changed: r.tables_changed, removed: r.tables_removed }))
-      } else {
-        toastMsg(r.message ?? t('kb.noChange'))
-      }
-      await load(currentId)
-    } catch (e) {
-      toastMsg(t('kb.syncFail', { msg: (e as Error).message }))
-    } finally {
-      setSyncing(false)
-    }
-  }
-
   function beginEdit(table: string, comment: string): void {
     setEditing(table)
     setEditText(comment)
@@ -200,7 +174,7 @@ export function KnowledgeReview(): React.JSX.Element {
           <div className="kb-nb-text">
             {t('kb.notBuiltDesc')}
           </div>
-          <button className="btn save" disabled={busy} onClick={() => void startBuild()}>
+          <button className="btn save" disabled={busy} onClick={() => openBuildDialog('init')}>
             {busy ? `${t('kb.building', { n: buildPct ?? 0 })}…` : t('kb.build')}
           </button>
         </div>
@@ -225,17 +199,9 @@ export function KnowledgeReview(): React.JSX.Element {
                 {t('kb.lastSync')} {overview.synced_at.replace('T', ' ').slice(5, 16)}
               </span>
             )}
-            <button className="iconbtn" onClick={() => void doSync()} disabled={busy} title={t('kb.syncTitle')}>
-              {syncing ? t('kb.syncing') : t('kb.checkUpdate')}
-            </button>
-            <button className="iconbtn" onClick={() => setShowRebuildConfirm(true)} disabled={busy} title={t('kb.rebuildTitle')}>
-              {busy ? t('kb.building', { n: buildPct ?? 0 }) : t('kb.rebuild')}
-            </button>
-            <button className="iconbtn" onClick={() => currentId && annotateTags(currentId)} disabled={busy}>
-              {busy ? t('kb.genBusy') : t('kb.genTags')}
-            </button>
-            <button className="iconbtn" onClick={() => currentId && annotateEnums(currentId)} disabled={busy}>
-              {busy ? t('kb.genBusy') : t('kb.genEnums')}
+            <button className="iconbtn" onClick={() => openBuildDialog('rebuild')} disabled={busy}
+                    title={t('kb.rebuildTitle')}>
+              {busy ? t('kb.building', { n: buildPct ?? 0 }) : t('kb.rebuildAll')}
             </button>
           </div>
 
@@ -332,17 +298,25 @@ export function KnowledgeReview(): React.JSX.Element {
                         <div className="rv-card-main">
                           <div className="rv-card-ctx">{t('kb.ctxTable')} <b>{e.table}</b> · {t('kb.ctxColumn')} <b>{e.column}</b></div>
                           <div className="rv-enum-list">
-                            {e.entries.filter((x) => x.status === 'draft').map((entry) => (
+                            {e.entries.map((entry) => (
                               <div key={entry.value} className="rv-enum-row">
                                 <span className="rv-enum-val mono">{entry.value}</span>
                                 <span className="rv-enum-arrow">→</span>
-                                <EnumMeaningInput
-                                  value={entry.meaning}
-                                  onSave={(meaning) => void saveEnum(currentId, e.table, e.column, entry.value, meaning)}
-                                />
+                                {entry.status === 'draft' ? (
+                                  <EnumMeaningInput
+                                    value={entry.meaning}
+                                    onSave={(meaning) => void saveEnum(currentId, e.table, e.column, entry.value, meaning)}
+                                  />
+                                ) : (
+                                  <>
+                                    <span className="rv-enum-meaning">{entry.meaning || <span className="kb-none">—</span>}</span>
+                                    <span className="rv-enum-state mono">{t('kb.confirmed')}</span>
+                                  </>
+                                )}
                               </div>
                             ))}
                           </div>
+                          <div className="rv-enum-reject-hint">{t('kb.enumRejectHint')}</div>
                         </div>
                         <div className="rv-card-acts">
                           <button className="rv-btn-ok" onClick={() => void confirmEnum(currentId, e.table, e.column)}>✓</button>
@@ -556,22 +530,6 @@ export function KnowledgeReview(): React.JSX.Element {
           </div>
         </>
       ) : null}
-
-      {/* 重新构建二次确认 */}
-      {showRebuildConfirm && (
-        <div className="kb-dialog-mask" onClick={() => setShowRebuildConfirm(false)}>
-          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="kb-dialog-title">{t('kb.rebuildTitle2')}</div>
-            <p className="kb-dialog-sub">{t('kb.rebuildDesc2')}</p>
-            <div className="kb-dialog-actions">
-              <button className="btn ghost" onClick={() => setShowRebuildConfirm(false)}>{t('kb.dialogCancel')}</button>
-              <button className="btn danger" onClick={() => { setShowRebuildConfirm(false); void startBuild() }}>
-                {t('kb.rebuild')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 

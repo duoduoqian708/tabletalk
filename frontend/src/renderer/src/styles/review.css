@@ -980,6 +980,16 @@
   transition: background var(--dur) var(--ease);
 }
 .rv-enum-meaning:hover { background: var(--void-3); }
+.rv-enum-state {
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--green);
+  border: 1px solid color-mix(in srgb, var(--green) 35%, transparent);
+}
+.rv-enum-reject-hint { font-size: 11px; color: var(--ink-faint); margin-top: 4px; }
 .rv-enum-meaning-input {
   background: var(--void-1);
   border: 1px solid var(--accent);

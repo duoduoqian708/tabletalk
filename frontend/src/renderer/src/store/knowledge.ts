@@ -27,7 +27,7 @@ interface KnowledgeState {
   buildProgress: BuildProgressState | null
   load: (connId: string) => Promise<void>
   /** 任务化构建：启动 + SSE 实时进度直到 done，然后刷新 overview */
-  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, trigger?: 'init' | 'rebuild') => Promise<void>
+  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, opts?: { trigger?: 'init' | 'rebuild'; includeSamples?: boolean }) => Promise<void>
   /** 构建中刷新页面后重挂 SSE：只吃剩余进度（后端对无任务推 idle+done 帧后关闭） */
   reattachBuild: (connId: string) => Promise<void>
   annotateTags: (connId: string) => Promise<void>
@@ -99,10 +99,10 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     }
   },
 
-  async buildTask(connId, onProgress, trigger = 'init') {
+  async buildTask(connId, onProgress, opts) {
     set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
-      await api.build(connId, true, trigger)
+      await api.build(connId, opts?.includeSamples ?? true, opts?.trigger ?? 'init')
       // SSE 实时进度：推送即写 store（KbBuildGate 订阅显示），done 后退出
       await readBuildEvents(connId, (p) => {
         set({ buildProgress: p })

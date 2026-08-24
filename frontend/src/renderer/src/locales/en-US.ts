@@ -511,6 +511,8 @@ export const enUS: Messages = {
     dataConsent: 'Data consent',
     dataConsentDesc: 'Building sends table structure and sample values to the configured AI service to generate annotations and tags; uncheck to use structure info only.',
     rebuildAll: 'Rebuild all',
+    enumRejectHint: '✕ withdraws the whole column (including confirmed entries)',
+    confirmFail: 'Confirm failed: {msg}',
   },
   skill: {
     title: 'Skill Plaza',

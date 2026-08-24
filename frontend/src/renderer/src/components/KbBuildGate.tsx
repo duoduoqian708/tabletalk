@@ -129,7 +129,7 @@ export function KbBuildGate(): React.JSX.Element | null {
   async function startBuild(samples = true, trigger: 'init' | 'rebuild' = 'init'): Promise<void> {
     if (!currentId) return
     setStatus((s) => (s ? { ...s, kb_status: 'building', building: true } : s))
-    await buildTask(currentId, undefined, trigger)
+    await buildTask(currentId, undefined, { trigger, includeSamples: samples })
     // buildTask 完成后已刷新 overview；这里再同步一次 kb_status 兜底
     if (currentId) kbStatus(currentId).then((s) => s && setStatus(s)).catch(() => undefined)
   }
