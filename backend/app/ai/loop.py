@@ -24,8 +24,6 @@ from app.ai.skills.registry import get_skill, skill_tool_schemas
 from app.ai.tools import execute_tool
 from app.ai.tools.registry import reset_active_session as _reset_active_session
 from app.ai.tools.registry import set_active_session as _set_active_session
-from app.core.schema import get_schema
-from app.core.sensitive import filter_sensitive
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -223,14 +221,6 @@ def _strict_refusal_text() -> str:
 async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
     provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
-
-    # 知识库：未构建过才构建（真实库不每次对话重采样）；schema 变化由显式 rebuild 刷新
-    if not state.knowledge.is_built(conn_id):
-        try:
-            schema = filter_sensitive(await get_schema(state, conn_id), state.connections.get(conn_id).sensitive)
-            await state.knowledge.build(conn_id, schema)
-        except Exception:
-            pass
 
     raw_user_text = _last_user_text(_normalize_messages(req.messages))
     user_text = raw_user_text

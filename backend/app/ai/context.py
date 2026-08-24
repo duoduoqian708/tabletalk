@@ -94,20 +94,7 @@ async def assemble_context_full(
             schema = codify_schema(get_env().data_dir, conn_id, raw_schema, sensitive_tables)
     except Exception:
         pass
-    # 知识库懒构建（每进程一次）：双通道路由依赖表级向量与图谱，未构建时先建
-    if not state.knowledge.is_built(conn_id):
-        from app.core.schema import sample_values
-        rt = state.runtime.get()
-        samples = {}
-        if rt.kb_sample_rows > 0:
-            for t in schema["tables"]:
-                try:
-                    samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
-                except Exception:
-                    samples[t["name"]] = {}
-        await state.knowledge.build(conn_id, schema, samples)
-    else:
-        state.knowledge.ensure_loaded(conn_id)
+    state.knowledge.ensure_loaded(conn_id)
     await state.knowledge.reembed_if_needed(conn_id)  # 嵌入模型配置变化 → 向量重嵌
     parts: list[str] = [
         f"当前连接: {schema.get('connection', conn_id)}（{schema.get('dialect', '')}）"

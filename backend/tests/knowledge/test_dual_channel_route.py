@@ -51,6 +51,10 @@ async def test_expand_tables_fk_connectivity(tmp_path):
 
 async def test_assemble_context_fusion_uses_both_channels(app_state, conn_id):
     """融合路由端到端：问题命中"退款"语义时，无标签的 refund 相关表进入候选子图。"""
+    from app.core.schema import get_schema
+
+    # 构建是显式前置步骤：AI 链路不再静默懒构建
+    await app_state.knowledge.build(conn_id, await get_schema(app_state, conn_id))
     text, meta = await assemble_context_full(app_state, conn_id, query="returns 表里都有哪些退货记录")
     tables = set(meta.get("candidate_tables", []))
     assert tables, "融合路由必须产生候选表（不再因标签未命中退化为全表）"

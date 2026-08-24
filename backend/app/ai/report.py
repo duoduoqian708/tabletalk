@@ -29,7 +29,6 @@ from app.ai.manifest import build_manifest
 from app.ai.intent import classify_tags
 from app.ai.dto import ChatRequest
 from app.ai.tools import TOOL_SCHEMAS_READONLY, execute_tool
-from app.core.schema import get_schema
 from app.safety import gate as safety_gate
 from app.safety.models import Origin, Verdict
 
@@ -283,14 +282,6 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"
     snapshot_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    # 知识库：未构建过才构建（与 chat_stream 一致）
-    if not state.knowledge.is_built(conn_id):
-        try:
-            schema = await get_schema(state, conn_id)
-            await state.knowledge.build(conn_id, schema)
-        except Exception:
-            pass
 
     user_text = _last_user_text(_normalize_messages(req.messages))
     # B2: 报告请求的用户文本亦脱敏
