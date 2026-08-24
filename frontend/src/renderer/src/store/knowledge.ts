@@ -27,7 +27,9 @@ interface KnowledgeState {
   buildProgress: BuildProgressState | null
   load: (connId: string) => Promise<void>
   /** 任务化构建：启动 + SSE 实时进度直到 done，然后刷新 overview */
-  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void) => Promise<void>
+  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, trigger?: 'init' | 'rebuild') => Promise<void>
+  /** 构建中刷新页面后重挂 SSE：只吃剩余进度（后端对无任务推 idle+done 帧后关闭） */
+  reattachBuild: (connId: string) => Promise<void>
   annotateTags: (connId: string) => Promise<void>
   annotateEnums: (connId: string) => Promise<void>
   confirmComment: (connId: string, table: string, column?: string) => Promise<void>
@@ -97,16 +99,29 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     }
   },
 
-  async buildTask(connId, onProgress) {
+  async buildTask(connId, onProgress, trigger = 'init') {
     set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
-      await api.build(connId)
+      await api.build(connId, true, trigger)
       // SSE 实时进度：推送即写 store（KbBuildGate 订阅显示），done 后退出
       await readBuildEvents(connId, (p) => {
         set({ buildProgress: p })
         onProgress?.(p.percent, p.stage)
         if (p.error && p.error !== 'cancelled') set({ error: p.error })
       })
+      await get().load(connId)
+    } catch (e) {
+      set({ error: (e as Error).message })
+    } finally {
+      set({ busy: false, buildProgress: null })
+    }
+  },
+
+  async reattachBuild(connId) {
+    if (get().busy) return
+    set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
+    try {
+      await readBuildEvents(connId, (p) => set({ buildProgress: p }))
       await get().load(connId)
     } catch (e) {
       set({ error: (e as Error).message })

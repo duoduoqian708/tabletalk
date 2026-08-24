@@ -11,10 +11,10 @@ export function overview(connId: string): Promise<KnowledgeOverview> {
 }
 
 /** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。 */
-export function build(connId: string, includeSamples = true): Promise<{ job_id: string; kb_status: string; stage: string }> {
+export function build(connId: string, includeSamples = true, trigger: 'init' | 'rebuild' = 'init'): Promise<{ job_id: string; kb_status: string; stage: string }> {
   return request(`/api/v1/knowledge/${connId}/build`, {
     method: 'POST',
-    body: JSON.stringify({ include_samples: includeSamples }),
+    body: JSON.stringify({ include_samples: includeSamples, trigger }),
   })
 }
 
