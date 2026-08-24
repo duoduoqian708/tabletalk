@@ -456,19 +456,12 @@ async def annotate_enums_core(
     """枚举抽取核心：调用方已备好 schema/samples。
 
     授权门控在调用方（build 流水线按 include_samples 决定是否调用本函数）。
-    枚举解释必须发送去重取值才有意义，因此发送前经 llm_safe_samples 出网裁剪
-    （去掉审计/租户等噪声列），候选列判定同样基于裁剪后的样本。
-    mock 网关时生成确定性占位含义，保证无 key 也能跑通管线。
+    枚举解释必须发送去重取值才有意义；按用户决策不做列级过滤，出网唯一防护是
+    truncate_samples 值级截断（60 字符）。截断副本贯穿候选判定/mock/prompt/入库
+    四路，保证字典键与发送内容一致。mock 网关时生成确定性占位含义。
     """
-    from app.knowledge.ddl_context import llm_safe_samples  # noqa: PLC0415
-    # 枚举场景豁免长文本类型过滤（TEXT 低基数列是枚举主目标），仅按噪声列名裁剪
-    safe = llm_safe_samples(samples, schema.get("columns", []), drop_longtext=False)
-    # 值级截断兜底：长句截到 60 字符，防止 TEXT 列长句撑爆载荷；
-    # 候选判定/mock 产出/prompt 取值/入库键共用同一截断副本，保证字典与发送内容一致
-    safe = {
-        t: {c: [str(v)[:60] for v in vals] for c, vals in cols.items()}
-        for t, cols in safe.items()
-    }
+    from app.knowledge.ddl_context import truncate_samples  # noqa: PLC0415
+    safe = truncate_samples(samples)
 
     enum_cols = [
         c for c in schema.get("columns", [])

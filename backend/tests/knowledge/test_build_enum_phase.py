@@ -2,8 +2,8 @@
 
 断言以 mock 网关的确定性产出为准：
 - _mock_enums 对去重取值数 ∈ [2, ENUM_MAX_VALUES] 的列生成 draft 条目；
-- llm_safe_samples 裁剪噪声列（created_at 等审计列）——即使有取值也不发 LLM。
-注意：status 用 varchar 而非 text——TEXT 前缀命中裁剪器的长文本规则（既有设计）。
+- 按用户决策不做列级过滤：授权后整行样本直发，created_at 等审计列同样参与，
+  唯一防护是值级 60 字符截断。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def _status_values(kb, conn_id: str) -> set[str]:
 
 
 async def test_build_runs_enum_phase_when_authorized(app_state):
-    """include_samples=True → 枚举 draft 入库（噪声列除外）；False → 完全跳过、零产出。"""
+    """include_samples=True → 枚举 draft 入库（整行样本直发，审计列也参与）；False → 完全跳过、零产出。"""
     st = app_state
     conn = "c-gate"
     phases: list[str] = []
@@ -56,10 +56,10 @@ async def test_build_runs_enum_phase_when_authorized(app_state):
         conn, _schema(), _samples(), on_progress=report, include_samples=True,
     )
 
-    # assert：status 列枚举草案入库；created_at 是审计噪声列被出网裁剪
+    # assert：status 列枚举草案入库；created_at 等审计列样本随整行发出属预期（无列级过滤）
     drafts = {(d["table"], d["column"]) for d in st.knowledge.enum_drafts(conn)}
     assert ("orders", "status") in drafts
-    assert ("orders", "created_at") not in drafts
+    assert ("orders", "created_at") in drafts
     assert stats["enums_added"] > 0
     assert "enums" in phases
 
@@ -75,11 +75,11 @@ async def test_build_runs_enum_phase_when_authorized(app_state):
 
 
 async def test_text_typed_low_cardinality_column_still_extracted(app_state):
-    """TEXT 型低基数列不被长文本过滤误杀（SQLite/PG status 常为 TEXT），
-    仍产出枚举草案；入库 value 为截断后的字符串，与发送内容一致。"""
+    """TEXT 型低基数列（SQLite/PG status 常为 TEXT）天然参与枚举抽取（无类型过滤）；
+    入库 value 为截断后的字符串，与发送内容一致。"""
     st = app_state
     schema = _schema()
-    schema["columns"][1]["type"] = "TEXT"  # status 改为 TEXT：命中裁剪器长文本规则
+    schema["columns"][1]["type"] = "TEXT"  # status 改为 TEXT：无类型过滤，照常参与
     long_val = "已支付-等待发货-" + "很长的状态说明" * 20  # 远超 60 字符
     samples = _samples()
     samples["orders"]["status"] = [long_val, "S"]
@@ -111,3 +111,22 @@ async def test_incremental_rebuild_respects_enum_gate(app_state):
         )
         assert res["changed"]
         assert ("F" in _status_values(st.knowledge, conn)) is authorized
+
+
+async def test_sync_full_rebuild_fallback_respects_gate(app_state):
+    """未构建过的连接走 sync() 防御性全量分支：门控两态行为与增量分支一致。"""
+    st = app_state
+    for conn, authorized in (("sync-off", False), ("sync-on", True)):
+        stats = await st.knowledge.sync(conn, _schema(), _samples(), include_samples=authorized)
+        drafts = st.knowledge.enum_drafts(conn)
+        assert (len(drafts) > 0) is authorized
+        assert (stats["enums_added"] > 0) if authorized else (stats["enums_added"] == 0)
+
+
+async def test_sync_resolves_none_from_runtime_setting(app_state):
+    """include_samples=None 时回退运行时授权设置——全量回退分支与增量分支同语义（不分叉）。"""
+    st = app_state
+    st.runtime.update({"kb_ai_annotation_samples": True})
+    stats = await st.knowledge.sync("sync-runtime", _schema(), _samples())
+    assert stats["enums_added"] > 0
+    assert st.knowledge.enum_drafts("sync-runtime")

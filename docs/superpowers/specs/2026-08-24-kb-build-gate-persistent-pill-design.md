@@ -194,9 +194,9 @@ orders.status 列，类型 varchar（主键）。列注释：订单状态。取�
 - `sample_values` 重构（core/schema.py:102）：从"每列 `SELECT DISTINCT col
   LIMIT K`"改为 `SELECT * ORDER BY <pk> DESC LIMIT n` 整行抽样（无主键表退化
   为不排序），本地按列拆分供重叠图/枚举判定使用
-- **出网列裁剪器**：样本发 LLM 前过滤噪声列（created_by/create_time/updater/
-  is_deleted 等命名模式，扩展 `ddl_context._is_noise_column`）与长文本类型列
-  （TEXT/BLOB/CLOB 等）；裁剪只作用于出网内容，本地计算不受影响
+- **值级截断（2026-08-24 用户简化决策：不做列裁剪）**：授权后样本整行发给 LLM，
+  不再按列名/类型过滤；仅对过长的文本值做截断（60 字符）以控载荷。图谱概览的
+  噪声列过滤（build_graph_overview 既有行为）与本机制无关、维持现状
 - **枚举阶段门控**：未勾选时跳过枚举 AI 提取（现 annotator.py 无条件发送去重
   取值给 LLM，与新授权语义冲突）；进度条 phases 相应缺省该阶段
 - `include_samples=false` 时注释阶段不带样本（现状保留）

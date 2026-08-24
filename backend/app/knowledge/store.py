@@ -313,7 +313,7 @@ class KnowledgeBase:
         ai_enums_added = 0
         if enable_ai_annotation:
             from app.knowledge.annotator import annotate_domain, annotate_tables
-            from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all
+            from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all, truncate_samples
 
             # 阶段一：逐表 AI 处理（on_progress 逐表回调，phase="annotate"）
             if on_progress:
@@ -322,7 +322,10 @@ class KnowledgeBase:
                 from app.state import get_state as _get_state
                 _st = _get_state()
                 ddl_map = await generate_ddls_all(_st, conn_id)
-                effective_samples = self._samples.get(conn_id, {}) if include_samples else None
+                # 授权才发送；出网唯一防护是值级截断（用户决策：无列级过滤）
+                effective_samples = (
+                    truncate_samples(self._samples.get(conn_id, {})) if include_samples else None
+                )
                 ai_docs_added = await annotate_tables(
                     _st, conn_id, ddl_map, self._schema[conn_id],
                     samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
@@ -518,7 +521,7 @@ class KnowledgeBase:
         - 删除表：auto 文档 archived（保留可回溯），移除表级向量与相关边
         - 图：基于新 schema + 合并样本全量重构图（快；墓碑自动遵守）
         - include_samples: 数据授权门控（None=沿用运行时设置 kb_ai_annotation_samples）；
-          未授权时变化表不重提枚举（枚举解释必须发送取值）
+          未授权时变化表不重提枚举、不发样本注释（枚举解释/注释均需发送数据）
         - 返回 diff 摘要
         """
         if include_samples is None:
@@ -606,7 +609,7 @@ class KnowledgeBase:
         if rebuild_tables:
             try:
                 from app.knowledge.annotator import annotate_domain, annotate_tables
-                from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all
+                from app.knowledge.ddl_context import build_ddl_overview, generate_ddls_all, truncate_samples
                 from app.state import get_state as _get_state
                 _st = _get_state()
                 # DDL 为变化表生成注释
@@ -614,7 +617,10 @@ class KnowledgeBase:
                 # 只给变化表生成 AI 注释
                 changed_ddl_map = {t: ddl_map[t] for t in ddl_map if t in rebuild_tables}
                 if changed_ddl_map:
-                    effective_samples = self._samples.get(conn_id, {})
+                    # 授权才发送；出网唯一防护是值级截断（与全量构建同语义）
+                    effective_samples = (
+                        truncate_samples(self._samples.get(conn_id, {})) if include_samples else None
+                    )
                     ai_docs_added = await annotate_tables(
                         _st, conn_id, changed_ddl_map, self._schema[conn_id],
                         samples=effective_samples,
@@ -710,15 +716,21 @@ class KnowledgeBase:
         samples: dict[str, dict[str, list[Any]]] | None = None,
         include_samples: bool | None = None,
     ) -> dict[str, Any]:
-        """增量同步入口：指纹对比 → 无变化零副作用；有变化走 incremental_build。"""
+        """增量同步入口：指纹对比 → 无变化零副作用；有变化走 incremental_build。
+
+        include_samples 在进入分支前统一解析 None → 运行时授权设置，
+        保证全量回退分支与增量分支门控语义一致。
+        """
         self.ensure_loaded(conn_id)
+        if include_samples is None:
+            include_samples = bool(self._runtime and self._runtime.get().kb_ai_annotation_samples)
         new_fp = self._schema_fingerprint(schema)
         old_fp = self._schema_fingerprint_map.get(conn_id, "")
         if new_fp == old_fp:
             return {"changed": False, "fingerprint": new_fp, "tables_added": 0, "tables_removed": 0, "tables_changed": 0}
         if not self._auto.get(conn_id):
             # 未构建过的连接不应走增量（调用方应保证 ready）；防御性直接全量
-            return await self.build(conn_id, schema, samples, include_samples=bool(include_samples))
+            return await self.build(conn_id, schema, samples, include_samples=include_samples)
         result = await self.incremental_build(conn_id, schema, samples, include_samples=include_samples)
         result["fingerprint"] = new_fp
         return result
