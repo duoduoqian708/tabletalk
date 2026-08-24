@@ -238,6 +238,10 @@ async def annotate_knowledge(
                 except Exception:
                     samples[t["name"]] = {}
 
+    # 出网不变量：授权样本发送前统一值级截断（用户决策：无列级过滤，唯一防护是截断）
+    from app.knowledge.ddl_context import truncate_samples  # noqa: PLC0415
+    samples = truncate_samples(samples) if samples else samples
+
     provider_cfg = rt.provider_config()
     if gw.is_effective_mock(provider_cfg):
         items = _mock_comments(schema, samples)

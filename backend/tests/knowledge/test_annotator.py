@@ -1,7 +1,7 @@
 """AI 自动注释器测试：prompt 构造 / JSON 解析 / mock 确定性注释。"""
 from __future__ import annotations
 
-from app.knowledge.annotator import _mock_comments, _parse_items
+from app.knowledge.annotator import _mock_comments, _parse_items, annotate_knowledge
 
 
 def _schema() -> dict:
@@ -51,3 +51,29 @@ def test_parse_items_code_fence():
 def test_parse_items_garbage():
     assert _parse_items("抱歉，我无法") == []
     assert _parse_items("") == []
+
+
+# ---------- annotate_knowledge 独立路径：出网不变量 ----------
+
+
+async def test_annotate_knowledge_truncates_samples_before_send(app_state):
+    """独立 annotate 路径：授权样本发送前统一值级截断（与枚举 core 同款不变量）。"""
+    st = app_state
+    long_val = "超长业务取值-" + "很长的说明" * 30  # 远超 60 字符
+    schema = {
+        "tables": [{"name": "orders", "kind": "table", "comment": "", "column_count": 1}],
+        "columns": [
+            {"table": "orders", "name": "status", "type": "varchar(16)", "pk": False, "fk": False, "comment": ""},
+        ],
+    }
+    res = await annotate_knowledge(
+        st, "c-anno", include_samples=True, schema=schema,
+        samples={"orders": {"status": [long_val]}},
+    )
+    assert res["added"] > 0
+    body = next(
+        d.body for d in st.knowledge.list_docs("c-anno")
+        if d.column == "status" and d.source == "ai_draft"
+    )
+    assert long_val[:60] in body   # 截断值进入草案（= 发送内容）
+    assert long_val not in body    # 原始长句不出网/不入库

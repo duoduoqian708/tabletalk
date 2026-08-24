@@ -130,3 +130,18 @@ async def test_sync_resolves_none_from_runtime_setting(app_state):
     stats = await st.knowledge.sync("sync-runtime", _schema(), _samples())
     assert stats["enums_added"] > 0
     assert st.knowledge.enum_drafts("sync-runtime")
+
+
+async def test_incremental_resolves_none_from_runtime_setting(app_state):
+    """直接调 incremental_build 且 include_samples=None：内部回退运行时授权设置（两态）。"""
+    st = app_state
+    schema2 = _schema()
+    schema2["columns"][1]["comment"] = "订单状态"
+    samples2 = _samples()
+    samples2["orders"]["status"] = ["P", "S", "R", "F"]
+
+    for conn, authorized in (("inc-rt-off", False), ("inc-rt-on", True)):
+        st.runtime.update({"kb_ai_annotation_samples": authorized})
+        await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
+        await st.knowledge.incremental_build(conn, schema2, samples2)  # None → 运行时设置
+        assert ("F" in _status_values(st.knowledge, conn)) is authorized
