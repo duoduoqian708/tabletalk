@@ -33,7 +33,7 @@ export function KbReviewModal(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, load, confirmComment, rejectComment,
-    confirmTag, rejectTag, saveNote, confirmAll } = useKnowledge()
+    confirmTag, rejectTag, saveNote, confirmAll, discardAll } = useKnowledge()
 
   /* ── UI state ── */
   const [selTag, setSelTag] = useState<string | null>(null)
@@ -51,6 +51,8 @@ export function KbReviewModal(): React.JSX.Element | null {
   const [delArm, setDelArm] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [showFinalConfirm, setShowFinalConfirm] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
   const [colorMap, setColorMap] = useState<Record<string, string>>(() => loadColorMap())
   useEffect(() => { saveColorMap(colorMap) }, [colorMap])
 
@@ -161,6 +163,20 @@ export function KbReviewModal(): React.JSX.Element | null {
       toastMsg(t('kb.confirmFail', { msg: (e as Error).message }))
     } finally {
       setConfirming(false)
+    }
+  }
+
+  async function doDiscardAll(): Promise<void> {
+    if (!currentId) return
+    setDiscarding(true)
+    try {
+      await discardAll(currentId)
+      toastMsg('已放弃本次草案')
+      closeReview()
+    } catch (e) {
+      toastMsg(`放弃失败：${(e as Error).message}`)
+    } finally {
+      setDiscarding(false)
     }
   }
 
@@ -363,6 +379,9 @@ export function KbReviewModal(): React.JSX.Element | null {
           </div>
           <span className="krm-spacer" />
           <button className="krm-btn" onClick={() => load(currentId)} disabled={busy || loading}>刷新</button>
+          <button className="krm-discard" disabled={discarding} onClick={() => setShowDiscardConfirm(true)}>
+            ✕ 放弃
+          </button>
           <button className="krm-confirm" disabled={confirming} onClick={() => setShowFinalConfirm(true)}>
             {confirming ? '确认中…' : `✓ 确认并启用知识库（${totalPending}）`}
           </button>
@@ -381,6 +400,24 @@ export function KbReviewModal(): React.JSX.Element | null {
               <button className="krm-btn" onClick={() => setShowFinalConfirm(false)}>再想想</button>
               <button className="krm-confirm" disabled={confirming} onClick={() => { setShowFinalConfirm(false); void doConfirmAll() }}>
                 {confirming ? '确认中…' : '✓ 确认并启用'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 放弃二次确认弹窗：撤下本轮全部草案，历史已确认内容不受影响 */}
+      {showDiscardConfirm && (
+        <div className="krm-mask" style={{ background: 'rgba(5,7,11,0.6)', padding: 0, zIndex: 1400 }}>
+          <div className="krm-final">
+            <div className="krm-final-title">放弃本次全部草案？</div>
+            <div className="krm-final-desc">
+              将撤下本轮全部 AI 草案（注释 / 标签 / 关系）。历史已确认内容不受影响；若无历史确认，知识库将回到未构建状态。
+            </div>
+            <div className="krm-final-acts">
+              <button className="krm-btn" onClick={() => setShowDiscardConfirm(false)}>再想想</button>
+              <button className="krm-discard" disabled={discarding} onClick={() => { setShowDiscardConfirm(false); void doDiscardAll() }}>
+                {discarding ? '放弃中…' : '✕ 放弃草案'}
               </button>
             </div>
           </div>

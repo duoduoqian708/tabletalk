@@ -37,6 +37,8 @@ interface KnowledgeState {
   assignTags: (connId: string, table: string, tags: string[]) => Promise<void>
   saveNote: (connId: string, table: string, note: string) => Promise<void>
   confirmAll: (connId: string) => Promise<void>
+  /** 放弃本轮全部草案（撤草案保历史）：后端撤下 draft 并按有无 confirmed 置 ready/none */
+  discardAll: (connId: string) => Promise<void>
   /** 图谱编辑（持久化到知识库） */
   addEdge: (connId: string, edge: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null; cardinality?: 'n:1' | '1:1' }) => Promise<void>
   removeEdge: (connId: string, edge: { from_table: string; to_table: string; kind: string }) => Promise<void>
@@ -162,6 +164,11 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
 
   async confirmAll(connId) {
     await api.confirmAllEnabled(connId)
+    await get().load(connId)
+  },
+
+  async discardAll(connId) {
+    await api.discardKb(connId)
     await get().load(connId)
   },
 

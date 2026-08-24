@@ -277,6 +277,34 @@ async def confirm_all(conn_id: str) -> dict:
     return {**n, "kb_status": "ready"}
 
 
+@router.post("/{conn_id}/discard")
+async def discard_kb_drafts(conn_id: str) -> dict:
+    """放弃本轮全部草案（撤草案保历史）：draft 注释/标签/LLM 边全撤，confirmed 不动。
+
+    状态流转：存在任何 confirmed 内容 → ready（旧知识继续可用）；
+    全库无 confirmed 内容 → none（未构建态，重新引导构建）。
+    审计留痕与构建发起对称：origin=kb_build / status=discarded / source=manual。
+    """
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    discarded = await state.knowledge.discard_drafts(conn_id)
+    new_status = "ready" if state.knowledge.has_confirmed_content(conn_id) else "none"
+    state.connections.set_kb_status(conn_id, new_status)
+    state.audit.log(
+        connection=conn_id,
+        origin="kb_build",
+        tier="read",
+        verdict="allow",
+        status="discarded",
+        sql=f"-- kb discard columns={discarded['columns']} tables={discarded['tables']}"
+            f" tags={discarded['tags']} edges={discarded['edges']}",
+        source="manual",
+        discarded=discarded,
+    )
+    return {"discarded": discarded, "kb_status": new_status}
+
+
 @router.get("/{conn_id}/overview")
 async def overview(conn_id: str) -> dict:
     _have(conn_id)

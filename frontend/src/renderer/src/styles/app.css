@@ -5400,6 +5400,15 @@ tr.clickable.open { background: var(--accent-dim); }
 }
 .krm-confirm:hover { transform: translateY(-1px); box-shadow: 0 8px 32px color-mix(in srgb, var(--accent) 45%, transparent); }
 .krm-confirm:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+.krm-discard {
+  font-family: var(--font-mono); font-size: 14px; font-weight: 700; padding: 12px 28px;
+  border-radius: 10px; border: 1px solid var(--red-dim); cursor: pointer;
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  color: var(--red);
+  transition: all var(--dur) var(--ease);
+}
+.krm-discard:hover { transform: translateY(-1px); background: var(--red-dim); box-shadow: 0 8px 32px color-mix(in srgb, var(--red) 35%, transparent); }
+.krm-discard:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
 .krm-editor {
   position: fixed; z-index: 1300; width: 256px; background: var(--void-2);

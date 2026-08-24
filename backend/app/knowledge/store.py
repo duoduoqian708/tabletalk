@@ -1317,6 +1317,63 @@ class KnowledgeBase:
         """拒绝草案注释（v2：按表/列撤下；旧 doc_id 版本随草稿文档退役）。"""
         return await self.reject_comment(conn_id, table, column)
 
+    async def discard_drafts(self, conn_id: str) -> dict[str, int]:
+        """放弃本轮全部草案（审阅弹窗「放弃」）：撤下 draft，保留历史已确认内容。
+
+        - 列/表注释 status=="draft" → "none"（文本不清空，便于下次重建对照）；
+          confirmed 一律不动；
+        - draft 标签 → 移除并解绑（对齐 reject_tag 行为）；
+        - LLM draft 边 → 删除并记墓碑（对齐 reject_graph_edges 语义，重建不复活）。
+        返回 {columns, tables, tags, edges} 撤下计数。
+        """
+        tabs = self._tables.get(conn_id, {})
+        n_cols = 0
+        n_tables = 0
+        for tk in tabs.values():
+            if tk.status == "draft":
+                tk.status = "none"
+                n_tables += 1
+            for ci in tk.columns.values():
+                if ci.status == "draft":
+                    ci.status = "none"
+                    n_cols += 1
+        # draft 标签移除并解绑（对齐 reject_tag）
+        lib = self._tags.get(conn_id, {})
+        draft_names = {n for n, v in lib.items() if v.get("status") == "draft"}
+        for name in draft_names:
+            del lib[name]
+        if draft_names:
+            for t, names in self._table_tags.get(conn_id, {}).items():
+                if draft_names & set(names):
+                    self._table_tags[conn_id][t] = [n for n in names if n not in draft_names]
+        # LLM draft 边删除 + 记墓碑（去重，防重建复活）
+        pending = self._llm_graph_edges.get(conn_id, [])
+        n_edges = len(pending)
+        if pending:
+            tombstones = self._llm_edge_tombstones.setdefault(conn_id, [])
+            existing_keys = {self._llm_edge_key(t) for t in tombstones}
+            for e in pending:
+                if self._llm_edge_key(e) not in existing_keys:
+                    tombstones.append({
+                        "from_table": e["from_table"], "from_col": e.get("from_col"),
+                        "to_table": e["to_table"], "to_col": e.get("to_col"),
+                    })
+            self._llm_graph_edges[conn_id] = []
+        if n_cols or n_tables or draft_names or n_edges:
+            self._rebuild_vstore(conn_id)  # payload.draft_count 刷新（文本未入向量，无需重嵌）
+            self._save_conn(conn_id)
+        return {"columns": n_cols, "tables": n_tables, "tags": len(draft_names), "edges": n_edges}
+
+    def has_confirmed_content(self, conn_id: str) -> bool:
+        """库中是否存在任何 confirmed 内容（放弃后 kb_status 流转判定）：
+        任一列/表注释 confirmed 或任一标签 confirmed 即视为有历史。"""
+        if any(
+            tk.status == "confirmed" or any(ci.status == "confirmed" for ci in tk.columns.values())
+            for tk in self._tables.get(conn_id, {}).values()
+        ):
+            return True
+        return any(v.get("status") == "confirmed" for v in self._tags.get(conn_id, {}).values())
+
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
     def upsert_tags(self, conn_id: str, tags: list[dict[str, Any]]) -> int:
         """AI 提案的标签入库（新标签为 draft，已存在不重复）。tags: [{name, description}]"""

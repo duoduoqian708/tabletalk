@@ -35,6 +35,17 @@ export function confirmAllEnabled(connId: string): Promise<{ docs: number; tags:
   return request(`/api/v1/knowledge/${connId}/confirm-all`, { method: 'POST' })
 }
 
+export interface DiscardResult {
+  discarded: { columns: number; tables: number; tags: number; edges: number }
+  /** 有历史 confirmed → ready（旧知识继续可用）；全库无 confirmed → none（未构建态） */
+  kb_status: string
+}
+
+/** 放弃本轮全部草案（撤草案保历史）：draft 注释/标签/LLM 边全撤，confirmed 不动。 */
+export function discardKb(connId: string): Promise<DiscardResult> {
+  return request(`/api/v1/knowledge/${connId}/discard`, { method: 'POST' })
+}
+
 export function tags(connId: string): Promise<TagLibrary> {
   return request(`/api/v1/knowledge/${connId}/tags`)
 }
