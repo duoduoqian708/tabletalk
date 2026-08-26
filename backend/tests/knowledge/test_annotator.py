@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from app.knowledge.annotator import (
     _generate_candidate_pairs,
+    _kb_reason_provider_cfg,
     _mock_comments,
     _parse_graph_edges,
     _parse_items,
@@ -41,6 +43,44 @@ def test_mock_comments_can_include_samples():
     items = _mock_comments(_schema(), samples)
     id_item = next(i for i in items if i["table"] == "orders" and i["column"] == "id")
     assert "示例取值" in id_item["comment"]
+
+
+def _reason_rt(timeout=60, cap=None, mid=""):
+    return SimpleNamespace(
+        provider_config=lambda: {"provider": "cloud", "model": "m", "timeout": timeout},
+        default_ai_model=mid,
+        ai_models=[SimpleNamespace(id=mid, capabilities=cap)] if mid else [],
+    )
+
+
+def test_kb_reason_provider_cfg_extends_timeout_and_reasoning():
+    cfg = _kb_reason_provider_cfg(
+        _reason_rt(timeout=60, cap={"reasoning": True, "reasoning_effort": "high"}, mid="m")
+    )
+    assert cfg["timeout"] == 300.0, "推理调用读超时应放宽到 300s（不被 120s 掐断）"
+    assert cfg["reasoning"] == "high"
+
+
+def test_kb_reason_provider_cfg_respects_user_longer_timeout():
+    cfg = _kb_reason_provider_cfg(
+        _reason_rt(timeout=600, cap={"reasoning": True}, mid="m")
+    )
+    assert cfg["timeout"] == 600.0, "用户已配更长超时不反压"
+
+
+def test_kb_reason_provider_cfg_no_capability_still_extends_timeout():
+    cfg = _kb_reason_provider_cfg(_reason_rt(timeout=120))
+    assert cfg["timeout"] == 300.0
+    assert "reasoning" not in cfg, "无能力探测 → reasoning 保持原样"
+
+
+def test_kb_reason_provider_cfg_off_for_stage2():
+    cfg = _kb_reason_provider_cfg(
+        _reason_rt(timeout=60, cap={"reasoning": True, "reasoning_effort": "high"}, mid="m"),
+        reasoning=False,
+    )
+    assert cfg["reasoning"] == "off", "阶段2（领域划分）显式关思考 → 网关不发 thinking 参数"
+    assert cfg["timeout"] == 300.0, "超时放宽仍生效"
 
 
 def test_parse_items_plain_json():

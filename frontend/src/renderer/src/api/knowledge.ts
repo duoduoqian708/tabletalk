@@ -108,6 +108,27 @@ export function saveDoc(connId: string, table: string, note: string): Promise<un
   })
 }
 
+/** 按表编辑知识（详情面板两块）：表/列注释 + 向量化片段覆盖。只写知识字段。 */
+export interface TableEditColumnInput { name: string; comment?: string | null; values?: string | null; example?: string | null }
+export interface TableEditInput {
+  table: string
+  table_comment?: string | null
+  column_comments?: TableEditColumnInput[]
+  vector_text?: string | null
+}
+export interface TableEditResult {
+  changed: boolean
+  table: string
+  vector_text: string
+  vector_override: string | null
+}
+export function patchTable(connId: string, input: TableEditInput): Promise<TableEditResult> {
+  return request(`/api/v1/knowledge/${connId}/table`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 export function routeTables(connId: string, tagNames: string[]): Promise<RouteResult> {
   return request(`/api/v1/knowledge/${connId}/route`, { method: 'POST', body: JSON.stringify({ table: '', tags: tagNames }) })
 }

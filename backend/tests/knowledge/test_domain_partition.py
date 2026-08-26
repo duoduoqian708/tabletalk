@@ -68,6 +68,69 @@ def test_portrait_desc_and_values_and_fk():
     assert "[FK->customers.id]" in p0    # FK 有就带（与采样无关）
 
 
+def test_portrait_drops_json_blob_columns():
+    """TEXT 型 JSON/大文本列（靠列名识别）不进画像。"""
+    sch = {
+        "tables": [{"name": "t", "comment": ""}],
+        "columns": [
+            {"table": "t", "name": "id", "pk": True, "comment": ""},
+            {"table": "t", "name": "obj_json", "comment": ""},
+            {"table": "t", "name": "long_text", "comment": ""},
+            {"table": "t", "name": "payload", "comment": ""},
+            {"table": "t", "name": "status", "comment": ""},
+        ],
+        "foreign_keys": [],
+    }
+    p = _single_table_ddl_portrait(sch, "t", "", {}, None).lower()
+    assert "obj_json" not in p and "long_text" not in p and "payload" not in p
+    assert "status" in p
+    assert "id" in p  # 主键不因噪音滤除
+
+
+def test_portrait_enum_only_samples_skips_id_numeric_date():
+    """示例只给真枚举（非主键/非高基数、值短）；id/数值/日期不出。"""
+    sch = {
+        "tables": [{"name": "t", "comment": ""}],
+        "columns": [
+            {"table": "t", "name": "id", "pk": True, "type": "INTEGER", "comment": ""},
+            {"table": "t", "name": "amount", "pk": False, "type": "NUMERIC", "comment": ""},
+            {"table": "t", "name": "dt", "pk": False, "type": "DATE", "comment": ""},
+            {"table": "t", "name": "channel", "pk": False, "type": "TEXT", "comment": ""},
+        ],
+        "foreign_keys": [],
+    }
+    samples_ = {
+        "id": [1, 2, 3],
+        "amount": [9.9, 19.9],
+        "dt": ["2026-08-01", "2026-08-02"],
+        "channel": ["affiliate", "email", "sms", "social"],
+    }
+    p = _single_table_ddl_portrait(sch, "t", "", {}, samples_)
+    assert "affiliate，email，sms，social" in p  # 真枚举保留
+    for nm in ("id", "amount", "dt"):
+        line = next((ln for ln in p.splitlines() if ln.strip().startswith(nm)), "")
+        assert "取值示例" not in line, f"{nm} 不应带取值示例"
+
+
+def test_portrait_enum_filters_long_values_and_caps_5():
+    """长值（JSON/长文本）滤除；短枚举最多 5 个。"""
+    import re
+
+    sch = {
+        "tables": [{"name": "t", "comment": ""}],
+        "columns": [{"table": "t", "name": "status", "comment": ""}],
+        "foreign_keys": [],
+    }
+    samples_ = {"status": ["P" * 30, "S" * 40, "ok", "bad", "x", "y", "z"]}
+    p = _single_table_ddl_portrait(sch, "t", "", {}, samples_)
+    m = re.search(r"取值示例：(.+)", p)
+    assert m, "枚举列应给出取值示例"
+    vals = m.group(1).split("，")
+    assert len(vals) <= 5
+    assert all(len(v) <= 16 for v in vals)
+    assert "ok" in vals and "x" in vals
+
+
 # ---------- 解析 ----------
 
 

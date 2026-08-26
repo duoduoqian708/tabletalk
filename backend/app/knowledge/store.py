@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -63,6 +64,7 @@ class TableKnowledge:
     ddl: str = ""
     excluded: bool = False
     layout: dict[str, Any] = field(default_factory=dict)  # 2D 图布局坐标（透传存储，渲染在 T4）
+    vector_override: str = ""  # 人工覆盖的向量化片段文本；空 = 用构建合成文本
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -75,6 +77,7 @@ class TableKnowledge:
             "ddl": self.ddl,
             "excluded": self.excluded,
             "layout": self.layout,
+            "vector_override": self.vector_override,
         }
 
     @classmethod
@@ -90,6 +93,7 @@ class TableKnowledge:
             ddl=d.get("ddl", ""),
             excluded=bool(d.get("excluded")),
             layout=dict(d.get("layout") or {}),
+            vector_override=d.get("vector_override", ""),
         )
 
 
@@ -488,44 +492,59 @@ class KnowledgeBase:
                 if on_progress:
                     on_progress("AI 正在处理", 100, None, phase="annotate")
 
-            # 阶段二：全局标签提取（全量重构先从空标签库划分，旧标签不复活）
+            # 阶段二 + 阶段三 并行（无数据依赖：标签划分不依赖边，关系识别不依赖标签；
+            # 阶段三 run 期间不写盘，最终 _save_conn 统一落库，避免并行快照互相覆盖）
+            tags_error: str | None = None
+            graph_error: str | None = None
+            ai_tags_added = 0
+            self.clear_tags(conn_id)   # 阶段二前置：全量重构先从空标签库划分
+
+            from app.knowledge.annotator import annotate_domain, annotate_graph
+
+            async def _run_tags() -> None:
+                nonlocal ai_tags_added, tags_error
+                try:
+                    domain_result = await annotate_domain(
+                        _st, conn_id,
+                        schema=self._schema[conn_id],
+                        self_check=self_check, on_progress=on_progress,
+                    )
+                    ai_tags_added = domain_result.get("new_tags", 0)
+                    logger.info("[kb.build] conn=%s 阶段=tags 完成：new_tags=%s", conn_id, ai_tags_added)
+                except Exception as e:
+                    tags_error = str(e) or type(e).__name__
+                    logger.warning("[kb.build] conn=%s 阶段=tags 标签提取异常：%s（%s）",
+                                   conn_id, tags_error, type(e).__name__)
+
+            async def _run_graph() -> None:
+                nonlocal graph_error
+                try:
+                    edges = await annotate_graph(
+                        _st, conn_id, self._schema[conn_id],
+                        on_progress=on_progress, self_check=self_check,
+                    )
+                    # 对比墓碑：用户之前拒绝过的边标记 previously_rejected
+                    tombstone_keys = {
+                        self._llm_edge_key(t) for t in self._llm_edge_tombstones.get(conn_id, [])
+                    }
+                    for e in edges:
+                        if self._llm_edge_key(e) in tombstone_keys:
+                            e["status"] = "previously_rejected"
+                    self._llm_graph_edges[conn_id] = edges
+                    logger.info("[kb.build] conn=%s 阶段=graph 完成：llm_edges=%s", conn_id, len(edges))
+                except Exception as e:
+                    graph_error = str(e) or type(e).__name__
+                    logger.warning("[kb.build] conn=%s 阶段=graph 关系识别异常：%s（%s）",
+                                   conn_id, graph_error, type(e).__name__)
+
             if on_progress:
                 on_progress("AI 标签提取", 0, None, phase="tags")
-            try:
-                self.clear_tags(conn_id)
-                domain_result = await annotate_domain(
-                    _st, conn_id,
-                    schema=self._schema[conn_id],
-                    self_check=self_check, on_progress=on_progress,
-                )
-                ai_tags_added = domain_result.get("new_tags", 0)
-                logger.info("[kb.build] conn=%s 阶段=tags 完成：new_tags=%s", conn_id, ai_tags_added)
-            except Exception as e:
-                logger.warning("[kb.build] conn=%s 阶段=tags 标签提取异常：%s", conn_id, e)
-            if on_progress:
-                on_progress("AI 标签提取", 100, None, phase="tags")
-
-            # 阶段三：LLM 关系识别
-            if on_progress:
                 on_progress("AI 关系识别", 0, None, phase="graph")
-            try:
-                from app.knowledge.annotator import annotate_graph
-                llm_edges = await annotate_graph(
-                    _st, conn_id, self._schema[conn_id],
-                    on_progress=on_progress, self_check=self_check,
-                )
-                # 对比墓碑：用户之前拒绝过的边标记 previously_rejected
-                tombstone_keys = {
-                    self._llm_edge_key(t) for t in self._llm_edge_tombstones.get(conn_id, [])
-                }
-                for e in llm_edges:
-                    if self._llm_edge_key(e) in tombstone_keys:
-                        e["status"] = "previously_rejected"
-                self._llm_graph_edges[conn_id] = llm_edges
-                logger.info("[kb.build] conn=%s 阶段=graph 完成：llm_edges=%s", conn_id, len(llm_edges))
-            except Exception as e:
-                logger.warning("[kb.build] conn=%s 阶段=graph 关系识别异常：%s", conn_id, e)
+            await asyncio.gather(_run_tags(), _run_graph())
             if on_progress:
+                on_progress("AI 标签提取", 100,
+                            f"领域标签划分失败：{tags_error}（已跳过，图谱继续）" if tags_error else None,
+                            phase="tags")
                 on_progress("AI 关系识别", 100, None, phase="graph")
 
         # ---- 构图（程序 FK 边） ----
@@ -836,6 +855,9 @@ class KnowledgeBase:
         - 表注释取 confirmed 的 AI 注释，否则回退 db_comment。
         例：orders，订单表。字段有：id：主键，订单ID，示例为123；status：订单状态，可选值：S=已发货、R=已退货
         """
+        # 人工覆盖优先：编辑过向量化片段 → 直接用它（空串视为清空覆盖回落到合成）
+        if tk.vector_override:
+            return tk.vector_override
         header = tk.comment if tk.status == "confirmed" else tk.db_comment
         rows: list[str] = []
         for ci in tk.columns.values():
@@ -1394,6 +1416,61 @@ class KnowledgeBase:
             await self._reembed_tables(conn_id, [table])
         return n
 
+    async def edit_table_knowledge(
+        self, conn_id: str, table: str,
+        table_comment: str | None = None,
+        column_comments: list[dict[str, Any]] | None = None,
+        vector_text: str | None = None,
+    ) -> dict[str, Any]:
+        """人工按表编辑知识（详情面板两块，只写知识字段）。
+
+        - table_comment：表级注释（人工写入 → 权威 confirmed）；
+        - column_comments：[{name, comment?, values?, example?}] 每列仅改给定字段，
+          列不存在即报错（避免静默丢字段）；多字段任一改动即列 confirmed；
+        - vector_text：向量化片段覆盖（'' 清空覆盖回落合成文本）。
+        schema 镜像字段（列类型/PK/FK/DDL/表名）不可改写，type 恒 table_schema。
+        编辑改变合成文本/向量 → 该表即时重嵌。
+        """
+        tk = self._tables.get(conn_id, {}).get(table)
+        if tk is None:
+            raise KeyError(table)
+        changed = False
+
+        if table_comment is not None:
+            if tk.comment != table_comment:
+                changed = True
+            tk.comment = table_comment
+            # 人工写入 = 权威，覆盖 AI draft / none 状态
+            tk.status = "confirmed" if table_comment else "none"
+
+        if column_comments:
+            for edit in column_comments:
+                name = edit.get("name", "")
+                ci = tk.columns.get(name)
+                if ci is None:
+                    raise KeyError(f"{table}.{name}")
+                for field in ("comment", "values", "example"):
+                    if edit.get(field) is not None and getattr(ci, field) != edit[field]:
+                        setattr(ci, field, edit[field])
+                        changed = True
+                if ci.comment or ci.values or ci.example:
+                    ci.status = "confirmed"
+
+        if vector_text is not None:
+            if tk.vector_override != vector_text:
+                tk.vector_override = vector_text
+                changed = True
+
+        if changed:
+            self._save_conn(conn_id)
+            await self._reembed_tables(conn_id, [table])
+        return {
+            "changed": changed,
+            "table": table,
+            "vector_text": self._synthesize_table_text(conn_id, tk),
+            "vector_override": tk.vector_override or None,
+        }
+
     async def reject(self, conn_id: str, table: str, column: str | None = None) -> int:
         """拒绝草案注释（v2：按表/列撤下；旧 doc_id 版本随草稿文档退役）。"""
         return await self.reject_comment(conn_id, table, column)
@@ -1747,6 +1824,8 @@ class KnowledgeBase:
                 "excluded": tk.name in excluded,
                 "ddl": tk.ddl,
                 "columns": cols,
+                "vector_text": self._synthesize_table_text(conn_id, tk),
+                "vector_override": tk.vector_override or None,
             })
 
         return {

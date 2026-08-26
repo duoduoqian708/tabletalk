@@ -164,8 +164,12 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
                 raise asyncio.CancelledError()
             last_phase = phase
             last_step = step
+            # 阶段2/3 可并行：顶层 percent 取历史最大值（各阶段内部只增），
+            # 避免帧在 tags/graph 窗口间横跳破坏"全局单调不降"契约
+            ov = _overall(phase, percent)
+            prev = job.progress.get("percent", 0)
             job.progress.update({
-                "stage": stage, "percent": _overall(phase, percent), "detail": detail,
+                "stage": stage, "percent": max(ov, prev), "detail": detail,
             })
             if phase:
                 for p in job.progress.get("phases", []):

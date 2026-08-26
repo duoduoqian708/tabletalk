@@ -5774,23 +5774,26 @@ tr.clickable.open { background: var(--accent-dim); }
 .kb-mode-toggle {
   display: inline-flex;
   align-items: stretch;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-full);
-  overflow: hidden;
+  gap: 4px;
 }
 .kb-mode-btn {
   background: transparent;
-  border: none;
+  border: 1px solid var(--line-strong);
   color: var(--ink-faint);
   font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 3px 12px;
+  border-radius: var(--r-full);
   cursor: pointer;
-  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+  transition: all var(--dur) var(--ease);
 }
-.kb-mode-btn + .kb-mode-btn { border-left: 1px solid var(--line-strong); }
-.kb-mode-btn:hover { color: var(--ink); }
-.kb-mode-btn.on { background: var(--accent-dim); color: var(--accent-soft); }
+.kb-mode-btn:hover { color: var(--ink); border-color: var(--ink-faint); }
+.kb-mode-btn.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent-soft);
+  font-weight: 600;
+}
 .kb-trg2d-wrap {
   position: relative;
   flex: 1;

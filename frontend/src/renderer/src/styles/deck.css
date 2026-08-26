@@ -3628,8 +3628,12 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 30px;
-  overflow: hidden;
+  height: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 3px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 45%, transparent) transparent;
 }
 .ws-tags-none {
   font-family: var(--font-mono);
@@ -3655,6 +3659,24 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 .tag-chip:hover {
   border-color: var(--tag-c);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--tag-c) 18%, transparent);
+}
+/* 工作台标签：未选中置灰（边框/底灰、文字保留标签色做区分），选中点亮＋光环 */
+.ws-tags .tag-chip {
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--tag-c);
+  font-weight: 500;
+}
+.ws-tags .tag-chip:hover:not(.selected) {
+  border-color: color-mix(in srgb, var(--tag-c) 55%, var(--line-strong));
+  color: var(--tag-c);
+}
+.ws-tags .tag-chip.selected {
+  border-color: var(--tag-c);
+  background: color-mix(in srgb, var(--tag-c) 20%, transparent);
+  color: var(--tag-c);
+  font-weight: 600;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tag-c) 15%, transparent);
 }
 .ws-tags-add {
   position: relative;

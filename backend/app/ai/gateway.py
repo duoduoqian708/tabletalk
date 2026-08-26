@@ -151,7 +151,7 @@ class LLMGateway:
             return ChatResponse(content=content, tool_calls=tool_calls, usage=usage)
         except Exception as _exc:  # noqa: BLE001
             # 失败也记（token=0，可追溯），绝不漏记
-            self._record_llm(ctx, messages, None, None, time.monotonic() - _t0, ok=False, note=str(_exc))
+            self._record_llm(ctx, messages, None, None, time.monotonic() - _t0, ok=False, note=str(_exc) or type(_exc).__name__)
             raise
 
     async def chat_stream(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True, ctx: dict | None = None) -> "AsyncIterator[StreamChunk]":
@@ -232,7 +232,7 @@ class LLMGateway:
             elif _exc is GeneratorExit:
                 _ok, _note = False, "interrupted"
             else:
-                _ok, _note = False, str(_exc)
+                _ok, _note = False, str(_exc) or _exc.__name__
             self._record_llm(ctx, messages, _payload, _usage, time.monotonic() - _t0, ok=_ok, note=_note)
 
     def reasoning_supports_param(self) -> bool:

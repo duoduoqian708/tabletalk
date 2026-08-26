@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { retrieve, type KbCard } from '@renderer/api/knowledge'
-import type { GraphEdge, KbTableView, KnowledgeOverview, RouteResult } from '@renderer/api/types'
+import { patchTable, type TableEditInput } from '@renderer/api/knowledge'
+import type { KbColumnView, KnowledgeOverview, RouteResult } from '@renderer/api/types'
 import type { GraphNode as Graph3DNode, GraphEdge as Graph3DEdge } from './Graph3D'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useI18n } from '@renderer/store/i18n'
-import { getTagColor } from '@renderer/utils/tagColors'
+import { assignUniqueColors, getTagColor, TAG_COLORS, loadColorMap, saveColorMap } from '@renderer/utils/tagColors'
 import { toastMsg } from '@renderer/utils/toast'
 import { tagColorForTable } from '@renderer/lib/colors'
 import { Graph3D } from './Graph3D'
@@ -20,6 +20,7 @@ import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hook
    - 知识库：三列（左=标签 · 中=按表结构聚合的表块 · 右=选中表详情面板）
    - 图库：全宽关系图谱（展示/编辑双形态）+ 草案边逐条审阅
    审核动作全部行内化（表块/标签/字段/草案边 ✓✕），历史记录抽屉保留
+   右详情面板两块：向量化片段（可编辑覆盖） / 元数据（type 固定 table_schema）
    ═══════════════════════════════════════════════ */
 
 function Tag({ name, status, onConfirm, onReject }: {
@@ -46,68 +47,101 @@ function Tag({ name, status, onConfirm, onReject }: {
 const UNTAGGED = '__untagged__'
 
 /* ═══════════════════════════════════════════════
-   右：选中表详情面板（表信息 / 字段详情 / 相关表 / 存储形态）
+   新建标签平台风弹窗（替代 window.prompt）
+   名字 + 描述 + 色盘自选；颜色仅存前端 localStorage
    ═══════════════════════════════════════════════ */
-function TableDetailPanel({ overview, selName, currentId }: {
+function NewTagDialog({ connId, onClose }: {
+  connId: string
+  onClose: () => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const { load } = useKnowledge()
+  const [name, setName] = useState('')
+  const [desc, setDesc] = useState('')
+  const [color, setColor] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  async function submit(): Promise<void> {
+    const nm = name.trim()
+    if (!nm || saving) return
+    setSaving(true)
+    try {
+      const { createTag } = await import('@renderer/api/knowledge')
+      await createTag(connId, nm, desc.trim())
+      if (color) {
+        const map = loadColorMap()
+        map[nm] = color
+        saveColorMap(map)
+      }
+      await load(connId)
+      onClose()
+    } catch (e) {
+      toastMsg(`创建失败：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="kb-dialog-mask" onClick={onClose}>
+      <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="kb-dialog-title">{t('kb.newTag')}</div>
+        <label className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagName')}</span>
+          <input className="rs-input" autoFocus value={name} placeholder={t('kb.tagNamePh')}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+        </label>
+        <label className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagDesc')}</span>
+          <input className="rs-input" value={desc} placeholder={t('kb.tagDescPh')}
+            onChange={(e) => setDesc(e.target.value)} />
+        </label>
+        <div className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagColor')}</span>
+          <div className="tag-swatches">
+            <button type="button" className={`tag-sw auto${color === null ? ' on' : ''}`}
+              title={t('kb.autoColorTitle')} onClick={() => setColor(null)}>A</button>
+            {TAG_COLORS.map((c) => (
+              <button key={c} type="button" className={`tag-sw${color === c ? ' on' : ''}`}
+                style={{ background: c }} title={c} onClick={() => setColor(c)} />
+            ))}
+          </div>
+        </div>
+        <div className="kb-dialog-actions">
+          <button className="btn ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button className="btn save" disabled={saving || !name.trim()} onClick={() => void submit()}>
+            {saving ? t('kb.saving') : t('kb.create')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════
+   右：选中表详情面板 —— 两块（向量化片段 / 元数据）
+   ═══════════════════════════════════════════════ */
+function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
   overview: KnowledgeOverview
   selName: string | null
   currentId: string
+  /** 图库跳转：关联关系由图库 Tab 负责，详情面板只留入口 */
+  onOpenGraph?: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  const { confirmComment, rejectComment } = useKnowledge()
-  const [relExpanded, setRelExpanded] = useState<Set<string>>(new Set())
+  const { load, confirmComment, rejectComment } = useKnowledge()
   const [ddlOpen, setDdlOpen] = useState(false)
+  /* 编辑状态：向量化片段 / 表注释 / 列知识 */
+  const [vecEditing, setVecEditing] = useState(false)
+  const [vecDraft, setVecDraft] = useState('')
+  const [cmtEditing, setCmtEditing] = useState(false)
+  const [cmtDraft, setCmtDraft] = useState('')
+  const [colEditing, setColEditing] = useState<string | null>(null)
+  const [colDraft, setColDraft] = useState({ comment: '', values: '', example: '' })
 
   const tbl = useMemo(() => (selName ? overview.tables.find((tb) => tb.name === selName) ?? null : null),
     [overview, selName])
-
-  /* 相关表：沿 graph.edges + llm_draft_edges（draft 合并）找与选中表相邻的边 */
-  const related = useMemo(() => {
-    if (!selName || !overview) return []
-    const drafts: GraphEdge[] = (overview.graph.llm_draft_edges ?? []).map((d) => ({
-      from: d.from_table, from_col: d.from_col ?? null,
-      to: d.to_table, to_col: d.to_col ?? null,
-      kind: 'llm', status: 'draft', reason: d.reason,
-    }))
-    const out: { edge: GraphEdge; other: KbTableView }[] = []
-    for (const e of [...(overview.graph.edges ?? []), ...drafts]) {
-      if (e.from === selName || e.to === selName) {
-        const otherName = e.from === selName ? e.to : e.from
-        const other = overview.tables.find((tb) => tb.name === otherName)
-        if (other) out.push({ edge: e, other })
-      }
-    }
-    return out
-  }, [overview, selName])
-
-  /* 存储形态：进向量（表级 1 chunk） vs 仅原文存库 */
-  const store = useMemo(() => {
-    if (!tbl) return null
-    const vec: { kind: string; text: string }[] = []
-    const header = tbl.comment_status === 'confirmed' && tbl.comment ? tbl.comment : tbl.db_comment
-    vec.push({ kind: 'title', text: `表标题：${header || t('kb.noDesc')}` })
-    let confirmed = 0
-    let struct = 0
-    for (const c of tbl.columns) {
-      if (c.status === 'confirmed') {
-        confirmed++
-        const bits = [c.name]
-        if (c.comment) bits.push(c.comment)
-        if (c.values) bits.push(`${t('kb.colValues')} ${c.values}`)
-        if (c.example) bits.push(`${t('kb.colExample')} ${c.example}`)
-        vec.push({ kind: 'col', text: bits.join(' · ') })
-      } else {
-        struct++
-      }
-    }
-    if (struct > 0) vec.push({ kind: 'struct', text: t('kb.structShell', { n: struct }) })
-    const raw = [
-      { text: t('kb.storeDdl') },
-      { text: t('kb.storeTags', { n: tbl.tags.length }) },
-      { text: t('kb.storeEdges', { n: related.length }) },
-    ]
-    return { vec, raw, confirmed, struct }
-  }, [tbl, related.length, t])
 
   if (!tbl) {
     return (
@@ -118,51 +152,113 @@ function TableDetailPanel({ overview, selName, currentId }: {
     )
   }
 
-  const toggleRel = (name: string): void => {
-    setRelExpanded((s) => {
-      const n = new Set(s)
-      if (n.has(name)) n.delete(name)
-      else n.add(name)
-      return n
-    })
+  async function saveEdit(input: TableEditInput): Promise<void> {
+    try {
+      await patchTable(currentId, input)
+      setVecEditing(false); setCmtEditing(false); setColEditing(null)
+      await load(currentId)
+    } catch (e) {
+      toastMsg(`保存失败：${(e as Error).message}`)
+    }
+  }
+
+  const beginVecEdit = (): void => { setVecDraft(tbl.vector_text); setVecEditing(true) }
+  const beginCmtEdit = (): void => { setCmtDraft(tbl.comment ?? ''); setCmtEditing(true) }
+  const beginColEdit = (c: KbColumnView): void => {
+    setColEditing(c.name)
+    setColDraft({ comment: c.comment, values: c.values, example: c.example })
   }
 
   return (
     <div className="tdp" key={tbl.name}>
-      {/* ① 表信息 */}
-      <section className="tdp-sec">
-        <div className="tdp-sec-h mono">{t('kb.detailTable')}</div>
-        <div className="tdp-tbl-head">
-          <span className={`st-dot ${tbl.comment_status}`} />
-          <span className="tdp-tname mono">{tbl.name}</span>
-          {tbl.kind === 'view' && <span className="tdp-view-badge">view</span>}
-          <span className="tdp-tcount mono">{tbl.column_count}</span>
-          {tbl.tags.map((tg) => (
-            <span key={tg.name} className="tag-chip confirmed">{tg.name}</span>
-          ))}
-        </div>
-        {tbl.db_comment && <div className="tdp-dbcomment mono" title={t('kb.colDbComment')}>{tbl.db_comment}</div>}
-        <div className="tdp-comment">
-          <span className="tdp-comment-label">{t('kb.detailTableComment')}</span>
-          {tbl.comment_status === 'draft' && (
-            <span className="mini-acts">
-              <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name)}>✓</button>
-              <button title={t('kb.rejectTitle')} onClick={() => rejectComment(currentId, tbl.name)}>✕</button>
-            </span>
-          )}
-        </div>
-        <div className="tdp-comment-body">{tbl.comment || <span className="kb-none">{t('kb.noDesc')}</span>}</div>
-        <details className="tdp-ddl" open={ddlOpen} onToggle={(e) => setDdlOpen((e.currentTarget as HTMLDetailsElement).open)}>
-          <summary className="mono">{t('kb.detailDdl')}</summary>
-          <pre className="tdp-ddl-pre">{tbl.ddl || t('kb.noDdl')}</pre>
-        </details>
-      </section>
-
-      {/* ② 字段详情 */}
+      {/* ① 向量化片段：进 embedding 的检索文本，可编辑覆盖 */}
       <section className="tdp-sec">
         <div className="tdp-sec-h mono">
-          {t('kb.detailColumns')}
-          <span className="tdp-hint">({tbl.columns.length})</span>
+          {t('kb.vecChunk')}
+          {overview.embedding_provider === 'hash' ? (
+            <span className="emb-state off" title={t('kb.embUnconfiguredHint')}>{t('kb.embOff')}</span>
+          ) : (
+            <span className="emb-state on" title={t('kb.embOnTitle')}>{t('kb.embOn')}</span>
+          )}
+        </div>
+        {vecEditing ? (
+          <div className="kb-edit">
+            <textarea className="kb-edit-ta vec-ta" autoFocus rows={6}
+              value={vecDraft} onChange={(e) => setVecDraft(e.target.value)} />
+            <div className="kb-edit-acts">
+              <button className="btn ghost" onClick={() => setVecEditing(false)}>{t('common.cancel')}</button>
+              <button className="btn save" onClick={() => void saveEdit({ table: tbl.name, vector_text: vecDraft })}>{t('common.save')}</button>
+            </div>
+          </div>
+        ) : (
+          <div className="tdp-vec">
+            <div className="tdp-vec-head">
+              <span className={`tdp-vec-badge${tbl.vector_override ? ' over' : ''}`}>
+                {tbl.vector_override ? t('kb.vecOverride') : t('kb.vecGenerated')}
+              </span>
+              <span className="tdp-hint mono">({t('kb.vecScope')})</span>
+              <button className="mini-edit" onClick={beginVecEdit}>✎ {t('kb.edit')}</button>
+            </div>
+            <div className="tdp-vec-text">{tbl.vector_text || <span className="kb-none">{t('kb.noDesc')}</span>}</div>
+          </div>
+        )}
+      </section>
+
+      {/* ② 元数据：type 固定 table_schema；知识字段可编辑，schema 镜像只读 */}
+      <section className="tdp-sec">
+        <div className="tdp-sec-h mono">{t('kb.metadata')}</div>
+
+        <div className="tdp-kv">
+          <span className="tdp-kv-k mono">type</span>
+          <span className="tdp-kv-v tdp-kv-lock mono">table_schema <span title={t('kb.typeLocked')}>🔒</span></span>
+        </div>
+        <div className="tdp-kv">
+          <span className="tdp-kv-k mono">{t('kb.tblName')}</span>
+          <span className="tdp-kv-v mono">
+            {tbl.name}
+            {tbl.kind === 'view' && <span className="tdp-view-badge">view</span>}
+            <span className="tdp-tcount mono">{tbl.column_count}</span>
+            {tbl.tags.map((tg) => (
+              <span key={tg.name} className="tag-chip confirmed">{tg.name}</span>
+            ))}
+          </span>
+        </div>
+
+        {/* 表注释（知识字段 → 可编辑） */}
+        <div className="tdp-kv">
+          <span className="tdp-kv-k mono">{t('kb.detailTableComment')}</span>
+          <span className="tdp-kv-v">
+            {tbl.comment_status === 'draft' && (
+              <span className="mini-acts">
+                <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name)}>✓</button>
+                <button title={t('kb.rejectTitle')} onClick={() => rejectComment(currentId, tbl.name)}>✕</button>
+              </span>
+            )}
+            <button className="mini-edit" onClick={beginCmtEdit}>✎ {t('kb.edit')}</button>
+          </span>
+        </div>
+        {cmtEditing ? (
+          <div className="kb-edit">
+            <textarea className="kb-edit-ta" autoFocus rows={3} value={cmtDraft}
+              onChange={(e) => setCmtDraft(e.target.value)} />
+            <div className="kb-edit-acts">
+              <button className="btn ghost" onClick={() => setCmtEditing(false)}>{t('common.cancel')}</button>
+              <button className="btn save" onClick={() => void saveEdit({ table: tbl.name, table_comment: cmtDraft })}>{t('common.save')}</button>
+            </div>
+          </div>
+        ) : (
+          <div className="tdp-comment-body">{tbl.comment || <span className="kb-none">{t('kb.noDesc')}</span>}</div>
+        )}
+
+        {/* DDL（schema 镜像 → 只读） */}
+        <details className="tdp-ddl" open={ddlOpen} onToggle={(e) => setDdlOpen((e.currentTarget as HTMLDetailsElement).open)}>
+          <summary className="mono">DDL</summary>
+          <pre className="tdp-ddl-pre">{tbl.ddl || t('kb.noDdl')}</pre>
+        </details>
+
+        {/* 字段：name/type/pk/fk 只读；comment/values/example 知识字段可编辑 */}
+        <div className="tdp-fields-h mono">
+          {t('kb.detailColumns')} <span className="tdp-hint">({tbl.columns.length})</span>
         </div>
         <div className="tdp-cols">
           {tbl.columns.map((col) => (
@@ -173,6 +269,8 @@ function TableDetailPanel({ overview, selName, currentId }: {
                 <span className="tdp-ctype mono">{col.type}</span>
                 {col.pk && <span className="ckey mono">PK</span>}
                 {col.fk && <span className="ckey fk mono">FK</span>}
+                <span className="spacer" />
+                <button className="mini-edit" onClick={() => beginColEdit(col)}>✎</button>
                 {col.status === 'draft' && (
                   <span className="mini-acts">
                     <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name, col.name)}>✓</button>
@@ -183,96 +281,46 @@ function TableDetailPanel({ overview, selName, currentId }: {
               <div className="tdp-col-comment" title={col.db_comment ? `${t('kb.colDbComment')} ${col.db_comment}` : undefined}>
                 {col.comment || (col.db_comment || <span className="kb-none">—</span>)}
               </div>
-              {(col.values || col.example) && (
-                <div className="tdp-col-meta">
-                  {col.values && <span className="cvals" title={col.values}>{t('kb.colValues')}: {col.values}</span>}
-                  {col.example && <span className="cexample mono" title={col.example}>{t('kb.colExample')} {col.example}</span>}
+              {colEditing === col.name ? (
+                <div className="kb-edit col-edit">
+                  <label className="kb-field"><span className="kb-field-k mono">{t('kb.colComment')}</span>
+                    <textarea className="rs-input" rows={2} value={colDraft.comment}
+                      onChange={(e) => setColDraft((s) => ({ ...s, comment: e.target.value }))} />
+                  </label>
+                  <label className="kb-field"><span className="kb-field-k mono">{t('kb.colValues')}</span>
+                    <input className="rs-input" value={colDraft.values}
+                      onChange={(e) => setColDraft((s) => ({ ...s, values: e.target.value }))} />
+                  </label>
+                  <label className="kb-field"><span className="kb-field-k mono">{t('kb.colExample')}</span>
+                    <input className="rs-input" value={colDraft.example}
+                      onChange={(e) => setColDraft((s) => ({ ...s, example: e.target.value }))} />
+                  </label>
+                  <div className="kb-edit-acts">
+                    <button className="btn ghost" onClick={() => setColEditing(null)}>{t('common.cancel')}</button>
+                    <button className="btn save" onClick={() => void saveEdit({
+                      table: tbl.name,
+                      column_comments: [{ name: col.name, ...colDraft }],
+                    })}>{t('common.save')}</button>
+                  </div>
                 </div>
+              ) : (
+                (col.values || col.example) && (
+                  <div className="tdp-col-meta">
+                    {col.values && <span className="cvals" title={col.values}>{t('kb.colValues')}: {col.values}</span>}
+                    {col.example && <span className="cexample mono" title={col.example}>{t('kb.colExample')} {col.example}</span>}
+                  </div>
+                )
               )}
             </div>
           ))}
           {tbl.columns.length === 0 && <div className="rv-none mono">{t('kb.noColumns')}</div>}
         </div>
-      </section>
 
-      {/* ③ 相关表 */}
-      <section className="tdp-sec">
-        <div className="tdp-sec-h mono">
-          {t('kb.detailRelated')}
-          <span className="tdp-hint">({related.length})</span>
+        {/* 关联关系归属图库 Tab：这里只留跳转入口（外键/LLM 草案边/手绘边全在图库） */}
+        <div className="tdp-graph-link" onClick={onOpenGraph}>
+          <span className="mono">◈ {t('kb.relationsOwner')}</span>
+          <span className="tdp-graph-link-go">{t('kb.goGraph')} →</span>
         </div>
-        {related.length === 0 ? (
-          <div className="rv-none mono">{t('kb.relatedNone')}</div>
-        ) : (
-          related.map(({ edge, other }) => {
-            const isFrom = edge.from === tbl.name
-            const otherName = other.name
-            const expanded = relExpanded.has(otherName)
-            const draft = edge.kind === 'llm'
-            return (
-              <div key={`${edge.from}-${edge.to}-${edge.kind}`} className="tdp-rel">
-                <div className="tdp-rel-row" onClick={() => toggleRel(otherName)}>
-                  <span className="caret">{expanded ? '▾' : '▸'}</span>
-                  <span className="mono">{edge.from}</span>
-                  {edge.from_col && <span className="rv-edge-col">.{edge.from_col}</span>}
-                  <span className="rv-edge-arrow">{isFrom ? '→' : '↔'} </span>
-                  <span className="mono">{edge.to}</span>
-                  {edge.to_col && <span className="rv-edge-col">.{edge.to_col}</span>}
-                  <span className={`tdp-rel-kind ${edge.kind}`}>{edge.kind}</span>
-                  {draft && <span className="tdp-rel-draft">{t('kb.draft')}</span>}
-                </div>
-                {edge.reason && <div className="tdp-rel-reason">{edge.reason}</div>}
-                <div className="tdp-rel-desc">{other.db_comment || other.comment || ''}</div>
-                {expanded && (
-                  <div className="tdp-rel-cols">
-                    {other.columns.map((c) => (
-                      <div key={c.name} className="tdp-rel-col mono">
-                        <span className="cname">{c.name}</span>
-                        <span className="ctype">{c.type}</span>
-                        <span className="ccomment">{c.comment || c.db_comment || ''}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })
-        )}
-      </section>
-
-      {/* ④ 存储形态：哪些进向量 / 哪些仅原文 */}
-      <section className="tdp-sec">
-        <div className="tdp-sec-h mono">
-          {t('kb.detailStorage')}
-          {overview.embedding_provider === 'hash' ? (
-            <span className="emb-state off" title={t('kb.embUnconfiguredHint')}>{t('kb.embOff')}</span>
-          ) : (
-            <span className="emb-state on" title={t('kb.embOnTitle')}>{t('kb.embOn')}</span>
-          )}
-        </div>
-        {store && (
-          <>
-            <div className="tdp-store-group vec">
-              <div className="tdp-store-h">{t('kb.storageVector')} <span className="tdp-hint">(1 chunk/表)</span></div>
-              {store.vec.map((r, i) => (
-                <div key={i} className={`tdp-store-row ${r.kind}`}>
-                  <span className="tdp-store-ic">{r.kind === 'title' ? 'H' : r.kind === 'struct' ? 'S' : '⟨⟩'}</span>
-                  <span className="tdp-store-text">{r.text}</span>
-                </div>
-              ))}
-              <div className="tdp-store-note">{t('kb.storeVectorNote', { confirmed: store.confirmed, struct: store.struct })}</div>
-            </div>
-            <div className="tdp-store-group raw">
-              <div className="tdp-store-h">{t('kb.storageRaw')}</div>
-              {store.raw.map((r, i) => (
-                <div key={i} className="tdp-store-row raw">
-                  <span className="tdp-store-ic">▤</span>
-                  <span className="tdp-store-text">{r.text}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </section>
     </div>
   )
@@ -286,7 +334,7 @@ export function KnowledgeReview(): React.JSX.Element {
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, error, load, buildProgress,
     confirmComment, rejectComment, confirmTag, rejectTag,
-    assignTags, saveNote } = useKnowledge()
+    assignTags } = useKnowledge()
   const { t } = useI18n()
   const openBuildDialog = useKbGate((s) => s.openBuildDialog)
   const buildPct = buildProgress?.percent ?? null
@@ -298,8 +346,7 @@ export function KnowledgeReview(): React.JSX.Element {
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [adding, setAdding] = useState<string | null>(null)
   const [kq, setKq] = useState('')
-  const [kcards, setKcards] = useState<KbCard[] | null>(null)
-  const [searching, setSearching] = useState(false)
+  const [newTagOpen, setNewTagOpen] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   /** 图库 Tab 形态：display=3D 展示态（只读）| edit=2D 编辑态（拖线/增删边/持久化布局） */
@@ -326,27 +373,19 @@ export function KnowledgeReview(): React.JSX.Element {
     [overview?.graph.edges],
   )
 
+  /* 标签色：展示期不撞色（≤20 色色色不同，>20 循环）；图库/左列表同源 */
+  const colorByTag = useMemo(
+    () => assignUniqueColors((overview?.tags.library ?? []).map((x) => x.name)),
+    [overview?.tags.library],
+  )
+
   /* 节点颜色映射：标签色驱动，无标签=基准灰，多标签=混色 */
   const nodeColorMap = useMemo(() => {
     if (!overview) return {}
     const m: Record<string, string> = {}
-    for (const tb of overview.tables) m[tb.name] = tagColorForTable(tb)
+    for (const tb of overview.tables) m[tb.name] = tagColorForTable(tb, colorByTag)
     return m
-  }, [overview])
-
-  async function doSearch(): Promise<void> {
-    const q = kq.trim()
-    if (!q || !currentId) return
-    setSearching(true)
-    try {
-      const r = await retrieve(currentId, q, 10)
-      setKcards(r.cards)
-    } catch {
-      setKcards([])
-    } finally {
-      setSearching(false)
-    }
-  }
+  }, [overview, colorByTag])
 
   useEffect(() => {
     if (currentId) void load(currentId)
@@ -391,9 +430,10 @@ export function KnowledgeReview(): React.JSX.Element {
   }))
   const untaggedCount = overview?.tables.filter((tb) => tb.tags.length === 0).length ?? 0
 
-  /* 中间列过滤：选中标签（任一命中）∪ 未分类 + 只看待确认 */
+  /* 中间列过滤：本地表名检索 + 选中标签（任一命中）∪ 未分类 + 只看待确认（三级复合，零网络） */
   const filteredTables = useMemo(() => {
     if (!overview) return []
+    const q = kq.trim().toLowerCase()
     const wanted = [...selTags].filter((n) => n !== UNTAGGED)
     let ts = overview.tables
     if (wanted.length > 0 || selTags.has(UNTAGGED)) {
@@ -403,17 +443,25 @@ export function KnowledgeReview(): React.JSX.Element {
         return matchTag || matchUntagged
       })
     }
+    if (q) ts = ts.filter((tb) => tb.name.toLowerCase().includes(q))
     if (showDraftOnly) {
       ts = ts.filter((tb) => tb.comment_status === 'draft' || tb.columns.some((c) => c.status === 'draft'))
     }
     return ts
-  }, [overview, selTags, showDraftOnly])
+  }, [overview, selTags, showDraftOnly, kq])
 
   const notBuilt = overview !== null && overview.built === false
 
   function beginEdit(table: string, comment: string): void {
     setEditing(table)
     setEditText(comment)
+  }
+
+  function saveListComment(table: string, text: string): void {
+    if (!currentId) return
+    void patchTable(currentId, { table, table_comment: text })
+      .then(() => { setEditing(null); return load(currentId) })
+      .catch((e) => toastMsg(`保存失败：${(e as Error).message}`))
   }
 
   return (
@@ -556,7 +604,7 @@ export function KnowledgeReview(): React.JSX.Element {
                   {tagRows.length === 0 && <div className="rv-none mono">{t('kb.noConfirmedTags')}</div>}
                   {tagRows.map((tg) => {
                     const on = selTags.has(tg.name)
-                    const color = getTagColor(tg.name)
+                    const color = getTagColor(tg.name, colorByTag)
                     return (
                       <div key={tg.name} className={`kb-tag-row${on ? ' on' : ''}`} onClick={() => toggleTag(tg.name)}>
                         <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0 }} />
@@ -582,7 +630,7 @@ export function KnowledgeReview(): React.JSX.Element {
                       <div className="kb-route-cap mono">{t('kb.pendingGroup')}</div>
                       {pendingTags.map((tg) => (
                         <div key={tg.name} className={`kb-tag-row${selTags.has(tg.name) ? ' on' : ''}`} onClick={() => toggleTag(tg.name)}>
-                          <span style={{ width: 9, height: 9, borderRadius: '50%', background: getTagColor(tg.name), flexShrink: 0 }} />
+                          <span style={{ width: 9, height: 9, borderRadius: '50%', background: getTagColor(tg.name, colorByTag), flexShrink: 0 }} />
                           <span className="kb-tag-name" style={{ color: 'var(--amber)' }}>{tg.name}</span>
                           <span className="mini-acts" style={{ marginLeft: 'auto' }}>
                             <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
@@ -591,10 +639,7 @@ export function KnowledgeReview(): React.JSX.Element {
                       ))}
                     </div>
                   )}
-                  <button className="kb-tag-add-new" onClick={() => {
-                    const name = window.prompt('新建标签名称：')
-                    if (name?.trim()) void import('@renderer/api/knowledge').then(({ createTag }) => createTag(currentId, name.trim()).then(() => load(currentId)))
-                  }}>＋ 新建标签</button>
+                  <button className="kb-tag-add-new" onClick={() => setNewTagOpen(true)}>＋ {t('kb.newTag')}</button>
                 </div>
                 {selTags.size > 0 && (
                   <div className="kb-route-preview">
@@ -609,132 +654,105 @@ export function KnowledgeReview(): React.JSX.Element {
                 )}
               </section>
 
-              {/* ── 中：按表结构聚合 ── */}
+              {/* ── 中：按表结构聚合（本地表名检索实时过滤） ── */}
               <section className="kb-panel-mid">
                 <div className="kb-mid-head">
                   <div className="kb-search">
                     <input
                       className="rs-input"
                       value={kq}
-                      placeholder={t('kb.searchDocsPlaceholder')}
+                      placeholder={t('kb.searchTablePlaceholder')}
                       onChange={(e) => setKq(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void doSearch() }}
                     />
-                    <button className="rs-btn" disabled={searching || !kq.trim()} onClick={() => void doSearch()}>
-                      {searching ? t('kb.searching') : t('kb.search')}
-                    </button>
+                    <button className="kb-qbtn" disabled={!kq.trim()} title={t('kb.searchTblTitle')}>🔍 {t('kb.search')}</button>
+                    <button className={`kb-qbtn${showDraftOnly ? ' on' : ''}`} onClick={() => setShowDraftOnly((v) => !v)}>{t('kb.onlyDraft')}</button>
+                    {selTags.size > 0 && (
+                      <button className="kb-qbtn on" onClick={() => setSelTags(new Set())}>{t('kb.filtering', { n: selTags.size })} ✕</button>
+                    )}
                   </div>
-                  <button className={`kb-mid-chip${showDraftOnly ? ' on' : ''}`} onClick={() => setShowDraftOnly((v) => !v)}>{t('kb.onlyDraft')}</button>
-                  {selTags.size > 0 && (
-                    <button className="kb-mid-chip on" onClick={() => setSelTags(new Set())}>{t('kb.filtering', { n: selTags.size })} ✕</button>
-                  )}
                   <span className="spacer" />
                   <span className="kb-count mono">{filteredTables.length} 张表</span>
                 </div>
 
-                {kcards ? (
-                  <div className="review-results">
-                    <div className="rr-h mono">
-                      {t('kb.searchResults', { n: kcards.length })}
-                      <button className="rr-x" onClick={() => setKcards(null)}>✕</button>
-                    </div>
-                    {kcards.length === 0 ? (
-                      <div className="rr-empty mono">{t('kb.noMatch')}</div>
-                    ) : (
-                      kcards.map((c) => (
-                        <div key={c.table} className="rr-item">
-                          <span className="rr-kind mono table">table</span>
-                          <span className="rr-title mono">{c.table}</span>
-                          <span className="rr-body">{c.text}</span>
-                          <span className={`rr-status mono ${(c.payload?.draft_count ?? 0) > 0 ? 'draft' : 'confirmed'}`}>
-                            {(c.payload?.draft_count ?? 0) > 0 ? t('kb.draft') : t('kb.confirmed')}
-                          </span>
+                <div className="rv-table-list kb-docs">
+                  {filteredTables.length === 0 && (
+                    <div className="rv-empty mono">{t('kb.noMatch')}</div>
+                  )}
+                  {filteredTables.map((tbl) => {
+                    return (
+                      <div key={tbl.name} className="rv-table" data-tname={tbl.name}>
+                        <div className={`rv-table-row${selTable === tbl.name ? ' sel' : ''}`}
+                          onClick={() => setSelTable(tbl.name)}>
+                          <span className="tname mono">{tbl.name}</span>
+                          <span className="tcols mono">{tbl.column_count}</span>
+                          <span className={`st-dot ${tbl.comment_status}`} />
                         </div>
-                      ))
-                    )}
-                  </div>
-                ) : (
-                  <div className="rv-table-list kb-docs">
-                    {filteredTables.length === 0 && (
-                      <div className="rv-empty mono">{t('kb.noMatch')}</div>
-                    )}
-                    {filteredTables.map((tbl) => {
-                      return (
-                        <div key={tbl.name} className="rv-table" data-tname={tbl.name}>
-                          <div className={`rv-table-row${selTable === tbl.name ? ' sel' : ''}`}
-                            onClick={() => setSelTable(tbl.name)}>
-                            <span className="tname mono">{tbl.name}</span>
-                            <span className="tcols mono">{tbl.column_count}</span>
-                            <span className={`st-dot ${tbl.comment_status}`} />
-                          </div>
-                          <div className="rv-desc">
-                            {editing === tbl.name ? (
-                              <div className="kb-edit">
-                                <textarea
-                                  autoFocus
-                                  className="kb-edit-ta"
-                                  value={editText}
-                                  onChange={(e) => setEditText(e.target.value)}
-                                  rows={3}
-                                />
-                                <div className="kb-edit-acts">
-                                  <button className="btn ghost" onClick={() => setEditing(null)}>{t('common.cancel')}</button>
-                                  <button className="btn save" onClick={() => {
-                                    void saveNote(currentId, tbl.name, editText).then(() => setEditing(null))
-                                  }}>{t('common.save')}</button>
-                                </div>
-                              </div>
-                            ) : (
-                              <>
-                                <span className="desc-text">{tbl.comment || <span className="kb-none">{t('kb.noDesc')}</span>}</span>
-                                <span className="mini-acts">
-                                  <button onClick={() => beginEdit(tbl.name, tbl.comment)} title={t('kb.editNoteTitle')}>✎</button>
-                                  {tbl.comment_status === 'draft' && (
-                                    <>
-                                      <button onClick={() => confirmComment(currentId, tbl.name)}>{t('common.confirm')}</button>
-                                      <button onClick={() => rejectComment(currentId, tbl.name)}>{t('kb.reject')}</button>
-                                    </>
-                                  )}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                          <div className="rv-tags">
-                            {tbl.tags.map((tg) => (
-                              <Tag key={tg.name} name={tg.name} status={tg.status}
-                                onConfirm={() => confirmTag(currentId, tg.name)}
-                                onReject={() => rejectTag(currentId, tg.name)} />
-                            ))}
-                            {adding === tbl.name ? (
-                              <select
+                        <div className="rv-desc">
+                          {editing === tbl.name ? (
+                            <div className="kb-edit">
+                              <textarea
                                 autoFocus
-                                className="tag-add"
-                                value=""
-                                onChange={(e) => {
-                                  if (e.target.value) void assignTags(currentId, tbl.name, [...tbl.tags.map((x) => x.name), e.target.value])
-                                  setAdding(null)
-                                }}
-                                onBlur={() => setAdding(null)}
-                              >
-                                <option value="">…</option>
-                                {confirmedTags.filter((c) => !tbl.tags.some((x) => x.name === c.name)).map((c) => (
-                                  <option key={c.name} value={c.name}>{c.name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <button className="tag-add-btn" onClick={() => setAdding(tbl.name)}>＋</button>
-                            )}
-                          </div>
+                                className="kb-edit-ta"
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                                rows={3}
+                              />
+                              <div className="kb-edit-acts">
+                                <button className="btn ghost" onClick={() => setEditing(null)}>{t('common.cancel')}</button>
+                                <button className="btn save" onClick={() => saveListComment(tbl.name, editText)}>{t('common.save')}</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="desc-text">{tbl.comment || <span className="kb-none">{t('kb.noDesc')}</span>}</span>
+                              <span className="mini-acts">
+                                <button onClick={() => beginEdit(tbl.name, tbl.comment)} title={t('kb.editNoteTitle')}>✎</button>
+                                {tbl.comment_status === 'draft' && (
+                                  <>
+                                    <button onClick={() => confirmComment(currentId, tbl.name)}>{t('common.confirm')}</button>
+                                    <button onClick={() => rejectComment(currentId, tbl.name)}>{t('kb.reject')}</button>
+                                  </>
+                                )}
+                              </span>
+                            </>
+                          )}
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
+                        <div className="rv-tags">
+                          {tbl.tags.map((tg) => (
+                            <Tag key={tg.name} name={tg.name} status={tg.status}
+                              onConfirm={() => confirmTag(currentId, tg.name)}
+                              onReject={() => rejectTag(currentId, tg.name)} />
+                          ))}
+                          {adding === tbl.name ? (
+                            <select
+                              autoFocus
+                              className="tag-add"
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) void assignTags(currentId, tbl.name, [...tbl.tags.map((x) => x.name), e.target.value])
+                                setAdding(null)
+                              }}
+                              onBlur={() => setAdding(null)}
+                            >
+                              <option value="">…</option>
+                              {confirmedTags.filter((c) => !tbl.tags.some((x) => x.name === c.name)).map((c) => (
+                                <option key={c.name} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                          ) : (
+                            <button className="tag-add-btn" onClick={() => setAdding(tbl.name)}>＋</button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </section>
 
-              {/* ── 右：详情面板 ── */}
+              {/* ── 右：详情面板（两块：向量化片段 / 元数据） ── */}
               <section className="kb-panel-detail">
-                <TableDetailPanel overview={overview} selName={selTable} currentId={currentId} />
+                <TableDetailPanel overview={overview} selName={selTable} currentId={currentId}
+                  onOpenGraph={() => setMode('graph')} />
               </section>
             </div>
           )}
@@ -747,6 +765,10 @@ export function KnowledgeReview(): React.JSX.Element {
           </div>
         </>
       ) : null}
+
+      {newTagOpen && currentId && (
+        <NewTagDialog connId={currentId} onClose={() => setNewTagOpen(false)} />
+      )}
 
       {/* 历史记录抽屉：审计 origin=kb_build 留痕 */}
       <KbHistoryDrawer

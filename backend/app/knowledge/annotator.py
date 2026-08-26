@@ -8,11 +8,16 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
+import os
+import random
 import re
 from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from app.ai import gateway as gw
 from app.core.schema import get_schema, sample_values
@@ -23,12 +28,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# KB 阶段2/3 推理调用专用读超时（秒）：推理/plan 模式一次生成可达 2~5 分钟，
+# 默认 120s 容易被 106 限流/慢推理撞爆 → 单独放宽，别拖垮普通 chat 的默认目标。
+_KB_REASONING_TIMEOUT = 300.0
 
-def _kb_reason_provider_cfg(rt) -> dict[str, Any]:
-    """KB 阶段2（领域划分）/阶段3（图谱）专用 provider cfg：
-    模型配置里探测到支持推理（capabilities.reasoning）→ 开启最大深度档位。
-    无 capabilities（旧数据/mock）→ 保持原全局 reasoning 设置。"""
+
+def _kb_reason_provider_cfg(rt, reasoning: bool = True) -> dict[str, Any]:
+    """KB 阶段2/3 专用 provider cfg：
+    - reasoning=False（阶段2 领域划分：归类命名任务用普通生成，秒级）→ 显式关思考；
+    - reasoning=True（阶段3 图谱：FK 边推理要 chain-of-thought 保质量）→ 按能力档开最大深度。
+    无 capabilities（旧数据/mock）→ 保持原全局 reasoning 设置。
+    推理调用读超时统一放宽到 _KB_REASONING_TIMEOUT（不被 120s 默认掐断）。"""
     cfg = rt.provider_config()
+    cfg["timeout"] = max(float(cfg.get("timeout") or 120), _KB_REASONING_TIMEOUT)
+    if not reasoning:
+        # 显式 off：网关 self.reasoning == "off" → 不发 thinking/reasoning_effort 参数
+        cfg["reasoning"] = "off"
+        return cfg
     try:
         default_id = getattr(rt, "default_ai_model", "")
         pool = rt.ai_models if hasattr(rt, "ai_models") else []
@@ -326,38 +342,152 @@ async def annotate_tables(
     on_progress: Any | None = None,
     p0: int = 15,
     p1: int = 40,
+    concurrency: int | None = None,
 ) -> int:
     """逐表 DDL annotation 批量入口：返回新增 draft 数量。
 
     ddl_map: {table_name: ddl_string}，由 ddl_context.generate_ddls_all 生成。
     on_progress(stage, percent, detail, phase) 用于构建进度回调（阶段一「AI 正在处理」）。
+
+    并发：每表独立 LLM 调用并与 provider 并发上限自适应——撞 429/瞬断则指数退避重试 +
+    并发额度减半（最低 1）；连续成功再温和回升。避免硬顶 N 并发把低配额 provider 打爆。
+    concurrency 缺省取环境变量 TABLETALK_KB_ANNOTATION_CONCURRENCY（默认 10）。
     """
     items_all: list[dict[str, Any]] = []
     table_names = [t["name"] for t in schema.get("tables", []) if t["name"] in ddl_map]
     n = max(1, len(table_names))
-    logger.info("[kb.annotate] conn=%s 开始逐表注释：tables=%s", conn_id, len(table_names))
-    for i, tbl in enumerate(table_names):
-        if on_progress:
-            on_progress(
-                "AI 正在处理", p0 + (p1 - p0) * (i + 1) // n,
-                f"表 {tbl}（{i + 1}/{n}）", phase="annotate",
-                step="per_table", step_index=i + 1, step_total=n,
-            )
+    if not table_names:
+        return 0
+    cap = concurrency if concurrency else int(
+        os.environ.get("TABLETALK_KB_ANNOTATION_CONCURRENCY", "10")
+    )
+    limiter = _AdaptiveLimiter(cap)
+    done = {"n": 0}
+    logger.info("[kb.annotate] conn=%s 开始逐表注释（并发 ≤ %s）：tables=%s", conn_id, limiter.cap, len(table_names))
+
+    async def _one(name: str):
+        await limiter.acquire()
         try:
-            tbl_items = await annotate_table(
-                state, conn_id, tbl, ddl_map[tbl], schema, samples,
-            )
-            if not tbl_items:
-                logger.debug("[kb.annotate] conn=%s 单表注释为空 table=%s", conn_id, tbl)
-            items_all.extend(tbl_items)
-        except Exception as e:
-            logger.warning("[kb.annotate] conn=%s 单表注释失败 table=%s：%s", conn_id, tbl, e)
+            try:
+                tbl_items = await _retry_chat(
+                    lambda: annotate_table(state, conn_id, name, ddl_map[name], schema, samples),
+                    limiter,
+                )
+            except Exception as e:  # noqa: BLE001 —— 重试耗尽后单表失败不影响其余表
+                logger.warning("[kb.annotate] conn=%s 单表注释失败 table=%s：%s", conn_id, name, e)
+                tbl_items = []
+            done["n"] += 1
+            if on_progress:
+                on_progress(
+                    "AI 正在处理", p0 + (p1 - p0) * done["n"] // n,
+                    f"已完成 {done['n']}/{n}", phase="annotate",
+                    step="per_table", step_index=done["n"], step_total=n,
+                )
+            return name, tbl_items
+        finally:
+            await limiter.release()
+
+    results = await asyncio.gather(*(_one(t) for t in table_names), return_exceptions=True)
+    for name, tbl_items in results:
+        if isinstance(tbl_items, Exception):
+            logger.warning("[kb.annotate] conn=%s 单表注释任务异常 table=%s：%s", conn_id, name, tbl_items)
             continue
+        if tbl_items:
+            items_all.extend(tbl_items)
     if not items_all and table_names:
         logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
     added = state.knowledge.annotate_drafts(conn_id, items_all)
     logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s", conn_id, len(items_all), added)
     return added
+
+
+# ---------- 并发自适应（阶段一逐表注释用） ----------
+
+_REQUEUABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
+_KB_CONCURRENCY_MAX_RETRIES = 4
+_KB_CONCURRENCY_BACKOFF_BASE = 1.5
+_KB_CONCURRENCY_RECOVER_STREAK = 4  # 连续成功 N 颗才回升 1 档并发
+
+
+class _AdaptiveLimiter:
+    """逐表注释并发限制器：动态调节最大并发。
+
+    - 撞 429（限流）→ 并发额度**减半**（≥1）；provider 只给 1~2 并发也能最终匹配；
+    - 连续成功 _RECOVER_STREAK 次 → 温和回升 1 档（上限 cap）；
+    - 等待者由 Condition 唤醒；限制只对下次 acquire 生效，不影响在飞请求。
+    """
+
+    def __init__(self, cap: int) -> None:
+        self.cap = max(1, cap)
+        self.limit = self.cap
+        self._active = 0
+        self._cond = asyncio.Condition()
+        self._streak = 0
+
+    async def acquire(self) -> None:
+        async with self._cond:
+            while self._active >= self.limit:
+                await self._cond.wait()
+            self._active += 1
+
+    async def release(self) -> None:
+        async with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify(1)
+
+    async def on_rate_limit(self) -> None:
+        """限流 → 并发下调（不立即踢人，只让后续 acquire 更严格）。"""
+        async with self._cond:
+            new_limit = max(1, self.limit // 2)
+            if new_limit < self.limit:
+                prev = self.limit
+                self.limit = new_limit
+                self._streak = 0
+                logger.info("[kb.annotate] provider 限流 → 并发额度 %s→%s", prev, new_limit)
+
+    async def on_success(self) -> None:
+        async with self._cond:
+            self._streak += 1
+            if self._streak >= _KB_CONCURRENCY_RECOVER_STREAK and self.limit < self.cap:
+                self.limit = min(self.cap, self.limit + 1)
+                self._streak = 0
+                self._cond.notify_all()
+                logger.info("[kb.annotate] provider 稳定 → 并发回升 1 档（%s/%s）", self.limit, self.cap)
+
+
+def _retryable(e: Exception) -> tuple[bool, bool]:
+    """→ (是否可重试, 是否限流)；限流同时触发并发下调。"""
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        return code in _REQUEUABLE_HTTP_CODES, code == 429
+    if isinstance(e, httpx.RequestError):
+        return True, False
+    return False, False
+
+
+async def _retry_chat(coro_factory: Any, limiter: _AdaptiveLimiter, *, max_retries: int = _KB_CONCURRENCY_MAX_RETRIES) -> Any:
+    """对一次 LLM 调用做指数退避重试（限流/瞬断才重试）；限流同时下调并发。"""
+    last: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = await coro_factory()
+            await limiter.on_success()
+            return result
+        except Exception as e:  # noqa: BLE001
+            last = e
+            retryable, rate_limited = _retryable(e)
+            if not retryable:
+                raise
+            if rate_limited:
+                await limiter.on_rate_limit()
+            backoff = min(30.0, _KB_CONCURRENCY_BACKOFF_BASE * (2 ** (attempt - 1)))
+            delay = backoff + random.uniform(0.0, 0.4)
+            logger.warning(
+                "[kb.annotate] 表注释%s限流/瞬断（尝试 %s/%s，%s）→ %.1fs 后重试",
+                "触发" if rate_limited else "遇", attempt, max_retries, e, delay,
+            )
+            await asyncio.sleep(delay)
+    raise RuntimeError(f"重试 {max_retries} 次仍失败：{last}") from last
 
 
 # ---------- 独立 API 路径（保持向后兼容） ----------
@@ -432,11 +562,19 @@ _MOCK_TAG_HINTS = {
 
 _TRUE_LONG_TYPES = ("CLOB", "BLOB", "LONGTEXT", "MEDIUMTEXT", "BYTEA", "JSON")
 
+# TEXT 型 JSON/大文本/二进制列：type 不带 JSON（如 TEXT），靠列名后缀识别；
+# LONGTEXT/BLOB/JSON 类型列已由 _TRUE_LONG_TYPES 类型层兜住。
+_PORTRAIT_BLOB_NAMES = ("_json", "_jsonb", "_blob", "_clob", "_longtext", "_long_text",
+                        "long_text", "jsondata", "payload")
+
 
 def _portrait_noise(name: str, ctype: str) -> bool:
-    """画像噪音列：列名级语义噪音（时间戳/审计/软删）+ 真长文本类型。
+    """画像噪音列：列名级语义噪音（时间戳/审计/软删）+ JSON/大文本/二进制列 + 真长文本类型。
     绝不用类型前缀宽判——`status TEXT` 是业务枚举，不是长文本。"""
     if is_noise_column(name):
+        return True
+    n = (name or "").lower()
+    if any(s in n for s in _PORTRAIT_BLOB_NAMES):
         return True
     return (ctype or "").upper().startswith(_TRUE_LONG_TYPES)
 
@@ -480,19 +618,21 @@ def _single_table_ddl_portrait(
             body += " PRIMARY KEY"
         if fk_refs.get(name):
             body += f"  [FK->{';'.join(fk_refs[name])}]"
-        # 描述 + 取值示例熔一句
+        # 描述 + 取值示例熔一句（画像只留"真枚举"：非主键/非高基数、值短≤16、上限5个）
+        # id/主键/日期/数值等一次性或高基数列不给示例——对归类/判关系是噪音
         desc_extra = ""
         if samples is not None and not fk_refs.get(name):
-            distinct = _distinct_values(samples, name)
-            ex = _first_example(samples, name)
             tu = (t or "").upper()
             is_high = is_pk or tu.startswith(
                 ("INT", "NUMERIC", "DECIMAL", "REAL", "FLOAT", "DOUBLE", "DATE", "TIME")
             )
-            if not is_high and 2 <= len(distinct) <= 50:
-                desc_extra = "取值示例：" + "，".join(str(v)[:24] for v in distinct[:8])
-            elif ex:
-                desc_extra = "取值示例：" + str(ex)[:30]
+            if not is_high:
+                short_vals = [
+                    str(v)[:16] for v in _distinct_values(samples, name)
+                    if len(str(v)) <= 16
+                ][:5]
+                if len(short_vals) >= 2:
+                    desc_extra = "取值示例：" + "，".join(short_vals)
         parts = []
         if col_desc.get(name):
             parts.append("描述：" + col_desc[name])
@@ -778,7 +918,7 @@ async def annotate_domain(
         self_check = bool(getattr(rt, "kb_build_self_check", True))
     logger.info("[kb.tags] conn=%s 领域划分：tables=%s target=%s~%s self_check=%s",
                 conn_id, n, lo, hi, self_check)
-    _tag_cfg = _kb_reason_provider_cfg(rt)
+    _tag_cfg = _kb_reason_provider_cfg(rt, reasoning=False)  # 阶段2 归类任务：关思考，秒级
     domains: list[dict[str, Any]] = []
 
     if gw.is_effective_mock(_tag_cfg):
@@ -892,7 +1032,7 @@ async def _annotate_domain_incremental(
     ) or "（暂无）"
 
     rt = state.runtime.get()
-    _tag_cfg = _kb_reason_provider_cfg(rt)
+    _tag_cfg = _kb_reason_provider_cfg(rt, reasoning=False)  # 阶段2 归类任务：关思考，秒级
     links: list[dict[str, Any]] = []
     if on_progress:
         on_progress("AI 标签提取", 0, "增量吸收", phase="tags",

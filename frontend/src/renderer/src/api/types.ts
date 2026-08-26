@@ -194,6 +194,10 @@ export interface KbTableView {
   excluded: boolean
   ddl: string
   columns: KbColumnView[]
+  /** 向量化片段（可读表描述）：人工覆盖优先，否则构建合成文本 */
+  vector_text: string
+  /** 人工覆盖的向量化片段；null = 未覆盖（用构建合成） */
+  vector_override: string | null
 }
 
 /** 边 v2：字段级端点 + 基数；from 恒为多侧 */

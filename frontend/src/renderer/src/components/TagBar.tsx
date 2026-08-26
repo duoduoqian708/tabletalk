@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { tags as fetchTags } from '@renderer/api/knowledge'
 import type { TagInfo } from '@renderer/api/types'
-import { getTagColor } from '@renderer/utils/tagColors'
+import { assignUniqueColors, getTagColor } from '@renderer/utils/tagColors'
 import { useI18n } from '@renderer/store/i18n'
 
 const MOCK_TAGS: TagInfo[] = [
@@ -45,6 +45,9 @@ export function TagBar({ connId, onSelect }: Props): React.JSX.Element {
     onSelect?.(next)
   }
 
+  /* 展示期不撞色：≤20 标签每色唯一，超了循环（20 色板同源） */
+  const colorByTag = assignUniqueColors(tags.map((x) => x.name))
+
   return (
     <div className="ws-tags">
       {tags.map((tag) => (
@@ -52,7 +55,7 @@ export function TagBar({ connId, onSelect }: Props): React.JSX.Element {
           key={tag.name}
           type="button"
           className={`tag-chip${selected === tag.name ? ' selected' : ''}`}
-          style={{ '--tag-c': getTagColor(tag.name) } as React.CSSProperties}
+          style={{ '--tag-c': getTagColor(tag.name, colorByTag) } as React.CSSProperties}
           title={tag.description || tag.name}
           onClick={() => toggleSelect(tag.name)}
         >

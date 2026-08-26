@@ -72,6 +72,21 @@ class RejectCommentRequest(BaseModel):
     column: str | None = None
 
 
+class TableEditColumn(BaseModel):
+    name: str
+    comment: str | None = None
+    values: str | None = None
+    example: str | None = None
+
+
+class TableEditRequest(BaseModel):
+    """详情面板两块编辑（只写知识字段；schema 镜像/type 不可改）。"""
+    table: str
+    table_comment: str | None = None
+    column_comments: list[TableEditColumn] | None = None
+    vector_text: str | None = None   # 向量化片段覆盖；'' 清空回落合成
+
+
 class GraphEdgeRequest(BaseModel):
     from_table: str
     to_table: str
@@ -198,15 +213,18 @@ async def build_events(conn_id: str) -> StreamingResponse:
         if job is None:
             yield "data: " + json.dumps({"stage": "idle", "percent": 0, "done": True, "error": None}) + "\n\n"
             return
+        # 先发当前状态、再等变更：订阅时任务已结束也能立刻拿到终态帧，
+        # 避免「事件已被早先 clear 吞掉 done 更新」的竞态（构建极快/并行时更容易触发）
         while True:
+            cur = dict(job.progress)
+            yield "data: " + json.dumps(cur) + "\n\n"
+            if cur.get("done"):
+                break
             try:
                 await job.event.wait()
             except asyncio.CancelledError:
                 break
             job.event.clear()
-            yield "data: " + json.dumps(dict(job.progress)) + "\n\n"
-            if job.progress.get("done"):
-                break
 
     return StreamingResponse(_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -531,6 +549,24 @@ async def reject_comment(conn_id: str, body: RejectCommentRequest) -> dict:
     state = get_state()
     n = await state.knowledge.reject_comment(conn_id, body.table, body.column)
     return {"rejected": n}
+
+
+@router.patch("/{conn_id}/table")
+async def edit_table(conn_id: str, body: TableEditRequest) -> dict:
+    """人工编辑单表知识（详情面板两块）：表/列注释 + 向量化片段覆盖。"""
+    _have(conn_id)
+    state = get_state()
+    try:
+        result = await state.knowledge.edit_table_knowledge(
+            conn_id, body.table,
+            table_comment=body.table_comment,
+            column_comments=[c.model_dump() for c in body.column_comments]
+            if body.column_comments else None,
+            vector_text=body.vector_text,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=f"表或列不存在：{e}") from e
+    return result
 
 
 @router.get("/{conn_id}/tags")
