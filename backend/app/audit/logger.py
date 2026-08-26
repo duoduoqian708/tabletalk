@@ -56,6 +56,15 @@ class AuditLogger:
                 con.execute("CREATE INDEX IF NOT EXISTS idx_audit_origin ON audit_log(origin)")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_audit_report_id ON audit_log(report_id)")
                 con.execute("CREATE INDEX IF NOT EXISTS idx_audit_source ON audit_log(source)")
+                con.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS audit_ack (
+                        audit_id INTEGER PRIMARY KEY REFERENCES audit_log(id),
+                        state TEXT NOT NULL,
+                        acked_ts TEXT
+                    )
+                    """
+                )
                 con.commit()
             finally:
                 con.close()
@@ -151,7 +160,7 @@ class AuditLogger:
         approval_id: str | None = None,
         rollback_ref: str | None = None,
         **extra: Any,
-    ) -> None:
+    ) -> int:
         first_line = " ".join((sql or "").strip().splitlines()[:1])[:200]
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         # reasons 兜底
@@ -171,7 +180,7 @@ class AuditLogger:
         with self._lock:
             con = sqlite3.connect(self.db_path)
             try:
-                con.execute(
+                cur = con.execute(
                     """
                     INSERT INTO audit_log (
                         schema_version, ts, connection, origin, tier, verdict, status, sql,
@@ -202,6 +211,7 @@ class AuditLogger:
                     ),
                 )
                 con.commit()
+                return cur.lastrowid
             finally:
                 con.close()
 
@@ -224,30 +234,30 @@ class AuditLogger:
                 where = []
                 params: list[Any] = []
                 if connection:
-                    where.append("connection = ?")
+                    where.append("a.connection = ?")
                     params.append(connection)
                 if origin:
-                    where.append("origin = ?")
+                    where.append("a.origin = ?")
                     params.append(origin)
                 if tier:
-                    where.append("tier = ?")
+                    where.append("a.tier = ?")
                     params.append(tier)
                 if verdict:
-                    where.append("verdict = ?")
+                    where.append("a.verdict = ?")
                     params.append(verdict)
                 if from_ts:
-                    where.append("ts >= ?")
+                    where.append("a.ts >= ?")
                     params.append(from_ts)
                 if to_ts:
-                    where.append("ts <= ?")
+                    where.append("a.ts <= ?")
                     params.append(to_ts)
                 if report_id:
-                    where.append("report_id = ?")
+                    where.append("a.report_id = ?")
                     params.append(report_id)
                 if source:
-                    where.append("source = ?")
+                    where.append("a.source = ?")
                     params.append(source)
-                sql = "SELECT * FROM audit_log"
+                sql = "SELECT a.*, k.state AS ack_state FROM audit_log a LEFT JOIN audit_ack k ON k.audit_id = a.id"
                 if where:
                     sql += " WHERE " + " AND ".join(where)
                 sql += " ORDER BY id ASC"
@@ -303,7 +313,49 @@ class AuditLogger:
                                 e.update(extra)
                         except Exception:
                             pass
+                    e["ack"] = r["ack_state"] or "unread"
                     out.append(e)
                 return out
+            finally:
+                con.close()
+
+    def ack(self, audit_id: int) -> None:
+        """标记某条审计为已处理（幂等）。"""
+        with self._lock:
+            con = sqlite3.connect(self.db_path)
+            try:
+                con.execute(
+                    "INSERT OR REPLACE INTO audit_ack (audit_id, state, acked_ts) VALUES (?,?,?)",
+                    (int(audit_id), "ack", time.strftime("%Y-%m-%dT%H:%M:%S")),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+    def ack_state(self, audit_id: int) -> str:
+        with self._lock:
+            con = sqlite3.connect(self.db_path)
+            try:
+                cur = con.execute("SELECT state FROM audit_ack WHERE audit_id=?", (int(audit_id),))
+                row = cur.fetchone()
+                return row[0] if row else "unread"
+            finally:
+                con.close()
+
+    def unread_exception_count(self, connection: str | None = None) -> int:
+        """未读异常数 = verdict∈{block,review} 且无 ack 记录。"""
+        sql = (
+            "SELECT COUNT(*) FROM audit_log a "
+            "LEFT JOIN audit_ack k ON k.audit_id = a.id "
+            "WHERE a.verdict IN ('block','review') AND k.audit_id IS NULL"
+        )
+        params: list[Any] = []
+        if connection:
+            sql += " AND a.connection = ?"
+            params.append(connection)
+        with self._lock:
+            con = sqlite3.connect(self.db_path)
+            try:
+                return int(con.execute(sql, params).fetchone()[0])
             finally:
                 con.close()
