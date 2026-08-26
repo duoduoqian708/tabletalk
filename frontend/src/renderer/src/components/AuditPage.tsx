@@ -3,6 +3,8 @@ import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
 import ListPane from './audit/ListPane'
 import DetailPane from './audit/DetailPane'
+import ReportDrawer from './audit/ReportDrawer'
+import RulesDrawer from './audit/RulesDrawer'
 import type { Sel } from './audit/EntryList'
 import { useAuditSignal } from '@renderer/store/auditSignal'
 
@@ -38,9 +40,8 @@ export function AuditPage(): React.JSX.Element {
         <ListPane selected={selected} onSelect={setSelected} />
         <DetailPane selected={selected} />
       </div>
-      {/* TODO(T12): 此处渲染 ReportDrawer / RulesDrawer（组件 Task 12 创建，先空操作） */}
-      {drawer === 'report' && null}
-      {drawer === 'rules' && null}
+      {drawer === 'report' && <ReportDrawer onClose={() => setDrawer('none')} />}
+      {drawer === 'rules' && <RulesDrawer onClose={() => setDrawer('none')} />}
     </div>
   )
 }
