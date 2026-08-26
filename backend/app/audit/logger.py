@@ -361,3 +361,35 @@ class AuditLogger:
                 return int(con.execute(sql, params).fetchone()[0])
             finally:
                 con.close()
+
+    def stats_buckets(self, connection: str | None, since_ts: str, fmt: str) -> list[dict[str, Any]]:
+        """时间桶聚合：fmt 为 SQLite strftime 格式（仅内部常量调用，无注入面）。"""
+        sql = (
+            "SELECT strftime('" + fmt + "', ts) AS bucket, COUNT(*) AS total, "
+            "SUM(CASE WHEN verdict='allow' THEN 1 ELSE 0 END) AS allow, "
+            "SUM(CASE WHEN verdict='review' THEN 1 ELSE 0 END) AS review, "
+            "SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END) AS block "
+            "FROM audit_log WHERE ts >= ?"
+        )
+        params: list[Any] = [since_ts]
+        if connection:
+            sql += " AND connection = ?"
+            params.append(connection)
+        sql += " GROUP BY bucket ORDER BY bucket"
+        with self._lock:
+            con = sqlite3.connect(self.db_path)
+            con.row_factory = sqlite3.Row
+            try:
+                out: list[dict[str, Any]] = []
+                for r in con.execute(sql, params).fetchall():
+                    bucket = str(r["bucket"] or "")
+                    if "%H" in fmt and bucket.endswith(":00:00"):
+                        bucket = bucket[:-6]  # 剥离填充尾 → YYYY-MM-DDTHH
+                    out.append(
+                        {"bucket": bucket, "total": int(r["total"]),
+                         "allow": int(r["allow"] or 0), "review": int(r["review"] or 0),
+                         "block": int(r["block"] or 0)}
+                    )
+                return out
+            finally:
+                con.close()

@@ -1,6 +1,7 @@
 """审计日志路由。"""
 from __future__ import annotations
 
+import datetime as _dt
 import time
 
 from fastapi import APIRouter, Query
@@ -147,3 +148,17 @@ async def audit_signal(connection: str | None = None) -> dict:
         "pending_approvals": pending,
         "today": {"blocked": blocked, "review": review},
     }
+
+
+@router.get("/audit/stats")
+async def audit_stats(scope: str = "30d", connection: str | None = None) -> dict:
+    """三档统计：today=小时桶(当日0点起)；7d/30d=天桶。时区=本地。"""
+    now = _dt.datetime.now()
+    if scope == "today":
+        since = now.strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT%H:00:00"; gran = "hour"
+    elif scope == "7d":
+        since = (now - _dt.timedelta(days=6)).strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+    else:
+        since = (now - _dt.timedelta(days=29)).strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+    buckets = get_state().audit.stats_buckets(connection, since, fmt)
+    return {"scope": scope, "granularity": gran, "buckets": buckets}
