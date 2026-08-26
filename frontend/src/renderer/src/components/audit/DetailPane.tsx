@@ -27,10 +27,13 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
 
   function TodayTimeline({ connName }: { connName: string }): React.JSX.Element {
     const [rows, setRows] = useState<Entry[]>([])
-    const today = new Date(); today.setHours(0, 0, 0, 0)
+    // 审计 ts 为本地朴素时间串，"今日"边界必须用本地时钟拼装（toISOString 是 UTC，会偏移时区）
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    const now = new Date()
+    const fromTs = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T00:00:00`
     useEffect(() => {
       let alive = true
-      void listAuditPage({ connection: connName || undefined, from_ts: today.toISOString().slice(0, 19), limit: 50, cursor: 0 })
+      void listAuditPage({ connection: connName || undefined, from_ts: fromTs, limit: 50, cursor: 0 })
         .then((r) => { if (alive) setRows(r.items as Entry[]) }).catch(() => undefined)
       return () => { alive = false }
     }, [connName])

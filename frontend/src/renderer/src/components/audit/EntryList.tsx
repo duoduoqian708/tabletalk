@@ -27,6 +27,7 @@ export default function EntryList(props: {
   const [cursor, setCursor] = useState<number | null>(0)
   const [loading, setLoading] = useState(false)
   const sentinel = useRef<HTMLDivElement>(null)
+  const seqRef = useRef(0)
 
   // 300ms 防抖搜索
   useEffect(() => {
@@ -44,21 +45,24 @@ export default function EntryList(props: {
 
   const loadFirst = useCallback(() => {
     if (!connId) return
+    const seq = ++seqRef.current
     setLoading(true)
     void listAuditPage({ ...baseQuery, cursor: 0 })
-      .then((r) => { setItems(r.items as Item[]); setCursor(r.next_cursor) })
-      .catch(() => { setItems([]); setCursor(null) })
-      .finally(() => setLoading(false))
+      .then((r) => { if (seq === seqRef.current) { setItems(r.items as Item[]); setCursor(r.next_cursor) } })
+      .catch(() => { if (seq === seqRef.current) { setItems([]); setCursor(null) } })
+      .finally(() => { if (seq === seqRef.current) setLoading(false) })
   }, [baseQuery, connId])
 
   useEffect(loadFirst, [loadFirst])
 
   const loadMore = useCallback(() => {
     if (!connId || cursor == null || loading) return
+    const seq = ++seqRef.current
     setLoading(true)
     void listAuditPage({ ...baseQuery, cursor }).then((r) => {
+      if (seq !== seqRef.current) return
       setItems((prev) => [...prev, ...(r.items as Item[])]); setCursor(r.next_cursor)
-    }).catch(() => setCursor(null)).finally(() => setLoading(false))
+    }).catch(() => { if (seq === seqRef.current) setCursor(null) }).finally(() => { if (seq === seqRef.current) setLoading(false) })
   }, [baseQuery, cursor, loading, connId])
 
   // 滚动到底自动加载
