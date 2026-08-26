@@ -211,7 +211,7 @@ class AuditLogger:
                     ),
                 )
                 con.commit()
-                return cur.lastrowid
+                return int(cur.lastrowid)
             finally:
                 con.close()
 
@@ -323,6 +323,7 @@ class AuditLogger:
         """标记某条审计为已处理（幂等）。"""
         with self._lock:
             con = sqlite3.connect(self.db_path)
+            con.execute("PRAGMA foreign_keys = ON")
             try:
                 con.execute(
                     "INSERT OR REPLACE INTO audit_ack (audit_id, state, acked_ts) VALUES (?,?,?)",
@@ -333,6 +334,7 @@ class AuditLogger:
                 con.close()
 
     def ack_state(self, audit_id: int) -> str:
+        """查询某条审计的处理状态，无记录视为未读。"""
         with self._lock:
             con = sqlite3.connect(self.db_path)
             try:
