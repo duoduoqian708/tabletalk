@@ -71,10 +71,12 @@ async def audit_egress(
 @router.get("/audit/weekly")
 async def audit_weekly(
     connection: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
 ) -> dict:
     """周报摘要：按周聚合写操作、Top 表、异常提示。"""
     state = get_state()
-    full = state.audit.list(connection=connection)
+    full = state.audit.list(connection=connection, from_ts=from_ts, to_ts=to_ts)
     # 按周分组（ts 前 10 为 YYYY-MM-DD，取周）
     from collections import Counter, defaultdict
     import datetime

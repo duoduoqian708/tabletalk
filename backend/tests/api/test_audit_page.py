@@ -47,3 +47,15 @@ async def test_endpoint_cursor_mode(client, app_state):
     body = r.json()
     assert "items" in body and "next_cursor" in body
     assert body["items"][0]["verdict"] == "block"
+
+
+async def test_egress_weekly_time_range(client, app_state):
+    app_state.audit.log(connection="c", origin="ai", tier="read", verdict="egress",
+                        status="出网", sql="-", manifest={"model": "m1"})
+    future = "2099-01-01T00:00:00"
+    r1 = await client.get("/api/v1/audit/egress", params={"to_ts": "2000-01-01T00:00:00"})
+    assert r1.json()["total"] == 0
+    r2 = await client.get("/api/v1/audit/egress", params={"to_ts": future})
+    assert r2.json()["total"] == 1
+    r3 = await client.get("/api/v1/audit/weekly", params={"to_ts": "2000-01-01T00:00:00"})
+    assert r3.json()["total"] == 0
