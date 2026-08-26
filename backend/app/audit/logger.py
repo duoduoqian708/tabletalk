@@ -12,6 +12,60 @@ from typing import Any
 SCHEMA_VERSION = 1
 
 
+def _row_to_entry(r: Any) -> dict[str, Any]:
+    e: dict[str, Any] = {
+        "_id": r["id"],
+        "schema_version": r["schema_version"],
+        "ts": r["ts"],
+        "connection": r["connection"],
+        "origin": r["origin"],
+        "tier": r["tier"],
+        "verdict": r["verdict"],
+        "status": r["status"],
+        "sql": r["sql"],
+    }
+    if r["elapsed_ms"] is not None:
+        e["elapsed_ms"] = r["elapsed_ms"]
+    if r["report_id"] is not None:
+        e["report_id"] = r["report_id"]
+    if r["source"] is not None:
+        e["source"] = r["source"]
+    if r["reasons"] is not None:
+        try:
+            e["reasons"] = json.loads(r["reasons"])
+        except Exception:
+            e["reasons"] = []
+    elif r["verdict"] in ("block", "review"):
+        e["reasons"] = [{"rule_id": "unknown", "message": r["status"] or r["verdict"], "message_en": r["status"] or r["verdict"], "objects": []}]
+    if r["tables_json"] is not None:
+        try:
+            e["tables"] = json.loads(r["tables_json"])
+        except Exception:
+            pass
+    if r["manifest"] is not None:
+        try:
+            e["manifest"] = json.loads(r["manifest"])
+        except Exception:
+            pass
+    if r["approval_id"] is not None:
+        e["approval_id"] = r["approval_id"]
+    if r["rollback_ref"] is not None:
+        e["rollback_ref"] = r["rollback_ref"]
+    if r["estimated_rows"] is not None:
+        e["estimated_rows"] = r["estimated_rows"]
+    if r["cost_degraded"] is not None:
+        e["cost_degraded"] = r["cost_degraded"]
+    if r["extra_json"] is not None:
+        try:
+            extra = json.loads(r["extra_json"])
+            if isinstance(extra, dict):
+                e.update(extra)
+        except Exception:
+            pass
+    e["ack"] = r["ack_state"] or "unread"
+    return e
+
+
 class AuditLogger:
     def __init__(self, data_dir: Path) -> None:
         self.path = data_dir / "audit.log"  # 旧文件，迁移后归档为 audit.log.bak
@@ -265,57 +319,66 @@ class AuditLogger:
                 rows = cur.fetchall()
                 out: list[dict[str, Any]] = []
                 for r in rows:
-                    e: dict[str, Any] = {
-                        "schema_version": r["schema_version"],
-                        "ts": r["ts"],
-                        "connection": r["connection"],
-                        "origin": r["origin"],
-                        "tier": r["tier"],
-                        "verdict": r["verdict"],
-                        "status": r["status"],
-                        "sql": r["sql"],
-                    }
-                    if r["elapsed_ms"] is not None:
-                        e["elapsed_ms"] = r["elapsed_ms"]
-                    if r["report_id"] is not None:
-                        e["report_id"] = r["report_id"]
-                    if r["source"] is not None:
-                        e["source"] = r["source"]
-                    if r["reasons"] is not None:
-                        try:
-                            e["reasons"] = json.loads(r["reasons"])
-                        except Exception:
-                            e["reasons"] = []
-                    elif r["verdict"] in ("block", "review"):
-                        e["reasons"] = [{"rule_id": "unknown", "message": r["status"] or r["verdict"], "message_en": r["status"] or r["verdict"], "objects": []}]
-                    if r["tables_json"] is not None:
-                        try:
-                            e["tables"] = json.loads(r["tables_json"])
-                        except Exception:
-                            pass
-                    if r["manifest"] is not None:
-                        try:
-                            e["manifest"] = json.loads(r["manifest"])
-                        except Exception:
-                            pass
-                    if r["approval_id"] is not None:
-                        e["approval_id"] = r["approval_id"]
-                    if r["rollback_ref"] is not None:
-                        e["rollback_ref"] = r["rollback_ref"]
-                    if r["estimated_rows"] is not None:
-                        e["estimated_rows"] = r["estimated_rows"]
-                    if r["cost_degraded"] is not None:
-                        e["cost_degraded"] = r["cost_degraded"]
-                    if r["extra_json"] is not None:
-                        try:
-                            extra = json.loads(r["extra_json"])
-                            if isinstance(extra, dict):
-                                e.update(extra)
-                        except Exception:
-                            pass
-                    e["ack"] = r["ack_state"] or "unread"
-                    out.append(e)
+                    out.append(_row_to_entry(r))
                 return out
+            finally:
+                con.close()
+
+    def page(
+        self,
+        *,
+        connection: str | None = None,
+        origin: str | None = None,
+        tier: str | None = None,
+        verdict: str | None = None,
+        q: str | None = None,
+        exception: bool = False,
+        unread_only: bool = False,
+        from_ts: str | None = None,
+        to_ts: str | None = None,
+        before_id: int | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """keyset 分页（id 倒序）。返回 {items, has_more}；items 含 _id 供游标续传。"""
+        where: list[str] = []
+        params: list[Any] = []
+        if connection:
+            where.append("a.connection = ?"); params.append(connection)
+        if origin:
+            where.append("a.origin = ?"); params.append(origin)
+        if tier:
+            where.append("a.tier = ?"); params.append(tier)
+        if verdict:
+            where.append("a.verdict = ?"); params.append(verdict)
+        if exception:
+            where.append("a.verdict IN ('block','review')")
+        if from_ts:
+            where.append("a.ts >= ?"); params.append(from_ts)
+        if to_ts:
+            where.append("a.ts <= ?"); params.append(to_ts)
+        if q:
+            esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where.append("a.sql LIKE ? ESCAPE '\\'"); params.append(f"%{esc}%")
+        if unread_only:
+            where.append("NOT EXISTS (SELECT 1 FROM audit_ack k WHERE k.audit_id = a.id)")
+        if before_id is not None:
+            where.append("a.id < ?"); params.append(int(before_id))
+        sql = (
+            "SELECT a.*, k.state AS ack_state FROM audit_log a "
+            "LEFT JOIN audit_ack k ON k.audit_id = a.id"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY a.id DESC LIMIT ?"
+        params.append(int(limit) + 1)
+        with self._lock:
+            con = sqlite3.connect(self.db_path)
+            con.row_factory = sqlite3.Row
+            try:
+                rows = con.execute(sql, params).fetchall()
+                has_more = len(rows) > limit
+                items = [_row_to_entry(r) for r in rows[:limit]]
+                return {"items": items, "has_more": has_more}
             finally:
                 con.close()
 

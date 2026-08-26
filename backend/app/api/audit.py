@@ -23,8 +23,23 @@ async def audit_log(
     to_ts: str | None = None,
     report_id: str | None = None,
     source: str | None = None,
+    q: str | None = None,
+    exception: bool = False,
+    unread_only: bool = False,
+    cursor: int | None = None,
 ) -> dict:
     state = get_state()
+    cursor_mode = cursor is not None or bool(q) or exception or unread_only
+    if cursor_mode:
+        res = state.audit.page(
+            connection=connection, origin=origin, tier=tier, verdict=verdict,
+            q=q, exception=exception, unread_only=unread_only,
+            from_ts=from_ts, to_ts=to_ts,
+            before_id=int(cursor) if cursor and cursor > 0 else None,
+            limit=min(limit, 200),
+        )
+        next_cursor = res["items"][-1]["_id"] if res["has_more"] and res["items"] else None
+        return {"items": res["items"], "next_cursor": next_cursor}
     full = state.audit.list(
         connection=connection, origin=origin, tier=tier, verdict=verdict,
         from_ts=from_ts, to_ts=to_ts, report_id=report_id, source=source,
