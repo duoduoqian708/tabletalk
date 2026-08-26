@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS audit_ack (
   `audit_log.ts` 的存储口径一致；若为 UTC 存储，"今日/近N天"的边界需按本地
   时区换算后再过滤，保证前端展示的"今日"与用户感知一致。
 
+> **实现偏差（2026-08-26 校准）**：当场批沿用 query.py 的 confirm_token 一次性凭证通道
+> （TOCTOU 防护更完备），不走 approvals；延迟批 = AiRail「转审批」→ 审计页 decide。
+> 审批终态沿用 pending/approved/rejected，approved 且带 executed_audit_id 视为已执行。
+
 ### 4.4 兼容与迁移
 
 - 两张新表 `CREATE TABLE IF NOT EXISTS`，启动时惰性建表；旧库零迁移。

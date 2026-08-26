@@ -3,6 +3,7 @@ import { useConnections } from '@renderer/store/connections'
 import { useSchema } from '@renderer/store/schema'
 import { useResults } from '@renderer/store/results'
 import { useUi } from '@renderer/store/ui'
+import { useAuditSignal } from '@renderer/store/auditSignal'
 import { runQuery, cancelDml, formatSql } from '@renderer/api/query'
 import type { QueryResponse } from '@renderer/api/types'
 import {
@@ -1233,6 +1234,7 @@ export function AiRail(): React.JSX.Element {
               useKbGate.getState().forceOpen(currentId)
             }
           } else if (ev.type === 'done') {
+            void useAuditSignal.getState().refresh()
             streamDoneRef.current = true
             setTurns((t) => {
               const n = [...t]
@@ -1360,6 +1362,7 @@ export function AiRail(): React.JSX.Element {
             })
             toastMsg(t('ws.reportToast'))
           } else if (ev.type === 'done') {
+            void useAuditSignal.getState().refresh()
             setTurns((t) => {
               const n = [...t]
               const last = n[n.length - 1]
