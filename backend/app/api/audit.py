@@ -1,6 +1,8 @@
 """审计日志路由。"""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Query
 
 from app.state import get_state
@@ -127,4 +129,21 @@ async def audit_summary(
         "blocked_rate": (blocked / total) if total else 0,
         "ai_ddl_count": ai_ddl,
         "review_count": review,
+    }
+
+
+@router.get("/audit/signal")
+async def audit_signal(connection: str | None = None) -> dict:
+    """状态栏徽章轮询：未读异常 / 待审审批 / 今日拦截与待确认。极轻量。"""
+    state = get_state()
+    unread = state.audit.unread_exception_count(connection)
+    pending = len(state.approvals.list(status="pending"))
+    today_start = time.strftime("%Y-%m-%dT00:00:00")
+    rows = state.audit.list(connection=connection, from_ts=today_start)
+    blocked = sum(1 for e in rows if e.get("verdict") == "block")
+    review = sum(1 for e in rows if e.get("verdict") == "review")
+    return {
+        "unread_exceptions": unread,
+        "pending_approvals": pending,
+        "today": {"blocked": blocked, "review": review},
     }
