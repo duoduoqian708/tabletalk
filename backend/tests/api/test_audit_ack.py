@@ -60,3 +60,8 @@ def test_ack_nonexistent_raises(tmp_path):
     with pytest.raises(sqlite3.IntegrityError):
         lg.ack(rid + 999)
     assert lg.unread_exception_count() == 1   # 原记录不受影响
+
+
+async def test_ack_endpoint(client):
+    r = await client.post("/api/v1/audit/999999/ack", json={})
+    assert r.status_code == 200

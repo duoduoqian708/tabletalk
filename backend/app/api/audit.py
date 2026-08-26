@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import datetime as _dt
+import sqlite3
 import time
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from app.state import get_state
 
@@ -179,3 +181,16 @@ async def audit_stats(scope: str = "30d", connection: str | None = None) -> dict
         since = (now - _dt.timedelta(days=29)).strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
     buckets = get_state().audit.stats_buckets(connection, since, fmt)
     return {"scope": scope, "granularity": gran, "buckets": buckets}
+
+
+class AckRequest(BaseModel):
+    state: str = "ack"
+
+
+@router.post("/audit/{audit_id}/ack")
+async def ack_audit(audit_id: int, req: AckRequest) -> dict:
+    try:
+        get_state().audit.ack(int(audit_id))
+    except sqlite3.IntegrityError:
+        pass
+    return {"ok": True}

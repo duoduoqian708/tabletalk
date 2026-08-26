@@ -1,3 +1,6 @@
+/** 敏感名单条目：字符串=旧 glob（兼容）；{table, columns} 精确名（段8，columns 空=整表） */
+export type SensitiveEntry = string | { table: string; columns?: string[] }
+
 export interface ConnectionConfig {
   id: string
   name: string
@@ -13,7 +16,7 @@ export interface ConnectionConfig {
   timeout: number
   credential_ref: string | null
   created_at: string
-  sensitive: string[]
+  sensitive: SensitiveEntry[]
   kb_status?: 'none' | 'building' | 'pending_review' | 'ready'
   kb_updated_at?: string
 }
@@ -150,6 +153,7 @@ export interface AuditEntry {
   schema_version?: number
   manifest?: any
   source?: string
+  ack?: 'unread' | 'ack'
 }
 
 export interface TagInfo {
