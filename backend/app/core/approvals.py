@@ -22,6 +22,9 @@ class Approval:
     reviewed_by: str | None = None
     reviewed_at: str | None = None
     note: str | None = None
+    preview_rows: int | None = None
+    executed_audit_id: int | None = None
+    rollback_ref: str | None = None
 
 class ApprovalStore:
     def __init__(self, data_dir: Path):
@@ -127,3 +130,19 @@ class ApprovalStore:
         a.note = note
         self._save()
         return a
+
+    def attach_execution(self, aid: str, *, executed_audit_id: int, rollback_ref: str | None = None) -> Approval | None:
+        a = self._items.get(aid)
+        if not a:
+            return None
+        a.executed_audit_id = executed_audit_id
+        if rollback_ref:
+            a.rollback_ref = rollback_ref
+        self._save()
+        return a
+
+    def set_preview(self, aid: str, preview_rows: int | None) -> None:
+        a = self._items.get(aid)
+        if a:
+            a.preview_rows = preview_rows
+            self._save()

@@ -25,9 +25,6 @@ def _user_id(request: Request) -> str:
 @router.post("/approvals")
 async def create_approval(req: CreateRequest, request: Request):
     state = get_state()
-    # 仅团队模式需要审批，单机直接 400
-    if not state.auth.is_team_mode():
-        raise HTTPException(status_code=400, detail="approvals only in team mode")
     # 检查连接是否存在
     try:
         cfg = state.connections.get(req.connection_id)
@@ -48,6 +45,14 @@ async def create_approval(req: CreateRequest, request: Request):
         reasons = [{"rule_id": "assess-error", "message": "闸门评估异常，按待审处理", "message_en": "Gate assessment failed", "objects": []}]
     uid = _user_id(request)
     a = state.approvals.create(req.connection_id, req.sql, uid)
+    # DML 创建即快照影响行数预览（失败不影响入队）
+    if tier == "dml":
+        try:
+            from app.safety import gate as _g2
+            n = await _g2.preview_rows(state, req.connection_id, req.sql, _gate.sqlglot_dialect_for(cfg.dialect))
+            state.approvals.set_preview(a.id, int(n) if n is not None else None)
+        except Exception:
+            pass
     # 审计（关联审批 id）
     state.audit.log(connection=cfg.name, origin="ai", tier=tier, verdict=verdict, status="转审批", sql=req.sql, source="approval", approval_id=a.id, reasons=reasons)
     return {"id": a.id, "status": a.status}
@@ -55,19 +60,18 @@ async def create_approval(req: CreateRequest, request: Request):
 @router.get("/approvals")
 async def list_approvals(status: str | None = None):
     state = get_state()
-    if not state.auth.is_team_mode():
-        raise HTTPException(status_code=400, detail="approvals only in team mode")
     return {"items": [a.__dict__ for a in state.approvals.list(status)]}
 
 @router.post("/approvals/{aid}/approve")
 async def approve(aid: str, req: ReviewRequest, request: Request):
     state = get_state()
     uid = _user_id(request)
-    # 仅 admin 可批（简化：检查 role）
-    user = getattr(request.state, "user", None)
-    role = user.get("role") if isinstance(user, dict) else None
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
+    # 仅团队模式要求 admin 角色；单机模式本地用户即可
+    if state.auth.is_team_mode():
+        user = getattr(request.state, "user", None)
+        role = user.get("role") if isinstance(user, dict) else None
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="admin required")
     a = state.approvals.approve(aid, uid, req.note)
     if not a:
         raise HTTPException(status_code=404, detail="not found or not pending")
@@ -117,11 +121,17 @@ async def approve(aid: str, req: ReviewRequest, request: Request):
     # 实际执行（在原上下文执行）
     try:
         res = await core_query.execute(state, a.connection_id, a.sql)
-        # 执行后追加一条带 rollback_ref 的审计（便于回溯）
+        # 执行后追加一条带 rollback_ref 的审计（便于回溯），并把 rowid 回填到审批单
+        exec_audit_id = None
         try:
-            state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批执行完成", sql=a.sql, source="approval", approval_id=a.id, **({"rollback_ref": rollback_ref} if rollback_ref else {}))
+            exec_audit_id = state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批执行完成", sql=a.sql, source="approval", approval_id=a.id, **({"rollback_ref": rollback_ref} if rollback_ref else {}))
         except Exception:
             pass
+        if exec_audit_id:
+            try:
+                state.approvals.attach_execution(a.id, executed_audit_id=int(exec_audit_id), rollback_ref=rollback_ref)
+            except Exception:
+                pass
         out = {"id": a.id, "status": a.status, "result": res}
         if rollback:
             out["rollback"] = rollback
@@ -135,10 +145,12 @@ async def approve(aid: str, req: ReviewRequest, request: Request):
 async def reject(aid: str, req: ReviewRequest, request: Request):
     state = get_state()
     uid = _user_id(request)
-    user = getattr(request.state, "user", None)
-    role = user.get("role") if isinstance(user, dict) else None
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
+    # 仅团队模式要求 admin 角色；单机模式本地用户即可
+    if state.auth.is_team_mode():
+        user = getattr(request.state, "user", None)
+        role = user.get("role") if isinstance(user, dict) else None
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="admin required")
     a = state.approvals.reject(aid, uid, req.note)
     if not a:
         raise HTTPException(status_code=404, detail="not found or not pending")

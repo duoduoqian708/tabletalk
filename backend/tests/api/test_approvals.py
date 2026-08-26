@@ -32,12 +32,13 @@ async def _create_approval(client, conn_id, sql, token):
 # ---- 准入与角色 ----
 
 
-async def test_single_mode_rejected(app_state, conn_id, client, monkeypatch):
+async def test_single_mode_create_allowed(app_state, conn_id, client, monkeypatch):
     monkeypatch.delenv("TABLETALK_AUTH_MODE", raising=False)
     r = await client.post(
         "/api/v1/approvals", json={"connection_id": conn_id, "sql": _WITH_WHERE}
     )
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json()["status"] == "pending"
 
 
 async def test_non_admin_approve_forbidden(app_state, conn_id, client, monkeypatch):
