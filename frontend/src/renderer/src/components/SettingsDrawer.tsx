@@ -5,6 +5,7 @@ import { toastMsg } from '@renderer/utils/toast'
 import { loadTestState, saveTestState, type ConnTestState } from '@renderer/utils/connTestState'
 import { testGateway, testEmbedding } from '@renderer/api/ai'
 import { getSettings, updateSettings } from '@renderer/api/settings'
+import type { SensitiveEntry } from '@renderer/api/types'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
 import { SkillPlaza } from './SkillPlaza'
 import { useI18n } from '@renderer/store/i18n'
@@ -30,7 +31,7 @@ type ModelTab = 'chat' | 'embedding'
 
 /** 连接卡：目标信息（路径 / host·库）为主内容，敏感名单仅配置时展示；点卡即切为当前；设为默认即时点亮。 */
 function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, isDefault }: {
-  conn: { id: string; name: string; dialect: string; host: string; port: number | null; database: string; user: string; file: string; read_only?: boolean; sensitive?: string[] }
+  conn: { id: string; name: string; dialect: string; host: string; port: number | null; database: string; user: string; file: string; read_only?: boolean; sensitive?: SensitiveEntry[] }
   onEdit: () => void
   onRemove: () => void
   onSetDefault: () => void
@@ -70,7 +71,10 @@ function ConnRow({ conn, onEdit, onRemove, onSetDefault, onSelect, isCurrent, is
   const dbName = isSqlite ? '' : conn.database || '—'
   const targetTitle = isSqlite ? addr : `${addr} · db:${dbName} · user:${conn.user || '—'}`
 
-  const sensList = (conn.sensitive ?? []).join(', ')
+  const sensList = (conn.sensitive ?? []).map((e) =>
+    typeof e === 'string' ? e
+      : ((e.columns ?? []).length ? `${e.table}:${(e.columns ?? []).join(',')}` : e.table)
+  ).join(', ')
   const testLabel = testing ? '…' : t('settings.conn.test')
   return (
     <div
