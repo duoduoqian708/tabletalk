@@ -396,11 +396,14 @@ class KnowledgeBase:
         on_progress: Any | None = None,
         include_samples: bool = False,
         enable_ai_annotation: bool = True,
+        self_check: bool | None = None,
     ) -> dict[str, Any]:
         """构建知识库。on_progress(stage, percent) 可选进度回调（任务化构建用）。
 
-        include_samples: 是否将采样值发给 AI 辅助注释（仅控制 AI 发送，采样始终执行）。
+        include_samples: 是否将采样值发给 AI 辅助注释（仅控制 AI 发送；采样本身由
+            调用方门控——严格零采样：未授权时请求方不抽，传空/None 即可）。
         enable_ai_annotation: 是否执行 AI 注释 + 标签生成（mock provider 时自动降级为伪注释）。
+        self_check: 阶段2/3 审校式自检覆盖（None=沿用运行时 kb_build_self_check，默认开）。
         """
         # 全量重建也遵守历史墓碑（用户删过的 overlap 边不复活）
         if conn_id not in self._edge_tombstones:
@@ -441,7 +444,6 @@ class KnowledgeBase:
         if enable_ai_annotation:
             from app.knowledge.annotator import annotate_domain, annotate_tables
             from app.knowledge.ddl_context import (
-                build_ddl_overview,
                 ddls_from_schema,
                 generate_ddls_all,
                 truncate_samples,
@@ -449,7 +451,11 @@ class KnowledgeBase:
 
             # 阶段一：逐表 AI 处理（on_progress 逐表回调，phase="annotate"）
             if on_progress:
-                on_progress("AI 正在处理", 0, None, phase="annotate")
+                on_progress(
+                    "AI 正在处理", 0,
+                    "含样本取值" if include_samples else "仅结构·未授权采样",
+                    phase="annotate", step="per_table", step_index=0, step_total=1,
+                )
             try:
                 from app.state import get_state as _get_state
                 _st = _get_state()
@@ -482,14 +488,15 @@ class KnowledgeBase:
                 if on_progress:
                     on_progress("AI 正在处理", 100, None, phase="annotate")
 
-            # 阶段二：全局标签提取
+            # 阶段二：全局标签提取（全量重构先从空标签库划分，旧标签不复活）
             if on_progress:
                 on_progress("AI 标签提取", 0, None, phase="tags")
             try:
-                overview_text = build_ddl_overview(self._schema[conn_id])
+                self.clear_tags(conn_id)
                 domain_result = await annotate_domain(
                     _st, conn_id,
-                    schema=self._schema[conn_id], ddl_overview=overview_text,
+                    schema=self._schema[conn_id],
+                    self_check=self_check, on_progress=on_progress,
                 )
                 ai_tags_added = domain_result.get("new_tags", 0)
                 logger.info("[kb.build] conn=%s 阶段=tags 完成：new_tags=%s", conn_id, ai_tags_added)
@@ -503,11 +510,9 @@ class KnowledgeBase:
                 on_progress("AI 关系识别", 0, None, phase="graph")
             try:
                 from app.knowledge.annotator import annotate_graph
-                from app.knowledge.ddl_context import build_graph_overview
-                graph_overview = build_graph_overview(self._schema[conn_id])
                 llm_edges = await annotate_graph(
-                    _st, conn_id, graph_overview, self._schema[conn_id],
-                    on_progress=on_progress,
+                    _st, conn_id, self._schema[conn_id],
+                    on_progress=on_progress, self_check=self_check,
                 )
                 # 对比墓碑：用户之前拒绝过的边标记 previously_rejected
                 tombstone_keys = {
@@ -525,7 +530,7 @@ class KnowledgeBase:
 
         # ---- 构图（程序 FK 边） ----
         if on_progress:
-            on_progress("构图", 40, None)
+            on_progress("构图", 80, None)
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
         self._emb = self._embedder()
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
@@ -533,10 +538,10 @@ class KnowledgeBase:
         self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
         # 向量化（一表一 chunk，spec §4）：统一表级嵌入
         if on_progress:
-            on_progress("向量化", 45, None)
-        await self._embed_tables(conn_id, on_progress=on_progress, p0=45, p1=90)
+            on_progress("向量化", 82, None)
+        await self._embed_tables(conn_id, on_progress=on_progress, p0=82, p1=95)
         if on_progress:
-            on_progress("落盘", 95, None)
+            on_progress("落盘", 98, None)
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
         # 记录嵌入模型用量（ApiEmbedder 累计 usage → llm_log）
@@ -736,7 +741,6 @@ class KnowledgeBase:
             try:
                 from app.knowledge.annotator import annotate_domain, annotate_tables
                 from app.knowledge.ddl_context import (
-                    build_ddl_overview,
                     ddls_from_schema,
                     generate_ddls_all,
                     truncate_samples,
@@ -769,22 +773,41 @@ class KnowledgeBase:
                         _st, conn_id, changed_ddl_map, self._schema[conn_id],
                         samples=effective_samples,
                     )
-                # 有新表时追加标签
+                # 有新表时增量标签吸收（D1 收紧：新表归入既有 confirmed 域或提议新域，不改已绑定）
                 if diff["added_tables"]:
-                    overview_text = build_ddl_overview(self._schema[conn_id])
                     domain_result = await annotate_domain(
                         _st, conn_id,
-                        schema=self._schema[conn_id], ddl_overview=overview_text,
+                        schema=self._schema[conn_id],
+                        mode="incremental", target_tables=diff["added_tables"],
                     )
                     ai_tags_added = domain_result.get("new_tags", 0)
                 logger.info("[kb.incr] conn=%s AI注释完成：items=%s new_tags=%s", conn_id, ai_docs_added, ai_tags_added)
             except Exception as e:
                 logger.warning("[kb.incr] conn=%s 增量AI注释/标签异常：%s", conn_id, e)
 
-        # 5. 图谱：新 schema + 合并样本全量重构图（FK 边同步 + 墓碑遵守）
-        self._graph[conn_id] = self._build_graph(conn_id, new_schema, all_samples)
+        # 5. 删表清理（D2）：表→标签绑定 + LLM draft 边 + 0 表标签（返回被清名供审计）
+        cleared_tags = self._sync_removed_tables(conn_id, set(diff["removed_tables"]))
+        if cleared_tags:
+            logger.info("[kb.incr] conn=%s 删除清理：清理 0 表标签=%s", conn_id, cleared_tags)
 
-        # 5. 指纹与同步时间
+        # 6. 图谱：FK 正式边全量重构图（墓碑保护）+ 变化表 LLM 增量补边（D3）
+        self._graph[conn_id] = self._build_graph(conn_id, new_schema, all_samples)
+        if rebuild_tables:
+            try:
+                from app.knowledge.annotator import annotate_graph
+                from app.state import get_state as _gstate  # noqa: PLC0415
+                _st2 = _gstate()
+                incr_edges = await annotate_graph(
+                    _st2, conn_id, self._schema[conn_id],
+                    mode="incremental", target_tables=list(rebuild_tables),
+                )
+                self._upsert_llm_edges(conn_id, set(rebuild_tables), incr_edges)
+                logger.info("[kb.incr] conn=%s 增量图谱补边：target=%s 新边=%s",
+                            conn_id, len(rebuild_tables), len(incr_edges))
+            except Exception as e:
+                logger.warning("[kb.incr] conn=%s 增量图谱补边异常：%s", conn_id, e)
+
+        # 7. 指纹与同步时间
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(new_schema)
         self._synced_at[conn_id] = now
         self._rebuild_vstore(conn_id)
@@ -800,6 +823,7 @@ class KnowledgeBase:
             "tables_added": len(diff["added_tables"]),
             "tables_removed": len(diff["removed_tables"]),
             "tables_changed": len(rebuild_tables),
+            "cleared_tags": cleared_tags,
             **diff,
         }
 
@@ -853,7 +877,7 @@ class KnowledgeBase:
         }
 
     async def _embed_tables(self, conn_id: str, tables: set[str] | None = None,
-                            on_progress: Any | None = None, p0: int = 45, p1: int = 90) -> None:
+                            on_progress: Any | None = None, p0: int = 82, p1: int = 95) -> None:
         """统一表级嵌入（一表一 chunk）：文本 = _synthesize_table_text，key = 表名。
 
         tables=None → 全量表（全量构建/重嵌）；否则只重算这些表（增量同步，其余保留）。
@@ -1202,6 +1226,63 @@ class KnowledgeBase:
         x, y = sorted([a, b])
         return (x[0], x[1], y[0], y[1])
 
+    def _sync_removed_tables(self, conn_id: str, removed: set[str]) -> list[str]:
+        """删表清理（增量）：表→标签绑定移除 + 含删表的 LLM draft 边移除 + 0 表标签清理。
+
+        返回被清理的标签名（供审计留痕 detail）。标签绑表数为 0 即孤儿（D2 收紧：清理）。
+        """
+        cleared: list[str] = []
+        if not removed:
+            return cleared
+        # 1. 表→标签绑定
+        tt = self._table_tags.get(conn_id)
+        if tt:
+            for t in removed:
+                tt.pop(t, None)
+        # 2. LLM draft 边涉及删表的移除
+        pending = self._llm_graph_edges.get(conn_id, [])
+        if pending:
+            keep = [
+                e for e in pending
+                if e.get("from_table") not in removed and e.get("to_table") not in removed
+            ]
+            if len(keep) != len(pending):
+                self._llm_graph_edges[conn_id] = keep
+        # 3. 0 表标签清理（D2）：绑表数=0 即孤儿 → 清理
+        lib = self._tags.get(conn_id, {})
+        if lib:
+            usage: dict[str, int] = {}
+            for _t, names in (self._table_tags.get(conn_id) or {}).items():
+                for n in names:
+                    usage[n] = usage.get(n, 0) + 1
+            dead = [n for n in list(lib) if usage.get(n, 0) == 0]
+            for n in dead:
+                del lib[n]
+            if dead:
+                self._save_conn(conn_id)
+            cleared = dead
+        return cleared
+
+    def _upsert_llm_edges(self, conn_id: str, targets: set[str], new_edges: list[dict]) -> None:
+        """增量局部补边落库：替换涉及 targets 的旧 LLM draft 边为新边，其余保留；去重 + 墓碑。
+        """
+        pending = self._llm_graph_edges.get(conn_id, [])
+        # 墓碑：用户拒绝过的边不复活
+        tomb_keys = {self._llm_edge_key(t) for t in self._llm_edge_tombstones.get(conn_id, [])}
+        # 保留不涉及 targets 的旧边
+        keep = [
+            e for e in pending
+            if e.get("from_table") not in targets and e.get("to_table") not in targets
+        ]
+        seen = {self._llm_edge_key(e) for e in keep}
+        out = list(keep)
+        for e in new_edges:
+            if self._llm_edge_key(e) in seen or self._llm_edge_key(e) in tomb_keys:
+                continue
+            seen.add(self._llm_edge_key(e))
+            out.append(e)
+        self._llm_graph_edges[conn_id] = out
+
     def confirm_graph_edges(self, conn_id: str, from_table: str | None = None) -> int:
         """确认 LLM draft 边 → 写入正式图谱（from_table=None 则确认全部）。
 
@@ -1375,6 +1456,15 @@ class KnowledgeBase:
         return any(v.get("status") == "confirmed" for v in self._tags.get(conn_id, {}).values())
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
+    def clear_tags(self, conn_id: str) -> int:
+        """全量重构：清空该连接的标签库与表→标签绑定（残留 0 表标签不复活）。"""
+        lib = self._tags.pop(conn_id, {})
+        bound = self._table_tags.pop(conn_id, {})
+        n = len(lib)
+        if n or bound:
+            self._save_conn(conn_id)
+        return n
+
     def upsert_tags(self, conn_id: str, tags: list[dict[str, Any]]) -> int:
         """AI 提案的标签入库（新标签为 draft，已存在不重复）。tags: [{name, description}]"""
         lib = self._tags.setdefault(conn_id, {})

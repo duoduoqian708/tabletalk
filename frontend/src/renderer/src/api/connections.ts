@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { ConnectionConfig } from './types'
+import type { ConnectionConfig, SensitiveEntry } from './types'
 
 export interface ConnectionInput {
   name?: string
@@ -13,7 +13,7 @@ export interface ConnectionInput {
   ssl?: boolean
   read_only?: boolean
   timeout?: number
-  sensitive?: string[]
+  sensitive?: SensitiveEntry[]
 }
 
 export interface TestResult {

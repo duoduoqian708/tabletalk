@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useReducer, useRef, useState } from 'react'
 import type { GraphEdge } from '@renderer/api/types'
+import { colorFor } from '@renderer/lib/sphere'
 import { useI18n } from '@renderer/store/i18n'
 
 /* ═══════════════════════════════════════════════════════════════
    TableRelationGraph2D — 手写 SVG 可编辑表关系图（spec §6 右栏）
-   领域聚类初始布局 · 节点拖拽 · 字段级边标签 · 拖线弹面板连线 · 平移缩放
+   领域聚类初始布局 · 圆形节点（尺寸/配色对齐 3D 星图）· 字段级边标签 ·
+   边缘拖线弹面板连线（箭头）· 中心拖动节点 · 平移缩放
+   展示/编辑双态：展示态连线带 from→to 定向流动，编辑态箭头+可拖
    无第三方图库；坐标受控（layout prop）+ 本地乐观覆盖，松手回传宿主持久化
    ═══════════════════════════════════════════════════════════════ */
 
@@ -12,6 +15,8 @@ export interface Trg2dTable {
   name: string
   tags?: string[]
   excluded?: boolean
+  /** 节点规模（列数/行数），驱动圆形半径 1:1 对齐 3D 星图 */
+  size?: number
 }
 
 export interface Trg2dAddEdge {
@@ -49,35 +54,26 @@ interface Props {
   onLayoutChange: (layout: Trg2dLayout) => void
   /** 受控坐标（如 payload.layout 回读）；本地拖拽在其上做乐观覆盖 */
   layout?: Trg2dLayout
-  /** 标签取色钩子（缺省用内置确定性 8 色板）；宿主可传审查页同源映射保持一致 */
-  getTagColor?: (tag: string) => string | undefined
   className?: string
+  /** 展示态（只读，连线定向流动）| 编辑态（箭头 + 边缘拖线 + 移动 + 选边删确认）。缺省=edit */
+  mode?: 'edit' | 'display'
+  /** 表名 → 颜色覆盖（知识库标签色）；无覆盖时走 colorFor hash */
+  colorMap?: Record<string, string>
 }
 
 /* ── 几何常量 ── */
-const NODE_W = 148
-const NODE_H = 34
-const ROW_GAP = 12            // 组内节点纵向间距
-const GROUP_PAD = 46          // 组间留白（领域分区间的空白）
-const EDGE_GAP = 4            // 线与节点边框的间隙
-const LINK_BAND = 10          // 节点边缘"连线感应带"宽度
-const HIT_W = 14              // 边命中区宽度
+const NODE_R_MIN = 18            // 圆形节点最小半径
+const NODE_R_MAX = 34            // 圆形节点最大半径（按规模对数缩放）
+const NODE_D = NODE_R_MAX * 2    // 圆直径（布局占用上界）
+const NODE_STEP_X = NODE_D + 92  // 横向格宽（圆 + 组间留白）
+const NODE_STEP_Y = NODE_D + 24  // 纵向格步（圆 + 下方标签 + 间距）
+const GROUP_PAD = 46             // 组间留白（领域分区间的空白）
+const EDGE_GAP = 4               // 线与节点边框的间隙
+const LINK_BAND = 16             // 圆环"连线感应带"宽度（边缘拖线的可抓区）
+const HIT_W = 14                 // 边命中区宽度
 const ZOOM_MIN = 0.35
 const ZOOM_MAX = 2.5
 const UNTAGGED = '\u0000'     // 无标签桶排序键（保证排最后）
-const TAG_PALETTE = ['#63c8ff', '#35d99a', '#ffb454', '#b18cff', '#ff6b81', '#2ee6a8', '#f472b6', '#fbbf24']
-
-function hashStr(s: string): number {
-  let h = 0
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
-  return Math.abs(h)
-}
-
-/** 内置确定性标签色（宿主未提供 getTagColor 时兜底） */
-function paletteColor(tag: string): string {
-  return TAG_PALETTE[hashStr(tag) % TAG_PALETTE.length]
-}
-
 /**
  * 领域聚类初始布局：按首标签分组 → 组名排序（无标签恒最后）→ 组块按列网格摆放，
  * 组内竖排一列；同输入同输出（纯确定性，不依赖 DOM/时间）。
@@ -98,33 +94,52 @@ function computeInitialLayout(tables: Trg2dTable[]): Trg2dLayout {
   })
   if (!keys.length) return out
   const cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)))
-  const cellW = NODE_W + GROUP_PAD * 2
+  const cellW = NODE_STEP_X
   // 每行高度 = 行内最高组块；组块在行内垂直居中
   const blocks = keys.map((k) => ({ key: k, names: groups.get(k)! }))
   for (let r = 0; r * cols < blocks.length; r++) {
     const row = blocks.slice(r * cols, (r + 1) * cols)
-    const rowH = Math.max(...row.map((b) => b.names.length * (NODE_H + ROW_GAP) - ROW_GAP))
+    const rowH = Math.max(...row.map((b) => b.names.length * NODE_STEP_Y))
     let rowTop = 0
     for (let rr = 0; rr < r; rr++) {
-      rowTop += Math.max(...blocks.slice(rr * cols, (rr + 1) * cols).map((b) => b.names.length * (NODE_H + ROW_GAP) - ROW_GAP)) + GROUP_PAD * 2
+      rowTop += Math.max(...blocks.slice(rr * cols, (rr + 1) * cols).map((b) => b.names.length * NODE_STEP_Y)) + GROUP_PAD * 2
     }
     row.forEach((b, c) => {
-      const blockH = b.names.length * (NODE_H + ROW_GAP) - ROW_GAP
+      const blockH = b.names.length * NODE_STEP_Y
       const top = rowTop + GROUP_PAD + (rowH - blockH) / 2
       b.names.forEach((name, i) => {
-        out[name] = { x: c * cellW + GROUP_PAD + NODE_W / 2, y: top + i * (NODE_H + ROW_GAP) + NODE_H / 2 }
+        out[name] = { x: c * cellW + GROUP_PAD + NODE_D / 2, y: top + i * NODE_STEP_Y + NODE_D / 2 }
       })
     })
+  }
+  // 简易 repulsion：检测重叠节点并推开（80 次迭代上限）
+  const minGap = NODE_D + 16
+  const allNames = Object.keys(out)
+  for (let iter = 0; iter < 80; iter++) {
+    let moved = false
+    for (let i = 0; i < allNames.length; i++) {
+      for (let j = i + 1; j < allNames.length; j++) {
+        const a = out[allNames[i]], b = out[allNames[j]]
+        const dx = b.x - a.x, dy = b.y - a.y
+        const dist = Math.hypot(dx, dy) || 1
+        if (dist < minGap) {
+          const push = (minGap - dist) / 2 + 0.5
+          const nx = dx / dist, ny = dy / dist
+          a.x -= nx * push; a.y -= ny * push
+          b.x += nx * push; b.y += ny * push
+          moved = true
+        }
+      }
+    }
+    if (!moved) break
   }
   return out
 }
 
-/** 自中心出发的方向线与节点外接矩形的交点（边界裁剪），再外推 gap 像素留白 */
-function clipToRect(cx: number, cy: number, dx: number, dy: number, gap: number): Trg2dPoint {
-  const hw = NODE_W / 2 + gap
-  const hh = NODE_H / 2 + gap
-  const adx = Math.abs(dx), ady = Math.abs(dy)
-  const t = Math.min(adx > 1e-6 ? hw / adx : Infinity, ady > 1e-6 ? hh / ady : Infinity)
+/** 自圆心出发的方向线与节点圆的交点（半径裁剪），再外推 gap 像素留白 */
+function clipToCircle(cx: number, cy: number, dx: number, dy: number, gap: number, radius: number): Trg2dPoint {
+  const len = Math.hypot(dx, dy) || 1
+  const t = (radius + gap) / len
   return { x: cx + dx * t, y: cy + dy * t }
 }
 
@@ -143,17 +158,21 @@ interface EdgeGeom {
   /** 近垂直边标签保持水平、贴线右侧放置（避免竖排长条） */
   horizontal: boolean
   labelW: number
+  labelFull: string   // "from.table.from_col → to.table.to_col (n:1)"
   /** 二次贝塞尔均匀采样折线（命中检测用，弦距近似在弓高下会漏检） */
   pts: Trg2dPoint[]
 }
 
 export function TableRelationGraph2D({
-  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, getTagColor, className,
+  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, className, mode = 'edit', colorMap,
 }: Props): React.JSX.Element {
   const { t } = useI18n()
+  const editable = mode === 'edit'
   const wrapRef = useRef<HTMLDivElement>(null)
   const viewGRef = useRef<SVGGElement | null>(null)
   const [, bump] = useReducer((x: number) => x + 1, 0)
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '').slice(0, 8)
+  const arrowId = `trg2d-arrow-${uid}`
 
   /* ── 视图变换（平移/缩放）：ref 为唯一事实来源，手势期间命令式写 DOM，结束时 bump 刷新覆盖层 ── */
   const viewRef = useRef({ tx: 30, ty: 30, k: 1 })
@@ -177,6 +196,20 @@ export function TableRelationGraph2D({
   const excludedSet = useMemo(() => new Set(tables.filter((tb) => tb.excluded).map((tb) => tb.name)), [tables])
   const tableSet = useMemo(() => new Set(tables.map((tb) => tb.name)), [tables])
 
+  /* ── 节点圆半径：按规模对数缩放（尺寸对齐 3D 星图 radiusFor 的语义） ── */
+  const radii = useMemo(() => {
+    const m: Record<string, number> = {}
+    const s = tables.map((tb) => Math.max(1, tb.size ?? 1))
+    const mn = Math.min(...s), mx = Math.max(...s)
+    const lo = Math.log(mn), hi = Math.log(Math.max(2, mx))
+    for (const tb of tables) {
+      const c = Math.max(1, tb.size ?? 1)
+      const tt = hi > lo ? (Math.log(c) - lo) / (hi - lo) : 0.5
+      m[tb.name] = NODE_R_MIN + (NODE_R_MAX - NODE_R_MIN) * Math.max(0, Math.min(1, tt))
+    }
+    return m
+  }, [tables])
+
   /* ── 可见边几何：端点缺失/涉及排除表的边不渲染 ── */
   const edgeGeoms = useMemo<EdgeGeom[]>(() => {
     const out: EdgeGeom[] = []
@@ -187,8 +220,9 @@ export function TableRelationGraph2D({
       if (!a || !b) continue
       const dx = b.x - a.x, dy = b.y - a.y
       const len = Math.hypot(dx, dy) || 1
-      const pa = clipToRect(a.x, a.y, dx, dy, EDGE_GAP)
-      const pb = clipToRect(b.x, b.y, -dx, -dy, EDGE_GAP)
+      const ra = radii[e.from] ?? NODE_R_MIN, rb = radii[e.to] ?? NODE_R_MIN
+      const pa = clipToCircle(a.x, a.y, dx, dy, EDGE_GAP, ra)
+      const pb = clipToCircle(b.x, b.y, -dx, -dy, EDGE_GAP, rb)
       // 轻曲线：中点沿法线上抬 7% 长度，避免完全平行边重叠
       const nx = -dy / len, ny = dx / len
       const bow = len * 0.07
@@ -198,7 +232,8 @@ export function TableRelationGraph2D({
       const horizontal = Math.abs(angle) > 55   // 近垂直边：标签水平放置
       if (!horizontal && (angle > 90 || angle < -90)) angle += 180   // 沿线标签保持正立
       const fc = e.from_col || '*', tc = e.to_col || '*'
-      const label = `${e.from}.${fc} ─ ${e.cardinality === '1:1' ? '1:1' : 'n:1'} ─ ${e.to}.${tc}`
+      const cardStr = e.cardinality === '1:1' ? '1:1' : 'n:1'
+      const labelFull = `${e.from}.${fc} → ${e.to}.${tc} (${cardStr})`
       // 命中折线采样：B(t)=(1-t)²P0+2(1-t)tC+t²P2，16 段足够 7px 阈值
       const pts: Trg2dPoint[] = []
       for (let i = 0; i <= 16; i++) {
@@ -209,18 +244,14 @@ export function TableRelationGraph2D({
         key: `${e.from}|${e.from_col ?? ''}|${e.to}|${e.to_col ?? ''}|${e.kind}|${e.status ?? 'confirmed'}`,
         edge: e, draft: e.status === 'draft',
         d: `M ${pa.x} ${pa.y} Q ${cx} ${cy} ${pb.x} ${pb.y}`,
-        mid, angle, horizontal, labelW: label.length * 5.8 + 14, pts,
+        mid, angle, horizontal, labelW: (fc.length + tc.length) * 5.2 + 30, labelFull, pts,
       })
     }
     return out
-  }, [edges, posMap, tableSet, excludedSet])
+  }, [edges, posMap, tableSet, excludedSet, radii])
 
-  /* ── 标签配色 ── */
-  const colorOf = (tb: Trg2dTable): string => {
-    const tag = tb.tags?.[0]
-    if (!tag) return '#5a6a7e'
-    return getTagColor?.(tag) ?? paletteColor(tag)
-  }
+  /* ── 节点配色（与 3D 星图同源 SPHERE_PALETTE，按表名稳定取色） ── */
+  const nodeColor = (tb: Trg2dTable): string => (tb.excluded ? '#5a6a7e' : (colorMap?.[tb.name] ?? colorFor(tb.name)))
 
   /* ── 交互状态 ── */
   const [selKey, setSelKey] = useState<string | null>(null)
@@ -257,19 +288,20 @@ export function TableRelationGraph2D({
       if (excludedSet.has(tb.name)) continue
       const c = posMap[tb.name]
       if (!c) continue
-      if (Math.abs(p.x - c.x) <= NODE_W / 2 + 2 && Math.abs(p.y - c.y) <= NODE_H / 2 + 2) best = tb.name
+      const r = radii[tb.name] ?? NODE_R_MIN
+      if (Math.hypot(p.x - c.x, p.y - c.y) <= r + 3) best = tb.name
     }
     return best
   }
 
-  /** 命中节点边缘感应带（外扩 LINK_BAND 但不含内核）→ 连线起点；中心区域 → 移动 */
+  /** 命中圆环（外圈内 r..r-LINK_BAND 的环形带）→ 连线起点；圆内部 → 移动 */
   const inLinkBand = (name: string, p: Trg2dPoint): boolean => {
     const c = posMap[name]
     if (!c) return false
-    const dx = Math.abs(p.x - c.x), dy = Math.abs(p.y - c.y)
-    const outer = dx <= NODE_W / 2 + LINK_BAND && dy <= NODE_H / 2 + LINK_BAND
-    const inner = dx < NODE_W / 2 - LINK_BAND && dy < NODE_H / 2 - LINK_BAND
-    return outer && !inner
+    const r = radii[name] ?? NODE_R_MIN
+    const dist = Math.hypot(p.x - c.x, p.y - c.y)
+    const inner = Math.max(3, r - LINK_BAND)
+    return dist <= r + 3 && dist >= inner
   }
 
   const hitEdge = (p: Trg2dPoint): string | null => {
@@ -297,6 +329,13 @@ export function TableRelationGraph2D({
     // 合成事件/无活动指针时 setPointerCapture 会抛 NotFoundError，静默降级为普通事件流
     try { ev.currentTarget.setPointerCapture(ev.pointerId) } catch { /* ignore */ }
     const p = screenToWorld(ev.clientX, ev.clientY)
+    if (!editable) {
+      // 展示态：只允许平移/缩放，不接链接/移动/选边手势
+      const v = viewRef.current
+      gestureRef.current = { type: 'pan', sx: ev.clientX, sy: ev.clientY, tx: v.tx, ty: v.ty }
+      ev.currentTarget.classList.add('is-panning')
+      return
+    }
     const name = hitNode(p)
     if (name) {
       if (inLinkBand(name, p)) {
@@ -320,8 +359,9 @@ export function TableRelationGraph2D({
   const onPointerMove = (ev: React.PointerEvent<SVGSVGElement>): void => {
     const g = gestureRef.current
     if (!g) {
-      // 空闲态：更新悬停目标与连线感应带光标提示
+      // 空闲态：更新悬停目标与连线感应带光标提示（展示态不追踪）
       rectRef.current = null
+      if (!editable) return
       const p = screenToWorld(ev.clientX, ev.clientY)
       const name = hitNode(p)
       const zone = name != null && inLinkBand(name, p)
@@ -412,8 +452,8 @@ export function TableRelationGraph2D({
       if (!el) return
       const xs = tables.map((tb) => posOf(tb.name).x)
       const ys = tables.map((tb) => posOf(tb.name).y)
-      const minX = Math.min(...xs) - NODE_W / 2, maxX = Math.max(...xs) + NODE_W / 2
-      const minY = Math.min(...ys) - NODE_H / 2, maxY = Math.max(...ys) + NODE_H / 2
+      const minX = Math.min(...xs) - NODE_R_MAX, maxX = Math.max(...xs) + NODE_R_MAX
+      const minY = Math.min(...ys) - (NODE_R_MAX + 14), maxY = Math.max(...ys) + (NODE_R_MAX + 14)
       const bw = maxX - minX, bh = maxY - minY
       const k = Math.min(1.15, Math.max(ZOOM_MIN, Math.min((el.clientWidth - 70) / bw, (el.clientHeight - 70) / bh)))
       viewRef.current = { k, tx: (el.clientWidth - bw * k) / 2 - minX * k, ty: (el.clientHeight - bh * k) / 2 - minY * k }
@@ -486,8 +526,9 @@ export function TableRelationGraph2D({
     if (!link) return ''
     const a = posMap[link.from]
     if (!a) return ''
+    const r = radii[link.from] ?? NODE_R_MIN
     const dx = link.cur.x - a.x, dy = link.cur.y - a.y
-    const pa = clipToRect(a.x, a.y, dx, dy, EDGE_GAP + 2)
+    const pa = clipToCircle(a.x, a.y, dx, dy, EDGE_GAP + 2, r)
     return `M ${pa.x} ${pa.y} L ${link.cur.x} ${link.cur.y}`
   })()
 
@@ -501,12 +542,19 @@ export function TableRelationGraph2D({
         onPointerCancel={endGesture}
         onPointerLeave={() => { if (!gestureRef.current && hoverName) setHoverName(null) }}
       >
+        <defs>
+          <marker id={arrowId} viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" className="trg2d-arrow" />
+          </marker>
+        </defs>
         <g ref={(el) => { viewGRef.current = el; if (el) requestAnimationFrame(applyView) }}>
           {/* ── 边层 ── */}
           {edgeGeoms.map((g) => (
-            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${selKey === g.key ? ' is-sel' : ''}`}>
+            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${selKey === g.key ? ' is-sel' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
               <path className="trg2d-edge-hit" d={g.d} />
-              <path className="trg2d-edge-line" d={g.d} />
+              <path className="trg2d-edge-line" d={g.d}
+                markerEnd={editable ? `url(#${arrowId})` : undefined} />
               {/* 深度缩小时隐藏标签防糊（选中边常显） */}
               {(v.k >= 0.55 || selKey === g.key) && (
                 <g transform={g.horizontal
@@ -528,11 +576,11 @@ export function TableRelationGraph2D({
                   <text className="trg2d-edge-label"
                     x={g.horizontal ? 16 : 0}
                     textAnchor={g.horizontal ? 'start' : 'middle'}>
-                    {`${g.edge.from}.${g.edge.from_col || '*'} ─ ${g.edge.cardinality === '1:1' ? '1:1' : 'n:1'} ─ ${g.edge.to}.${g.edge.to_col || '*'}`}
+                    {`${g.edge.from_col || '*'} → ${g.edge.to_col || '*'}`}
                   </text>
                 </g>
               )}
-              <title>{[g.edge.reason, g.draft ? t('kb.badgePending') : null].filter(Boolean).join(' · ')}</title>
+              <title>{[g.labelFull, g.edge.reason, g.draft ? t('kb.badgePending') : null].filter(Boolean).join(' · ')}</title>
             </g>
           ))}
 
@@ -542,26 +590,30 @@ export function TableRelationGraph2D({
               <path d={previewD} />
               {link?.target && (() => {
                 const c = posMap[link.target]
-                return c ? <rect className="trg2d-preview-ring"
-                  x={c.x - NODE_W / 2 - 5} y={c.y - NODE_H / 2 - 5} width={NODE_W + 10} height={NODE_H + 10} rx={(NODE_H + 10) / 2} />
+                return c ? <circle className="trg2d-preview-ring"
+                  cx={c.x} cy={c.y} r={(radii[link.target] ?? NODE_R_MIN) + 5} />
                 : null
               })()}
             </g>
           )}
 
-          {/* ── 节点层 ── */}
+          {/* ── 节点层（圆形，配色/半径对齐 3D 星图）── */}
           {tables.map((tb) => {
             const c = posMap[tb.name]
             if (!c) return null
             const exc = !!tb.excluded
             const isSrc = link?.from === tb.name
+            const r = radii[tb.name] ?? NODE_R_MIN
             return (
               <g key={tb.name}
                 className={`trg2d-node${exc ? ' is-excluded' : ''}${hoverName === tb.name ? ' is-hover' : ''}${isSrc ? ' is-src' : ''}`}
                 transform={`translate(${c.x} ${c.y})`}>
-                <rect className="trg2d-node-body" x={-NODE_W / 2} y={-NODE_H / 2} width={NODE_W} height={NODE_H} rx={NODE_H / 2} />
-                <circle className="trg2d-node-dot" cx={-NODE_W / 2 + 15} cy={0} r={4.5} fill={colorOf(tb)} />
-                <text className="trg2d-node-name" x={-NODE_W / 2 + 26} y={4}>{truncName(tb.name)}</text>
+                <circle className="trg2d-node-body" r={r} fill={nodeColor(tb)} />
+                {hoverName === tb.name && linkZone && (
+                  <circle className="trg2d-link-ring" r={r + 6} />
+                )}
+                <text className="trg2d-node-name-bg" y={r + 12} textAnchor="middle">{truncName(tb.name)}</text>
+                <text className="trg2d-node-name" y={r + 12} textAnchor="middle">{truncName(tb.name)}</text>
                 {exc && <title>{t('graph.remove')} · {tb.name}</title>}
               </g>
             )
@@ -570,7 +622,7 @@ export function TableRelationGraph2D({
       </svg>
 
       {/* ── 操作提示 ── */}
-      <div className="trg2d-hint">{t('trg2d.hint')}</div>
+      <div className="trg2d-hint">{editable ? t('trg2d.hint') : '展示态 · 只读方向流动 · 切「编辑」可拖线连表'}</div>
 
       {/* ── 缩放指示 ── */}
       <div className="trg2d-zoom">{Math.round(v.k * 100)}%</div>

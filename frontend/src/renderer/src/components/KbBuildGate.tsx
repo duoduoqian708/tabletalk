@@ -196,24 +196,44 @@ export function KbBuildGate(): React.JSX.Element | null {
 
       {st === 'building' && (
         <div className="kb-gate-body">
-          {/* 三阶段独立进度条 */}
+          {/* 三阶段独立进度条（段7：阶段内子步标注 + step 计数） */}
           {(progress?.phases?.length ?? 0) > 0 ? (
             <div className="kb-phases">
-              {(progress?.phases ?? []).map((ph, idx) => (
-                <div key={ph.key} className="kb-phase">
-                  <div className="kb-phase-head">
-                    <span className="kb-phase-idx mono">{idx + 1}</span>
-                    <span className="kb-phase-label mono">{ph.label}</span>
-                    {ph.detail && (
-                      <span className="kb-phase-detail mono">正在处理 {ph.detail}</span>
+              {(progress?.phases ?? []).map((ph, idx) => {
+                const stepNow = (ph.step_index ?? 0) > 0 && (ph.step_total ?? 0) > 0
+                  ? `${ph.step_index}/${ph.step_total}`
+                  : null
+                return (
+                  <div key={ph.key} className="kb-phase">
+                    <div className="kb-phase-head">
+                      <span className="kb-phase-idx mono">{idx + 1}</span>
+                      <span className="kb-phase-label mono">{ph.label}</span>
+                      {ph.step_label && (
+                        <span className="kb-phase-step mono">
+                          {ph.step_label}{stepNow ? ` ${stepNow}` : ''}
+                        </span>
+                      )}
+                      {ph.detail && !ph.step_label && (
+                        <span className="kb-phase-detail mono">正在处理 {ph.detail}</span>
+                      )}
+                      <span className="kb-phase-pct mono">{ph.percent}%</span>
+                    </div>
+                    <div className="kb-bar">
+                      <div className="kb-bar-fill" style={{ width: `${ph.percent ?? 0}%` }} />
+                    </div>
+                    {ph.steps && ph.steps.length > 1 && (
+                      <div className="kb-phase-chips">
+                        {ph.steps.map((s) => (
+                          <span
+                            key={s.key}
+                            className={`kb-chip${s.key === ph.step ? ' on' : ''}`}
+                          >{s.label}</span>
+                        ))}
+                      </div>
                     )}
-                    <span className="kb-phase-pct mono">{ph.percent}%</span>
                   </div>
-                  <div className="kb-bar">
-                    <div className="kb-bar-fill" style={{ width: `${ph.percent ?? 0}%` }} />
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           ) : (
             <div className="kb-gate-progress">
@@ -222,6 +242,7 @@ export function KbBuildGate(): React.JSX.Element | null {
               </div>
               <span className="kb-bar-stage mono">
                 {progress?.stage ?? t('kb.queuing')}
+                {progress?.detail ? ` · ${progress.detail}` : ''}
                 {' '}· {progress?.percent ?? 0}%
               </span>
             </div>

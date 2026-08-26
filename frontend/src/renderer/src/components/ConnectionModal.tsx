@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { testDraftConnection } from '@renderer/api/connections'
+import { getSchema } from '@renderer/api/schema'
+import type { SensitiveEntry } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
 import { saveTestState, type ConnTestState } from '@renderer/utils/connTestState'
@@ -27,19 +29,30 @@ interface Draft {
   file: string
   ssl: boolean
   readOnly: boolean
-  sensitive: string
+  sensitive: SensitiveEntry[]
 }
 
 const EMPTY: Draft = {
   name: '', dialect: 'postgres', host: '127.0.0.1', port: '5432',
   user: '', password: '', database: '', file: '',
-  ssl: false, readOnly: true, sensitive: '',
+  ssl: false, readOnly: true, sensitive: [],
 }
 
 function loadDraft(): Draft {
   try {
     const raw = localStorage.getItem(DRAFT_KEY)
-    if (raw) return { ...EMPTY, ...JSON.parse(raw) }
+    if (raw) {
+      const src = JSON.parse(raw) as Record<string, unknown>
+      const loaded: Draft = { ...EMPTY }
+      for (const k of Object.keys(loaded) as (keyof Draft)[]) {
+        if (src[k] !== undefined) (loaded as unknown as Record<string, unknown>)[k] = src[k]
+      }
+      // 兼容旧草稿：sensitive 存的是逗号分隔字符串 → 转字符串条目（精确名结构由新编辑器产生）
+      if (typeof src.sensitive === 'string') {
+        loaded.sensitive = src.sensitive.split(',').map((s) => s.trim()).filter(Boolean)
+      }
+      return loaded
+    }
   } catch {
     /* ignore */
   }
@@ -58,6 +71,12 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
   const lastTest = useRef<ConnTestState | null>(null)
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // 敏感名单（段8）：编辑模式拉取 schema 供下拉选表/勾列；不可用回退手动输入
+  const [schemaTables, setSchemaTables] = useState<{ name: string; columns: string[] }[] | null>(null)
+  const [addTable, setAddTable] = useState('')
+  const [addWhole, setAddWhole] = useState(true)
+  const [addCols, setAddCols] = useState<string[]>([])
+  const [addColText, setAddColText] = useState('')
 
   // 编辑模式：加载既有连接配置（密码为掩码时留空，保存不覆盖）
   useEffect(() => {
@@ -75,12 +94,35 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       file: c.file ?? '',
       ssl: c.ssl ?? false,
       readOnly: c.read_only ?? false,
-      sensitive: (c.sensitive ?? []).join(', '),
+      sensitive: (c.sensitive ?? []).map((e) =>
+        typeof e === 'string' ? e : { table: e.table, columns: e.columns ?? [] }),
     })
     setTestedAt(null)
     setTestKey(null)
     setTestMsg(null)
+    setAddCols([])
+    setAddColText('')
   }, [open, editId, list])
+
+  // 敏感名单选表：编辑模式下从已存连接拉 schema（新连接尚未落库 → 手动输入兜底）
+  useEffect(() => {
+    if (!open || !editId) {
+      setSchemaTables(null)
+      return
+    }
+    let alive = true
+    setSchemaTables(null)
+    getSchema(editId).then((s: { tables?: { name: string }[]; columns?: { table: string; name: string }[] }) => {
+      if (!alive) return
+      const tabs = (s?.tables ?? []).map((t) => ({
+        name: t.name,
+        columns: (s?.columns ?? []).filter((c) => c.table === t.name).map((c) => c.name),
+      }))
+      setSchemaTables(tabs)
+      if (tabs.length) setAddTable(tabs[0].name)
+    }).catch(() => { /* 连接不可用 → 手动输入表名/列 */ })
+    return () => { alive = false }
+  }, [open, editId])
 
   const isSqlite = form.dialect === 'sqlite'
 
@@ -95,7 +137,8 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     file: isSqlite ? form.file : '',
     ssl: form.ssl,
     read_only: form.readOnly,
-    sensitive: form.sensitive.split(',').map((s) => s.trim()).filter(Boolean),
+    sensitive: form.sensitive.map((e) =>
+      typeof e === 'string' ? e : { table: e.table, columns: e.columns ?? [] }),
   }), [form, isSqlite])
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => {
@@ -172,6 +215,35 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     }
   }
 
+  // 敏感名单（段8）：结构化条目 添加/移除
+  function entryLabel(e: SensitiveEntry): string {
+    if (typeof e === 'string') return e  // 旧 glob 名单
+    const cols = e.columns ?? []
+    return cols.length ? `${e.table} : ${cols.join(', ')}` : `${e.table}（整表）`
+  }
+
+  function addSensitiveEntry(): void {
+    const tbl = addTable.trim()
+    if (!tbl) return
+    if (schemaTables) {
+      const entry: SensitiveEntry = addWhole
+        ? { table: tbl }
+        : { table: tbl, columns: addCols }
+      set('sensitive', [...form.sensitive, entry])
+    } else {
+      // 无 schema 回退：列用逗号文本
+      const cols = addWhole ? [] : addColText.split(',').map((s) => s.trim()).filter(Boolean)
+      set('sensitive', [...form.sensitive, cols.length ? { table: tbl, columns: cols } : { table: tbl }])
+    }
+    setAddCols([])
+    setAddColText('')
+    setAddWhole(true)
+  }
+
+  function removeSensitiveAt(i: number): void {
+    set('sensitive', form.sensitive.filter((_, j) => j !== i))
+  }
+
   return (
     <div className="modal-mask open" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
@@ -245,7 +317,57 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
           </div>
             <div className="fld">
               <label>{t('conn.modal.sensitive')}</label>
-            <input value={form.sensitive} onChange={(e) => set('sensitive', e.target.value)} placeholder="payroll_*, *secret*" />
+              <div className="sen-box">
+                {form.sensitive.length === 0 && (
+                  <div className="sen-empty mono">{t('conn.modal.sensitiveEmpty')}</div>
+                )}
+                {form.sensitive.map((e, i) => (
+                  <span key={i} className={`sen-chip${typeof e === 'string' ? ' glob' : ''}`}>
+                    {typeof e === 'string' && <em className="sen-glob-tag">glob</em>}
+                    {entryLabel(e)}
+                    <button type="button" className="sen-x" onClick={() => removeSensitiveAt(i)}>✕</button>
+                  </span>
+                ))}
+              </div>
+              <div className="sen-add">
+                <div className="sen-add-row">
+                  {schemaTables ? (
+                    <select
+                      value={addTable}
+                      onChange={(e) => { setAddTable(e.target.value); setAddCols([]) }}
+                      style={{ background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', color: 'var(--ink)', fontFamily: 'IBM Plex Mono', fontSize: 12, flex: 1, minWidth: 0 }}
+                    >
+                      <option value="">— {t('conn.modal.sensitivePickTable')} —</option>
+                      {schemaTables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                    </select>
+                  ) : (
+                    <input value={addTable} onChange={(e) => setAddTable(e.target.value)} placeholder={t('conn.modal.sensitiveTable')} style={{ flex: 1, minWidth: 0 }} />
+                  )}
+                  <label className="sen-whole">
+                    <input type="checkbox" checked={addWhole} onChange={(e) => setAddWhole(e.target.checked)} />
+                    {t('conn.modal.sensitiveWhole')}
+                  </label>
+                  <button type="button" className="btn ghost" disabled={!addTable.trim()} onClick={addSensitiveEntry}>
+                    {t('conn.modal.sensitiveAdd')}
+                  </button>
+                </div>
+                {!addWhole && schemaTables && addTable && (
+                  <div className="sen-cols">
+                    {schemaTables.find((t) => t.name === addTable)?.columns.map((c) => (
+                      <label key={c} className="sen-col">
+                        <input
+                          type="checkbox"
+                          checked={addCols.includes(c)}
+                          onChange={(e) => setAddCols((prev) => e.target.checked ? [...prev, c] : prev.filter((x) => x !== c))}
+                        /> {c}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {!addWhole && !schemaTables && (
+                  <input value={addColText} onChange={(e) => setAddColText(e.target.value)} placeholder={t('conn.modal.sensitiveCols')} />
+                )}
+              </div>
           </div>
           {testMsg && (
             <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: testMsg.ok ? 'var(--accent)' : 'var(--danger, #e57)' }}>

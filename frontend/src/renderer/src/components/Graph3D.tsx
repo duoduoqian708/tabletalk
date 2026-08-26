@@ -6,6 +6,7 @@ export interface GraphNode {
   name: string
   row_count: number
   column_count: number
+  kind?: 'table' | 'view'
 }
 
 export interface GraphEdge {
@@ -22,12 +23,16 @@ interface Props {
   onOpenData?: (name: string) => void
   /** 缩略模式（表数据视图打开时）：降帧渲染，让出主线程 */
   mini?: boolean
+  /** 表名 → 颜色覆盖（知识库标签色）；无覆盖时走 colorFor hash */
+  colorOverride?: Record<string, string>
+  /** 标签过滤：匹配的表正常显示，其余变暗 */
+  dimmedTables?: Set<string>
 }
 
-export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onClearSelection, onOpenData, mini, paused: controlledPaused, onTogglePause }: Props & { paused?: boolean; onTogglePause?: () => void }): React.JSX.Element {
+export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onClearSelection, onOpenData, mini, colorOverride, dimmedTables, paused: controlledPaused, onTogglePause }: Props & { paused?: boolean; onTogglePause?: () => void }): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const propsRef = useRef({ tables, foreignKeys, onSelectNode, onClearSelection, onOpenData })
-  propsRef.current = { tables, foreignKeys, onSelectNode, onClearSelection, onOpenData }
+  const propsRef = useRef({ tables, foreignKeys, onSelectNode, onClearSelection, onOpenData, colorOverride, dimmedTables })
+  propsRef.current = { tables, foreignKeys, onSelectNode, onClearSelection, onOpenData, colorOverride, dimmedTables }
   const miniRef = useRef(mini)
   miniRef.current = mini
   const selectedRef = useRef<number | null>(null)
@@ -454,7 +459,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         const maxC0 = Math.max(...counts)
         return radiusFor(tt.row_count, minC0, maxC0)
       })
-      const COLORS = cached && cached.n === tbl.length ? cached.colors : tbl.map((tt) => colorFor(tt.name))
+      const COLORS = tbl.map((tt) => propsRef.current.colorOverride?.[tt.name] ?? colorFor(tt.name))
 
       // 已去掉拉伸：保持原位，仅高亮
       const focus = selectedRef.current
@@ -544,6 +549,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         const isFlash = i === flashIdx
         const lit = focus != null && (i === focus || (hlSet ? hlSet.has(i) : false))
         const isFocus = focus === i
+        const dimmed = (propsRef.current.dimmedTables?.size ?? 0) > 0 && propsRef.current.dimmedTables!.has(tbl[i].name)
         const r = Math.max(MIN_R, RADII[i] * Math.min(1.5, p.scale))
         const depth = Math.max(0, Math.min(1, (p.z + 1) / 2))
         const col = COLORS[i]
@@ -556,17 +562,38 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           ctx.arc(p.x, p.y, r + 3.8, 0, Math.PI * 2)
           ctx.stroke()
         }
-        ctx.globalAlpha = lit || isFlash ? 1 : 0.35 + depth * 0.35
+        ctx.globalAlpha = dimmed ? 0.12 : (lit || isFlash ? 1 : 0.35 + depth * 0.35)
         ctx.fillStyle = col
         ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill()
+        if (tbl[i]?.kind === 'view' && !isFocus) {
+          const angle = Math.PI / 4
+          const bx = p.x + (r + 1) * Math.cos(angle)
+          const by = p.y - (r + 1) * Math.sin(angle)
+          ctx.globalAlpha = 0.9
+          ctx.fillStyle = '#3fb950'
+          ctx.beginPath(); ctx.arc(bx, by, 6, 0, Math.PI * 2); ctx.fill()
+          ctx.fillStyle = '#0d1117'
+          ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+          ctx.fillText('V', bx, by)
+          ctx.globalAlpha = 1
+        }
         if (isFocus) {
-          // 干净白圈，无光晕，保持本色（选中优先，搜索黄不覆盖白）
           ctx.globalAlpha = 1
           ctx.strokeStyle = 'rgba(255,255,255,0.92)'
           ctx.lineWidth = 1.8
           ctx.beginPath()
           ctx.arc(p.x, p.y, r + 3.4, 0, Math.PI * 2)
           ctx.stroke()
+          if (tbl[i]?.kind === 'view') {
+            const angle = Math.PI / 4
+            const bx = p.x + (r + 1) * Math.cos(angle)
+            const by = p.y - (r + 1) * Math.sin(angle)
+            ctx.fillStyle = '#3fb950'
+            ctx.beginPath(); ctx.arc(bx, by, 7, 0, Math.PI * 2); ctx.fill()
+            ctx.fillStyle = '#0d1117'
+            ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+            ctx.fillText('V', bx, by)
+          }
         } else if (!isFlash) {
           ctx.lineWidth = lit ? 2 : 1
           ctx.strokeStyle = lit ? 'rgba(255,255,255,.6)' : 'rgba(255,255,255,.25)'

@@ -121,9 +121,10 @@ class Settings:
     kb_ai_annotation_samples: bool = False
 
     def __post_init__(self) -> None:
-        # 仅默认数据目录做旧版迁移（用户显式指定 TABLETALK_DATA_DIR 时不迁移）
-        default_new = _expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk"))
-        if str(self.data_dir) == str(default_new):
+        # 仅默认数据目录做旧版迁移（用户显式指定 TABLETALK_DATA_DIR 时不迁移）。
+        # 守卫必须与字面默认目录比较，而不能与 env 同源比较（否则自定义目录也恒等触发迁移，
+        # 会把 ~/.cleared 的连接配置与 API key 灌进隔离/测试目录）。
+        if str(self.data_dir) == str(_expand("~/.tabletalk")):
             _migrate_legacy_data_dir(self.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 

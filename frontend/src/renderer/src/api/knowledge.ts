@@ -10,11 +10,12 @@ export function overview(connId: string): Promise<KnowledgeOverview> {
   return request(`/api/v1/knowledge/${connId}/overview`)
 }
 
-/** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。 */
-export function build(connId: string, includeSamples = true, trigger: 'init' | 'rebuild' = 'init'): Promise<{ job_id: string; kb_status: string; stage: string }> {
+/** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。
+ * selfCheck 空置时由后端运行时 kb_build_self_check 决定；传布尔即构建期覆盖。 */
+export function build(connId: string, includeSamples = false, trigger: 'init' | 'rebuild' = 'init', selfCheck?: boolean): Promise<{ job_id: string; kb_status: string; stage: string }> {
   return request(`/api/v1/knowledge/${connId}/build`, {
     method: 'POST',
-    body: JSON.stringify({ include_samples: includeSamples, trigger }),
+    body: JSON.stringify({ include_samples: includeSamples, trigger, self_check: selfCheck ?? null }),
   })
 }
 

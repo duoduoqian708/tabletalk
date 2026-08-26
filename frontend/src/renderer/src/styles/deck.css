@@ -1580,9 +1580,42 @@ body.resizing .drag-h {
   font-size: 13px;
   line-height: 1.7;
   color: var(--ink);
-  white-space: pre-wrap;
+  white-space: normal;
   word-break: break-word;
 }
+/* AI 返回文案 → markdown 渲染（react-markdown）：排版继承容器，代码块/列表/标题跨端友好 */
+.ai-txt > *:first-child { margin-top: 0; }
+.ai-txt > *:last-child { margin-bottom: 0; }
+.ai-txt p { margin: 0.4em 0; }
+.ai-txt h1, .ai-txt h2, .ai-txt h3, .ai-txt h4 {
+  margin: 0.9em 0 0.4em; font-weight: 650; line-height: 1.35; color: var(--ink-strong, var(--ink));
+}
+.ai-txt h1 { font-size: 15px; } .ai-txt h2 { font-size: 14px; } .ai-txt h3 { font-size: 13px; } .ai-txt h4 { font-size: 12.5px; }
+.ai-txt ul, .ai-txt ol { margin: 0.4em 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 0.2em; }
+.ai-txt li { margin: 0 0 0.12em; }
+.ai-txt li::marker { color: var(--accent); }
+.ai-txt strong { color: var(--ink); font-weight: 650; }
+.ai-txt em { color: var(--ink-dim); }
+.ai-txt a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.ai-txt a:hover { border-color: var(--accent); }
+.ai-txt code {
+  font-family: var(--font-mono); font-size: 0.92em;
+  background: var(--void-4); color: var(--accent);
+  padding: 0.15em 0.4em; border-radius: 4px; border: 1px solid var(--line);
+}
+.ai-txt pre {
+  margin: 0.5em 0; padding: 10px 12px; border-radius: var(--r-sm);
+  background: var(--void-4); border: 1px solid var(--line); overflow-x: auto;
+}
+.ai-txt pre code { background: none; border: none; padding: 0; color: var(--ink-dim); font-size: 11.5px; line-height: 1.65; white-space: pre; }
+.ai-txt blockquote {
+  margin: 0.5em 0; padding: 6px 12px; color: var(--ink-dim);
+  border-left: 3px solid var(--accent); background: var(--void-3); border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.ai-txt table { border-collapse: collapse; margin: 0.5em 0; font-size: 12px; display: block; overflow-x: auto; }
+.ai-txt th, .ai-txt td { border: 1px solid var(--line); padding: 5px 10px; text-align: left; }
+.ai-txt th { background: var(--void-3); color: var(--ink); font-weight: 600; }
+.ai-txt hr { border: none; border-top: 1px solid var(--line-strong); margin: 0.7em 0; }
 
 /* 思考中指示器 */
 .think.running {
@@ -3478,12 +3511,27 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 .np-head{display:flex;align-items:center;gap:10px}
 .np-title{font-size:15px;font-weight:400;color:var(--ink);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .np-title b{font-weight:700;background:linear-gradient(92deg,var(--accent),var(--accent-bright));-webkit-background-clip:text;background-clip:text;color:transparent}
+.np-view-badge{font-family:var(--font-mono);font-size:9px;font-weight:700;color:#0d1117;background:#3fb950;padding:1px 6px;border-radius:999px;letter-spacing:.03em;flex-shrink:0}
 .np-x{width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--ink-dim);cursor:pointer;font-size:11px;transition:all .2s var(--ease)}
 .np-x:hover{color:var(--ink-strong);border-color:var(--accent);background:var(--accent-dim)}
 .np-stats{display:flex;gap:18px;margin:14px 0 4px}
 .np-stat{display:flex;flex-direction:column;gap:3px}
 .np-num{font-family:var(--font-mono);font-size:18px;font-weight:600;color:var(--ink-strong);line-height:1}
 .np-lab{font-family:var(--font-mono);font-size:8.5px;letter-spacing:.14em;color:var(--ink-faint);text-transform:uppercase}
+.np-actions{margin-top:14px}
+.np-open{
+  width:100%;padding:8px 0;
+  background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 14%,transparent),color-mix(in srgb,var(--accent) 6%,transparent));
+  border:1px solid var(--accent-dim);border-radius:10px;
+  color:var(--accent-soft);font-size:12px;font-weight:600;
+  cursor:pointer;transition:all .2s var(--ease);
+  letter-spacing:.02em;
+}
+.np-open:hover{
+  background:var(--accent-dim);border-color:var(--accent);
+  color:var(--accent-bright);transform:translateY(-1px);
+  box-shadow:0 4px 12px color-mix(in srgb,var(--accent) 18%,transparent);
+}
 .np-body{margin-top:12px;border-top:1px dashed var(--line-strong);padding-top:14px}
 .np-tbd{font-size:11.5px;color:var(--ink-faint);text-align:center;letter-spacing:.04em}
 

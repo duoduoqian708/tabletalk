@@ -116,42 +116,6 @@ def ddls_from_schema(schema: dict[str, Any]) -> dict[str, str]:
     return {t["name"]: ddl_from_schema(schema, t["name"]) for t in schema.get("tables", [])}
 
 
-def build_ddl_overview(schema: dict[str, Any]) -> str:
-    """从已有 schema 构建精简版表结构概览（不走连接池），供全局标签 prompt 使用。
-
-    格式：
-    - users: id(PK) INTEGER, name VARCHAR, email VARCHAR
-      FK: none
-      comment: 用户主表
-    """
-    fk_map: dict[str, list[str]] = {}
-    for fk in schema.get("foreign_keys", []):
-        fk_map.setdefault(fk["table"], []).append(
-            f"{fk['column']} → {fk['ref_table']}.{fk['ref_column']}"
-        )
-
-    parts: list[str] = []
-    for t in schema.get("tables", []):
-        name = t["name"]
-        cols = [c for c in schema.get("columns", []) if c["table"] == name]
-        col_parts = []
-        for c in cols:
-            label = c["name"]
-            if c.get("pk"):
-                label += "(PK)"
-            label += f" {c.get('type', '')}"
-            col_parts.append(label)
-        fks = fk_map.get(name, [])
-        comment = t.get("comment", "")
-        line = f"- {name}: {', '.join(col_parts)}"
-        line += f"\n  FK: {'; '.join(fks) if fks else 'none'}"
-        if comment:
-            line += f"\n  comment: {comment}"
-        parts.append(line)
-
-    return "\n".join(parts)
-
-
 async def _generate_ddls_batch(state: "AppState", conn_id: str, tables: list[str]) -> dict[str, str]:
     """一次连接生成多表 DDL，返回 {table_name: ddl_string}。"""
 
@@ -208,37 +172,3 @@ async def _generate_ddls_batch(state: "AppState", conn_id: str, tables: list[str
     return await state.pools.run(conn_id, _work)
 
 
-def build_graph_overview(schema: dict[str, Any], filter_noise: bool = True) -> str:
-    """为 LLM 图谱识别构建精简表结构概览，可选过滤噪音列。
-
-    与 build_ddl_overview 的区别：过滤时间戳/审计人/软删除列，减少 LLM 干扰。
-    """
-    fk_map: dict[str, list[str]] = {}
-    for fk in schema.get("foreign_keys", []):
-        fk_map.setdefault(fk["table"], []).append(
-            f"{fk['column']} → {fk['ref_table']}.{fk['ref_column']}"
-        )
-
-    parts: list[str] = []
-    for t in schema.get("tables", []):
-        name = t["name"]
-        cols = [c for c in schema.get("columns", []) if c["table"] == name]
-        col_parts = []
-        for c in cols:
-            if filter_noise and is_noise_column(c["name"]):
-                continue
-            label = c["name"]
-            if c.get("pk"):
-                label += "(PK)"
-            label += f" {c.get('type', '')}"
-            col_parts.append(label)
-        fks = fk_map.get(name, [])
-        comment = t.get("comment", "")
-        line = f"- {name}: {', '.join(col_parts)}"
-        if fks:
-            line += f"\n  FK: {'; '.join(fks)}"
-        if comment:
-            line += f"\n  comment: {comment}"
-        parts.append(line)
-
-    return "\n".join(parts)

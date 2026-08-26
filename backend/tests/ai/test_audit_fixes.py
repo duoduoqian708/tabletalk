@@ -58,7 +58,7 @@ async def test_skill_system_prompt_injected(app_state, conn_id, monkeypatch):
     captured: dict = {}
 
     class _FakeProvider:
-        async def chat_stream(self, messages, tools=None):
+        async def chat_stream(self, messages, tools=None, ctx=None):
             captured["messages"] = messages
             captured["tools"] = tools
             if False:

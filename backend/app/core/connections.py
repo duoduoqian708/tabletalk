@@ -29,7 +29,7 @@ class ConnectionConfig:
     timeout: int = 10
     credential_ref: str | None = None
     created_at: str = ""
-    sensitive: list[str] = field(default_factory=list)
+    sensitive: list[str | dict[str, Any]] = field(default_factory=list)
     kb_status: str = "none"
     kb_updated_at: str = ""
 

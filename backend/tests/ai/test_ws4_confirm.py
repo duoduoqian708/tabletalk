@@ -107,7 +107,7 @@ class _ScriptedGateway:
         self.turns = turns
         self.calls = 0
 
-    async def chat_stream(self, messages, tools=None):
+    async def chat_stream(self, messages, tools=None, ctx=None):
         idx = min(self.calls, len(self.turns) - 1)
         self.calls += 1
         for t in self.turns[idx]:

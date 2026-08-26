@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
+import { tags as fetchTags } from '@renderer/api/knowledge'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
 import { useSchema } from '@renderer/store/schema'
@@ -23,7 +24,6 @@ import { ReportCard } from './ReportCard'
 import { AiRail } from './AiRail'
 import { KnowledgeReview } from './KnowledgeReview'
 import { AuditPage } from './ModulePages'
-import { ApprovalPage } from './ApprovalPage'
 import { TasksConsole } from './TasksConsole'
 import { CostDashboard } from './CostDashboard'
 import { SettingsDrawer } from './SettingsDrawer'
@@ -38,7 +38,6 @@ const TABS: { key: View; labelKey: string }[] = [
   { key: 'workspace', labelKey: 'nav.workspace' },
   { key: 'knowledge', labelKey: 'nav.knowledge' },
   { key: 'audit', labelKey: 'nav.securityAudit' },
-  { key: 'approvals', labelKey: 'nav.approvals' },
   { key: 'tasks', labelKey: 'nav.tasks' },
   { key: 'cost', labelKey: 'nav.cost' },
 ]
@@ -119,7 +118,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
 
   // 沉浸式 3D 图谱数据
   const graphNodes = useMemo(
-    () => schemaData?.tables.map((t) => ({ name: t.name, row_count: t.row_count, column_count: t.column_count })) ?? [],
+    () => schemaData?.tables.map((t) => ({ name: t.name, row_count: t.row_count, column_count: t.column_count, kind: t.kind as 'table' | 'view' })) ?? [],
     [schemaData]
   )
   const graphEdges = useMemo(
@@ -130,6 +129,26 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const [nodeData, setNodeData] = useState<string | null>(null)
   const [closingNode, setClosingNode] = useState<string | null>(null)
   const [nodePos, setNodePos] = useState<{ x: number; y: number } | null>(null)
+  /** 工作台标签过滤：选中的标签名 → 非匹配表变暗 */
+  const [dimmedTag, setDimmedTag] = useState<string | null>(null)
+  const [tagTableMap, setTagTableMap] = useState<Record<string, string[]>>({})
+  useEffect(() => {
+    if (!currentId || !dimmedTag) { setTagTableMap({}); return }
+    let alive = true
+    void fetchTags(currentId)
+      .then((r) => { if (alive) setTagTableMap(r.tables ?? {}) })
+      .catch(() => { if (alive) setTagTableMap({}) })
+    return () => { alive = false }
+  }, [currentId, dimmedTag])
+  const dimmedTables = useMemo(() => {
+    if (!dimmedTag) return undefined
+    const allTables = new Set(graphNodes.map((n) => n.name))
+    const matching = new Set<string>()
+    for (const [tbl, tags] of Object.entries(tagTableMap)) {
+      if (tags.includes(dimmedTag)) matching.add(tbl)
+    }
+    return new Set([...allTables].filter((n) => !matching.has(n)))
+  }, [dimmedTag, tagTableMap, graphNodes])
   const handleCloseTable = (): void => {
     if (!nodeData) return
     setClosingNode(nodeData)
@@ -179,26 +198,9 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     ? (() => {
         const t = schemaData?.tables.find((x) => x.name === nodeSel)
         const fk = schemaData?.foreign_keys.filter((f) => f.table === nodeSel || f.ref_table === nodeSel).length ?? 0
-        return t ? { rowCount: t.row_count, columnCount: t.column_count, fkCount: fk } : null
+        return t ? { rowCount: t.row_count, columnCount: t.column_count, fkCount: fk, kind: t.kind as 'table' | 'view' } : null
       })()
     : null
-  const [pendingApprovals, setPendingApprovals] = useState(0)
-  useEffect(() => {
-    if (!rt?.token) return
-    let alive = true
-    const load = async (): Promise<void> => {
-      try {
-        const r = await fetch('/api/v1/approvals?status=pending', { headers: { 'X-TableTalk-Token': rt.token } })
-        if (r.ok && alive) {
-          const j = await r.json()
-          setPendingApprovals((j.items || []).length)
-        }
-      } catch {}
-    }
-    void load()
-    const id = window.setInterval(() => void load(), 15000)
-    return () => { alive = false; window.clearInterval(id) }
-  }, [rt?.token, view])
 
   // 新标签到达（AI 查询 / 预览 / 报告）→ 自动切到表格视图；标签清空 → 回图谱
   useEffect(() => {
@@ -259,7 +261,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         <span className="wordmark">
           <span className="dot" />
           <b className="wm-t">tabletalk</b>
-          <small>AI DATABASE TERMINAL</small>
+          <small>{t('ui.tagline')}</small>
         </span>
         <ConnectionMenu onNew={() => setModalOpen(true)} />
         <nav className="nav">
@@ -270,31 +272,18 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               onClick={() => setView(tab.key)}
             >
               {t(tab.labelKey)}
-              {tab.key === 'approvals' && pendingApprovals > 0 && (
-                <span className="tab-badge mono" style={{ marginLeft: 6, background: 'var(--amber-dim)', color: 'var(--amber)', padding: '1px 6px', borderRadius: 'var(--r-full)', fontSize: 10 }}>{pendingApprovals}</span>
-              )}
             </button>
           ))}
         </nav>
         <span className="cur-table mono" title={t('ui.currentView')}>{subject}</span>
         <span className="spacer" />
-        <div className="gw mono">
-          <span className="gw-provider">{health?.ai_provider_name ?? '—'}</span>
-          <span className="gw-divider" />
-          <span>{health?.ai_model ?? '—'}</span>
-          {health?.ai_mock_downgraded && (
-            <span className="gw-warn" title={t('app.mockDowngradedTitle')}>· {t('app.mockDowngraded')}</span>
-          )}
-        </div>
         <button className="sys-btn" title={t('settings.title')} onClick={() => setSettingsOpen(true)}>
           <span className="gear">⚙</span>
         </button>
       </header>
 
       <main className="stage" key={view}>
-        {view === 'approvals' ? (
-          <ApprovalPage />
-        ) : view === 'workspace' ? (
+        {view === 'workspace' ? (
           <>
             <section
               className="workspace"
@@ -323,7 +312,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                       tables={graphNodes}
                       onPick={(name) => { setMainView('graph'); window.dispatchEvent(new CustomEvent('tabletalk:do-locate', { detail: { table: name } })) }}
                     />
-                    <TagBar connId={currentId} />
+                    <TagBar connId={currentId} onSelect={setDimmedTag} />
                     <span className="spacer" />
                     {mainView === 'table' && tabs.length === 0 && (
                       <span className="ws-empty-hint">{t('app.emptyHint')}</span>
@@ -338,6 +327,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                           foreignKeys={graphEdges}
                           selectedName={nodeSel}
                           mini={!!nodeData}
+                          dimmedTables={dimmedTables}
                           paused={graphPaused}
                           onTogglePause={() => setGraphPaused((v) => !v)}
                           onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
@@ -355,6 +345,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                           return (
                             <NodePopup
                               table={nodeSel}
+                              kind={nodeInfo.kind}
                               rowCount={nodeInfo.rowCount}
                               columnCount={nodeInfo.columnCount}
                               fkCount={nodeInfo.fkCount}

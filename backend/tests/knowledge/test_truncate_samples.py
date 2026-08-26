@@ -1,8 +1,8 @@
 """truncate_samples 值级截断单元测试 + is_noise_column 谓词回归。
 
 用户决策：授权样本出网不做任何列级过滤（不按列名、不按类型），整行样本直发 LLM，
-唯一防护是值级截断。is_noise_column 不再参与样本出网，但仍服务
-build_graph_overview(filter_noise=True)，其谓词级回归测试保留于此。
+唯一防护是值级截断。is_noise_column 仍服务画像噪音列判定（annotator._portrait_noise），
+其谓词级回归测试保留于此。
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def test_truncate_samples_structure_and_empty():
     assert out["t2"] == {"b": []}
 
 
-# ---------- is_noise_column 谓词回归（build_graph_overview 在用，与样本出网无关） ----------
+# ---------- is_noise_column 谓词回归（服务画像噪音列判定，与样本出网无关） ----------
 
 
 def test_is_noise_column_case_insensitive_and_patterns():

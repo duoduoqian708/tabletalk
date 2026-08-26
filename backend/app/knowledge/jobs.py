@@ -21,22 +21,61 @@ logger = logging.getLogger(__name__)
 
 STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向量化", "落盘"]
 
-# 三阶段进度条（同一弹窗内三条独立进度；取值对照/示例已并入阶段一逐表注释——
-# 由数据授权门控决定是否产生 values/example，不再有独立枚举阶段）
+# 三阶段独立进度条 + 每阶段子步（段7）：阶段一=逐表注释；阶段二=划分→审校自检；
+# 阶段三=全局扫描→候选裁决；子步由 annotator 内部 on_progress 上报。
 PHASES = [
-    {"key": "annotate", "label": "AI 正在处理"},
-    {"key": "tags", "label": "AI 标签提取"},
-    {"key": "graph", "label": "AI 关系识别"},
+    {"key": "annotate", "label": "AI 正在处理", "steps": [
+        {"key": "per_table", "label": "逐表注释"},
+    ]},
+    {"key": "tags", "label": "AI 标签提取", "steps": [
+        {"key": "partition", "label": "领域划分"},
+        {"key": "selfcheck", "label": "审校自检"},
+    ]},
+    {"key": "graph", "label": "AI 关系识别", "steps": [
+        {"key": "global", "label": "全局扫描"},
+        {"key": "verify", "label": "候选裁决"},
+    ]},
 ]
 
-BuildFn = Callable[[Callable[[str, int, str | None, str | None], None]], Awaitable[dict]]
+# 全局 overall 条权重窗口（段7.3）：phase 内部 0-100 映射到全局单调进度；
+# phase=None 的全局原始值（发现结构/抽样/构图/向量化/落盘）直接透传。
+# 窗口须高于前置原始值上界（非授权时抽样跳过，自动取窗口起点）。
+PHASE_WINDOW = {
+    "annotate": (16, 45),
+    "tags":     (45, 60),
+    "graph":    (60, 78),
+}
+
+BuildFn = Callable[[Callable[..., None]], Awaitable[dict]]
+
+
+def _step_label(phase_key: str, step_key: str) -> str | None:
+    for p in PHASES:
+        if p["key"] != phase_key:
+            continue
+        for s in p.get("steps", []):
+            if s["key"] == step_key:
+                return s["label"]
+        break
+    return step_key
+
+
+def _overall(phase: str | None, percent: int) -> int:
+    """阶段内部百分比 → 全局 overall 单调进度（0-100）。"""
+    pct = max(0, min(100, int(percent)))
+    if phase is None:
+        return pct
+    lo, hi = PHASE_WINDOW.get(phase, (0, 100))
+    return lo + (hi - lo) * pct // 100
 
 
 def _new_progress() -> dict[str, Any]:
     return {
         "stage": "排队中", "percent": 0, "done": False, "error": None, "detail": None,
         "phases": [
-            {"key": p["key"], "label": p["label"], "percent": 0, "detail": None}
+            {"key": p["key"], "label": p["label"], "percent": 0, "detail": None,
+             "step": None, "step_label": None, "step_index": None, "step_total": None,
+             "steps": [{"key": s["key"], "label": s["label"]} for s in p.get("steps", [])]}
             for p in PHASES
         ],
     }
@@ -109,20 +148,35 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
     def _is_current() -> bool:
         return mgr._jobs.get(conn_id) is job
 
+    last_phase: str | None = None
+    last_step: str | None = None
+
     try:
         # 进度上报 + 协作取消检查点（安全点：无 live DB 句柄）
-        # phase: None=全局 stage；'annotate'/'tags'/'graph'=更新对应独立阶段进度
+        # phase: None=全局 stage（发现结构/抽样/构图/向量化/落盘，percent 即 overall）；
+        #   'annotate'/'tags'/'graph'=阶段内 0-100，overall 按 PHASE_WINDOW 映射。
+        # step: 子步 key（per_table/partition/selfcheck/global/verify）+ step_index/total。
         def report(stage: str, percent: int, detail: str | None = None,
-                   phase: str | None = None) -> None:
+                   phase: str | None = None, step: str | None = None,
+                   step_index: int | None = None, step_total: int | None = None) -> None:
+            nonlocal last_phase, last_step
             if job.cancelled:
                 raise asyncio.CancelledError()
-            job.progress.update({"stage": stage, "percent": min(100, max(0, int(percent))), "detail": detail})
+            last_phase = phase
+            last_step = step
+            job.progress.update({
+                "stage": stage, "percent": _overall(phase, percent), "detail": detail,
+            })
             if phase:
                 for p in job.progress.get("phases", []):
                     if p["key"] == phase:
-                        p["percent"] = min(100, max(0, int(percent)))
+                        p["percent"] = max(0, min(100, int(percent)))
                         p["detail"] = detail
                         p["stage"] = stage
+                        p["step"] = step
+                        p["step_index"] = step_index
+                        p["step_total"] = step_total
+                        p["step_label"] = _step_label(phase, step) if step else None
                         break
             job.event.set()  # 唤醒 SSE 订阅者
 
@@ -146,14 +200,21 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
         if _is_current():
             state.knowledge.clear(conn_id)
             state.connections.set_kb_status(conn_id, "none")
-        job.progress.update({"stage": "已取消", "percent": 0, "done": True, "error": "cancelled"})
+        job.progress.update({
+            "stage": "已取消", "percent": 0, "done": True, "error": "cancelled",
+            "error_at": {"phase": last_phase, "step": last_step},
+        })
         job.event.set()
         raise
     except Exception as e:  # noqa: BLE001
         logger.warning("[kb.build] conn=%s 构建失败：%s", conn_id, e)
         if _is_current():
             state.connections.set_kb_status(conn_id, "none")
-        job.progress.update({"stage": "失败", "percent": 0, "done": True, "error": str(e)})
+        # 失败定位到子步（段7.4）：percent 保留卡死点，error_at 标注失败的阶段/子步
+        job.progress.update({
+            "stage": "失败", "done": True, "error": str(e),
+            "error_at": {"phase": last_phase, "step": last_step},
+        })
         job.event.set()
         raise
 
@@ -197,7 +258,8 @@ class SyncLoop:
                     logger.debug("[kb.sync] conn=%s 结构无变化，跳过", c.id)
                     continue
                 samples = {}
-                if rt.kb_sample_rows > 0:
+                # 严格零采样：定时同步仅在运行时授权 ai 采样开关时抽取（与 store.sync 解析一致）
+                if rt.kb_ai_annotation_samples and rt.kb_sample_rows > 0:
                     for t in schema["tables"]:
                         try:
                             samples[t["name"]] = await sample_values(state, c.id, t["name"], rt.kb_sample_rows)

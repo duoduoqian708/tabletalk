@@ -101,6 +101,7 @@ class GraphLayoutRequest(BaseModel):
 class BuildRequest(BaseModel):
     include_samples: bool = False   # spec §3.8：默认不勾，零实例数据出网需显式授权
     trigger: str = "init"   # init | rebuild
+    self_check: bool | None = None   # 审校式自检覆盖（None=沿用运行时 kb_build_self_check，默认开）
 
 
 def _have(conn_id: str) -> None:
@@ -129,12 +130,15 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
         tier="read",
         verdict="allow",
         status="confirmed",
-        sql=f"-- kb build trigger={body.trigger} include_samples={body.include_samples}",
+        sql=f"-- kb build trigger={body.trigger} include_samples={body.include_samples}"
+            f" self_check={body.self_check}",
         source="manual",
         trigger=body.trigger,
         include_samples=body.include_samples,
+        self_check=body.self_check,
     )
     include_samples = body.include_samples
+    self_check = body.self_check
     state.connections.set_kb_status(conn_id, "building")
 
     async def _run(report):
@@ -142,8 +146,9 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
         schema = await _kb_schema(state, conn_id)
         report("发现结构", 10)
         rt = state.runtime.get()
+        # 严格零采样：仅用户显式勾选 include_samples 才抽取值（不授权 → 不抽不落盘不发）
         samples: dict[str, dict[str, list]] = {}
-        if rt.kb_sample_rows > 0:
+        if include_samples and rt.kb_sample_rows > 0:
             n = max(1, len(schema["tables"]))
             for i, t in enumerate(schema["tables"]):
                 report("抽样取值", 10 + 5 * i // n)
@@ -154,6 +159,7 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
         return await state.knowledge.build(
             conn_id, schema, samples, on_progress=report,
             include_samples=include_samples,
+            self_check=self_check,
         )
 
     state.build_jobs.start(conn_id, _run)
@@ -250,8 +256,10 @@ async def sync_kb(conn_id: str) -> dict:
             "tables_changed": 0, "message": "结构无变化",
         }
     rt = state.runtime.get()
+    # 严格零采样同构：同步只在运行时授权 ai 采样开关打开时抽取（与 store.sync 的
+    # include_samples 解析一致）；未授权时增量注释走无采样模板，不碰实例数据。
     samples: dict[str, dict[str, list]] = {}
-    if rt.kb_sample_rows > 0:
+    if rt.kb_ai_annotation_samples and rt.kb_sample_rows > 0:
         for t in schema["tables"]:
             try:
                 samples[t["name"]] = await sample_values(state, conn_id, t["name"], rt.kb_sample_rows)
@@ -259,10 +267,31 @@ async def sync_kb(conn_id: str) -> dict:
                 logger.warning("[kb.api] conn=%s 抽样失败 table=%s：%s", conn_id, t["name"], e)
                 samples[t["name"]] = {}
     result = await state.knowledge.sync(conn_id, schema, samples)
+    # 增量同步留痕（与 build/confirm/discard 同源 origin=kb_build）：历史抽屉可查每次变更
+    if result.get("changed"):
+        state.audit.log(
+            connection=conn_id,
+            origin="kb_build",
+            tier="read",
+            verdict="allow",
+            status="synced",
+            sql=(
+                "-- kb sync "
+                f"+{result.get('tables_added', 0)}表 "
+                f"-{result.get('tables_removed', 0)}表 "
+                f"变更{result.get('tables_changed', 0)}表"
+            ),
+            source="manual",
+            added_tables=result.get("tables_added", 0),
+            removed_tables=result.get("tables_removed", 0),
+            changed_tables=result.get("tables_changed", 0),
+            cleared_tags=result.get("cleared_tags", []),
+        )
     logger.info(
-        "[kb.api] conn=%s 手动同步结果：changed=%s +%s表 -%s表 变更%s表",
+        "[kb.api] conn=%s 手动同步结果：changed=%s +%s表 -%s表 变更%s表 清理标签=%s",
         conn_id, result.get("changed"), result.get("tables_added", 0),
         result.get("tables_removed", 0), result.get("tables_changed", 0),
+        result.get("cleared_tags", []),
     )
     return result
 
@@ -274,6 +303,16 @@ async def confirm_all(conn_id: str) -> dict:
     state = get_state()
     n = await state.knowledge.confirm_all(conn_id)
     state.connections.set_kb_status(conn_id, "ready")
+    # 留痕（与 build/discard 同源 origin=kb_build）：历史记录可看到「确认启用」时间点
+    state.audit.log(
+        connection=conn_id,
+        origin="kb_build",
+        tier="read",
+        verdict="allow",
+        status="confirmed",
+        sql=f"-- kb confirm_all docs={n.get('docs', 0)} tags={n.get('tags', 0)}",
+        source="manual",
+    )
     return {**n, "kb_status": "ready"}
 
 

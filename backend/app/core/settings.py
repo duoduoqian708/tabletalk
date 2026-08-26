@@ -34,6 +34,7 @@ class ModelConfig:
     reasoning: bool | None = None
     builtin: bool = False
     last_test: dict[str, Any] = field(default_factory=dict)
+    capabilities: dict[str, Any] | None = None  # /ai/test 探测落库：{reasoning, reasoning_effort}
 
 
 @dataclass
@@ -70,6 +71,7 @@ class RuntimeSettings:
     policy: Policy = field(default_factory=Policy)
     kb_sample_rows: int = 15
     kb_ai_annotation_samples: bool = False
+    kb_build_self_check: bool = True   # 阶段2/3 审校式自检开关（默认开，可运行时关）
     kb_sync_minutes: int = 30
     privacy_mode: str = "standard"
     query_max_rows: int = 1000
@@ -148,6 +150,7 @@ class RuntimeSettings:
             "policy": asdict(self.policy),
             "kb_sample_rows": self.kb_sample_rows,
             "kb_ai_annotation_samples": self.kb_ai_annotation_samples,
+            "kb_build_self_check": self.kb_build_self_check,
             "kb_sync_minutes": self.kb_sync_minutes,
             "privacy_mode": self.privacy_mode,
             "query_max_rows": self.query_max_rows,
@@ -203,6 +206,7 @@ _PERSISTED_KEYS = {
     "policy",
     "kb_sample_rows",
     "kb_ai_annotation_samples",
+    "kb_build_self_check",
     "privacy_mode",
     "query_max_rows",
     "pool_size",
@@ -278,6 +282,7 @@ class SettingsStore:
             "policy": asdict(Policy()),
             "kb_sample_rows": env.kb_sample_rows,
             "kb_ai_annotation_samples": env.kb_ai_annotation_samples,
+            "kb_build_self_check": True,
             "privacy_mode": "standard",
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
@@ -404,8 +409,15 @@ class SettingsStore:
     def get(self) -> RuntimeSettings:
         data = dict(self._data)
         _migrate_from_legacy(data)
-        ai_models = [ModelConfig(**m) for m in data.get("ai_models", [])]
-        emb_models = [EmbeddingModelConfig(**m) for m in data.get("embedding_models", [])]
+        # 反序列化容错（X1）：按 dataclass 字段白名单过滤，手工编辑配置多写键不崩溃（与 Policy 同风格）
+        ai_models = [
+            ModelConfig(**{k: v for k, v in m.items() if k in ModelConfig.__dataclass_fields__})
+            for m in data.get("ai_models", [])
+        ]
+        emb_models = [
+            EmbeddingModelConfig(**{k: v for k, v in m.items() if k in EmbeddingModelConfig.__dataclass_fields__})
+            for m in data.get("embedding_models", [])
+        ]
         pm = data.get("privacy_mode", "standard")
         if pm not in ("strict", "standard", "open"):
             pm = "standard"
@@ -427,6 +439,7 @@ class SettingsStore:
             policy=policy,
             kb_sample_rows=data.get("kb_sample_rows", 15),
             kb_ai_annotation_samples=data.get("kb_ai_annotation_samples", False),
+            kb_build_self_check=data.get("kb_build_self_check", True),
             privacy_mode=pm,
             query_max_rows=data.get("query_max_rows", 1000),
             pool_size=data.get("pool_size", 3),
@@ -476,7 +489,7 @@ class SettingsStore:
                     if legacy_k in patch:
                         target[model_k] = patch[legacy_k]
             for k in ("gate_review_threshold", "gate_rules",
-                      "kb_sample_rows", "kb_ai_annotation_samples",
+                      "kb_sample_rows", "kb_ai_annotation_samples", "kb_build_self_check",
                       "privacy_mode",
                       "query_max_rows", "pool_size"):
                 if k in patch:

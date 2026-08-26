@@ -51,7 +51,7 @@ async def test_preflight_uncertain_as_query(app_state, conn_id, monkeypatch):
     from app.ai import gateway as gw
 
     class FakeProvider:
-        async def chat(self, messages, tools=None):
+        async def chat(self, messages, tools=None, ctx=None):
             return type("R", (), {"content": '{"intent": "illegal_intent", "tags": []}'})()
 
     monkeypatch.setattr(gw, "build_provider", lambda cfg: FakeProvider())
@@ -77,7 +77,7 @@ async def test_preflight_timeout_fallback(app_state, conn_id, monkeypatch):
     from app.ai import gateway as gw
 
     class SlowProvider:
-        async def chat(self, messages, tools=None):
+        async def chat(self, messages, tools=None, ctx=None):
             await asyncio.sleep(3)  # >2s 超时
             return type("R", (), {"content": '{"intent": "report", "tags": []}'})()
 
@@ -92,16 +92,16 @@ async def test_preflight_timeout_fallback(app_state, conn_id, monkeypatch):
 
 
 async def test_preflight_egress_exactly_one(app_state, conn_id, monkeypatch):
-    # 用非关键词问题强制走 LLM，验证 egress 恰一条
+    # 用非关键词问题强制走 LLM；经真实 gateway（mock）驱动，验证中央拦截器恰好写 1 条 egress-intent
     q = "请帮我处理那个未命中关键词的请求ABC"
     from app.ai import gateway as gw
+    from app.ai.gateway import ChatResponse
 
-    class GoodProvider:
-        async def chat(self, messages, tools=None):
-            return type("R", (), {"content": '{"intent": "query", "tags": []}'})()
-
-    monkeypatch.setattr(gw, "build_provider", lambda cfg: GoodProvider())
-    monkeypatch.setattr(gw, "is_effective_mock", lambda cfg: False)
+    monkeypatch.setattr(gw, "is_effective_mock", lambda cfg: False)  # 强制走 LLM 分支
+    # 补丁 MockProvider.chat 返回确定性 JSON，但 gateway 仍是真实拦截器（egress 照记）
+    async def _mock_chat(cls, messages, tools=None):
+        return ChatResponse(content='{"intent": "query", "tags": []}')
+    monkeypatch.setattr(gw.MockProvider, "chat", classmethod(_mock_chat))
     before = len([e for e in app_state.audit.list() if e.get("status") == "egress-intent"])
     res = await preflight(app_state, conn_id, q, history_tail=None)
     after = len([e for e in app_state.audit.list() if e.get("status") == "egress-intent"])

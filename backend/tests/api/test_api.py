@@ -56,6 +56,30 @@ async def test_connection_crud_and_schema(client):
     assert d.status_code == 200
 
 
+async def test_connection_sensitive_structured_roundtrip(client):
+    """段8：敏感名单支持精确名结构 {table, columns[]}，与旧 glob 字符串混排。"""
+    r = await client.post("/api/v1/connections", json={
+        "name": "sens", "dialect": "sqlite", "file": "/tmp/sens.db",
+        "sensitive": [
+            {"table": "secret_log"},
+            {"table": "customers", "columns": ["phone", "email"]},
+            "legacy_*",
+        ],
+    })
+    assert r.status_code == 201
+    cfg = r.json()
+    assert {"table": "secret_log"} in cfg["sensitive"]
+    assert {"table": "customers", "columns": ["phone", "email"]} in cfg["sensitive"]
+    assert "legacy_*" in cfg["sensitive"]
+    # 更新：整表排除（columns 空）+ glob 混排
+    u = await client.put(
+        f"/api/v1/connections/{cfg['id']}",
+        json={"sensitive": [{"table": "orders", "columns": []}, "payroll_*"]},
+    )
+    assert u.status_code == 200
+    assert u.json()["sensitive"] == [{"table": "orders", "columns": []}, "payroll_*"]
+
+
 async def test_query_gate_flow(client, conn_id):
     # 只读 → 放行
     r = await client.post("/api/v1/query", json={"connection_id": conn_id, "sql": "SELECT * FROM orders LIMIT 3"})

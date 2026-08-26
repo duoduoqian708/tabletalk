@@ -400,7 +400,7 @@ const s: Record<string, React.CSSProperties> = {
   periodBar: { display: 'flex', gap: 2, background: 'var(--void-3)', borderRadius: 'var(--r-full)', padding: 3 },
   periodBtn: { padding: '5px 16px', borderRadius: 'var(--r-full)', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 500, transition: 'all var(--dur) var(--ease)' },
 
-  body: { flex: 1, display: 'grid', gridTemplateColumns: '3fr 2fr', gap: 12, padding: '16px 28px 28px', overflow: 'hidden', minHeight: 0 },
+  body: { flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, padding: '16px 28px 28px', overflow: 'hidden', minHeight: 0 },
 
   left: { display: 'flex', flexDirection: 'column', gap: 10, overflow: 'hidden', minHeight: 0 },
   right: { display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 },

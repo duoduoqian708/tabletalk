@@ -8,6 +8,7 @@ import { useI18n } from '@renderer/store/i18n'
  * 构建入口统一受控确认弹窗（挂在 AppLayout，与 KbBuildGate 平级）：
  * - 开关由 kbgate store 驱动（buildTrigger 决定文案），ready 连接上「全部重构」也能弹
  * - includeSamples 默认不勾（spec §3.8：零实例数据出网需显式授权）
+ * - selfCheck 默认勾（审校式自检，构建期可关）
  */
 export function KbBuildConfirmDialog(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
@@ -17,6 +18,7 @@ export function KbBuildConfirmDialog(): React.JSX.Element | null {
   const buildTask = useKnowledge((s) => s.buildTask)
   const { t } = useI18n()
   const [includeSamples, setIncludeSamples] = useState(false)
+  const [selfCheck, setSelfCheck] = useState(true)
 
   if (buildTrigger === null || currentId === null) return null
 
@@ -24,7 +26,7 @@ export function KbBuildConfirmDialog(): React.JSX.Element | null {
 
   function startBuild(): void {
     if (!currentId) return
-    void buildTask(currentId, undefined, { trigger: trig ?? 'init', includeSamples })
+    void buildTask(currentId, undefined, { trigger: trig ?? 'init', includeSamples, selfCheck })
     closeBuildDialog()
   }
 
@@ -41,6 +43,15 @@ export function KbBuildConfirmDialog(): React.JSX.Element | null {
           <span>{t('kb.dataConsent')}</span>
         </label>
         <p className="kb-dialog-sub">{t('kb.dataConsentDesc')}</p>
+        <label className="kb-dialog-option">
+          <input
+            type="checkbox"
+            checked={selfCheck}
+            onChange={(e) => setSelfCheck(e.target.checked)}
+          />
+          <span>{t('kb.selfCheck')}</span>
+        </label>
+        <p className="kb-dialog-sub">{t('kb.selfCheckDesc')}</p>
         <div className="kb-dialog-actions">
           <button className="btn ghost" onClick={() => closeBuildDialog()}>{t('kb.dialogCancel')}</button>
           <button className="btn save" disabled={buildBusy} onClick={startBuild}>

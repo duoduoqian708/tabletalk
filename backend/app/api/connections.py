@@ -1,6 +1,8 @@
 """连接 CRUD + 测试。统一配置模型：dialect 字段映射到方言注册表。"""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -22,7 +24,7 @@ class ConnectionCreate(BaseModel):
     read_only: bool = False
     timeout: int = 10
     credential_ref: str | None = None
-    sensitive: list[str] = Field(default_factory=list)  # 敏感表/列 glob 名单（不进模型上下文与知识库）
+    sensitive: list[str | dict[str, Any]] = Field(default_factory=list)  # 敏感表/列名单（不进模型上下文与知识库）：字符串=旧 glob；dict{table,columns[]} 精确名
 
 
 class TestDraftBody(ConnectionCreate):
@@ -43,7 +45,7 @@ class ConnectionUpdate(BaseModel):
     read_only: bool | None = None
     timeout: int | None = None
     credential_ref: str | None = None
-    sensitive: list[str] | None = None
+    sensitive: list[str | dict[str, Any]] | None = None
 
 
 def _get_cfg(state, conn_id):

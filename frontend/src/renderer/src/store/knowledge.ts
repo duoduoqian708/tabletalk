@@ -2,12 +2,22 @@ import { create } from 'zustand'
 import * as api from '@renderer/api/knowledge'
 import type { KnowledgeOverview } from '@renderer/api/types'
 
+interface BuildStepMeta {
+  key: string
+  label: string
+}
 interface BuildPhase {
   key: string
   label: string
   percent: number
   detail: string | null
   stage?: string | null
+  /** 段7：当前子步（per_table/partition/selfcheck/global/verify）+ 进度（兼容旧帧） */
+  step?: string | null
+  step_label?: string | null
+  step_index?: number | null
+  step_total?: number | null
+  steps?: BuildStepMeta[] | null
 }
 interface BuildProgressState {
   stage: string
@@ -16,6 +26,8 @@ interface BuildProgressState {
   error: string | null
   detail: string | null
   phases?: BuildPhase[]
+  /** 失败/取消定位：出错的阶段与子步（兼容旧帧） */
+  error_at?: { phase?: string | null; step?: string | null } | null
 }
 
 interface KnowledgeState {
@@ -27,7 +39,7 @@ interface KnowledgeState {
   buildProgress: BuildProgressState | null
   load: (connId: string) => Promise<void>
   /** 任务化构建：启动 + SSE 实时进度直到 done，然后刷新 overview */
-  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, opts?: { trigger?: 'init' | 'rebuild'; includeSamples?: boolean }) => Promise<void>
+  buildTask: (connId: string, onProgress?: (percent: number, stage: string) => void, opts?: { trigger?: 'init' | 'rebuild'; includeSamples?: boolean; selfCheck?: boolean }) => Promise<void>
   /** 构建中刷新页面后重挂 SSE：只吃剩余进度（后端对无任务推 idle+done 帧后关闭） */
   reattachBuild: (connId: string) => Promise<void>
   confirmComment: (connId: string, table: string, column?: string) => Promise<void>
@@ -101,7 +113,7 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
   async buildTask(connId, onProgress, opts) {
     set({ busy: true, error: null, buildProgress: { stage: '排队中', percent: 0, done: false, error: null, detail: null } })
     try {
-      await api.build(connId, opts?.includeSamples ?? false, opts?.trigger ?? 'init')
+      await api.build(connId, opts?.includeSamples ?? false, opts?.trigger ?? 'init', opts?.selfCheck ?? true)
       // SSE 实时进度：推送即写 store（KbBuildGate 订阅显示），done 后退出
       await readBuildEvents(connId, (p) => {
         set({ buildProgress: p })

@@ -20,7 +20,7 @@ class _ScriptedGateway:
         self.calls = 0
         self.seen_messages: list[list[dict]] = []
 
-    async def chat_stream(self, messages, tools=None):
+    async def chat_stream(self, messages, tools=None, ctx=None):
         self.calls += 1
         self.seen_messages.append([dict(m) for m in messages])
         idx = min(self.calls, len(self.turns) - 1)

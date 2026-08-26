@@ -276,28 +276,8 @@ async def preflight(
     except Exception:
         manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "include_data": False, "redactions": redactions, "mode": "standard", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": provider_cfg.get("model",""), "provider": provider_cfg.get("provider","mock")}
 
-    # 审计：全 preflight 只一条（验收点）
-    try:
-        cname = conn_id
-        if conn_id:
-            try:
-                cname = state.connections.get(conn_id).name
-            except Exception:
-                cname = conn_id
-        else:
-            cname = "__intent__"
-        state.audit.log(
-            connection=cname,
-            origin="ai",
-            tier="read",
-            verdict="egress",
-            status="egress-intent",
-            sql=f"[manifest] {q[:60]}",
-            source="egress",
-            manifest=manifest,
-        )
-    except Exception:
-        pass
+    # 出网清单审计已由中央记账拦截器（gateway）统一写：LLM 调用一次，egress-intent 一 条
+    # （关键词快判路径不调 LLM，故不再产生 egress 行 —— 无出网即无清单）
 
     # 关键词快判：多数请求 0 次 LLM 直出（高置信直接返回）
     kw = _keyword_intent(redacted_q if redacted_q else q)
@@ -347,24 +327,17 @@ async def preflight(
                 history_text += f"对话尾部-上轮助手结尾：{last_assistant}\n"
         prompt = _build_prompt(redacted_q, history_text, confirmed)
         timeout = _get_timeout()
-        resp = await asyncio.wait_for(provider.chat([{"role": "user", "content": prompt}], tools=None), timeout=timeout)
-        # 写 LLM 日志（intent 识别的模型调用）
-        try:
-            _pm = getattr(provider, "last_meta", None)
-            if _pm:
-                from app.ai.llm_log import LlmCallLog
-                from app.config import get_env as _ge_pfl
-                _usage_pfl = _pm.get("response_usage") or {}
-                LlmCallLog(_ge_pfl().data_dir).log(
-                    conn_id=conn_id, skill="preflight",
-                    model=_pm.get("response_model"), provider=provider_cfg.get("provider"),
-                    request_json=_pm.get("request_payload"),
-                    response_json=_pm.get("response_usage"),
-                    input_tokens=_usage_pfl.get("prompt_tokens", 0),
-                    output_tokens=_usage_pfl.get("completion_tokens", 0),
-                )
-        except Exception:
-            pass
+        resp = await asyncio.wait_for(provider.chat(
+            [{"role": "user", "content": prompt}], tools=None,
+            # 中央记账：拦截器统一写一条 egress-intent（保持原验收契约：非关键词路径恰 1 条）
+            ctx={
+                "conn_id": conn_id, "connection": conn_id if conn_id else "__intent__",
+                "skill": "preflight", "source": "egress", "status": "egress-intent",
+                "context_meta": {"candidate_tables": [], "kb_docs": 0},
+                "redactions": redactions if redactions else [],
+                "manifest": manifest,
+            },
+        ), timeout=timeout)
         text = (getattr(resp, "content", "") or "").strip()
         intent, tags = _parse_llm(text, confirmed)
         # 非法值兜底：拿不准当 query（D4）

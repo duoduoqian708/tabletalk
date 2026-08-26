@@ -70,7 +70,7 @@ async def test_server_history_assembles_second_turn(app_state, conn_id, monkeypa
     recorder = {"messages": None}
 
     class _RecProv:
-        async def chat_stream(self, messages, tools):
+        async def chat_stream(self, messages, tools, ctx=None):
             recorder["messages"] = messages  # 记录第二轮喂给模型的完整消息
             yield StreamChunk(content="好")
 
@@ -106,7 +106,7 @@ async def test_frontend_history_compat_when_no_server_history(app_state, conn_id
     recorder = {"messages": None}
 
     class _RecProv:
-        async def chat_stream(self, messages, tools):
+        async def chat_stream(self, messages, tools, ctx=None):
             recorder["messages"] = messages
             yield StreamChunk(content="好")
 
@@ -212,7 +212,7 @@ async def test_sql_card_gets_result_id_in_loop(app_state, conn_id, monkeypatch):
     emitted = {"n": 0}
 
     class _FakeProv:
-        async def chat_stream(self, messages, tools):
+        async def chat_stream(self, messages, tools, ctx=None):
             if emitted["n"] < 1:
                 emitted["n"] += 1
                 yield StreamChunk(tool_calls=[ToolCall(

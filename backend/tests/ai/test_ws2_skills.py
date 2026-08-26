@@ -112,7 +112,7 @@ async def test_query_skill_refuses_out_of_scope_tool(app_state, conn_id, monkeyp
     emitted = {"n": 0}
 
     class _FakeProv:
-        async def chat_stream(self, messages, tools):
+        async def chat_stream(self, messages, tools, ctx=None):
             if emitted["n"] < 1:
                 emitted["n"] += 1
                 yield StreamChunk(tool_calls=[ToolCall(

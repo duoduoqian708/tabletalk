@@ -83,24 +83,14 @@ async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, incl
         _req = _Req()
         provider_cfg = resolve_provider_cfg(state, _req)
         provider = gw.build_provider(provider_cfg)
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
-        # 写 LLM 日志
-        try:
-            _meta_ar = getattr(provider, "last_meta", None)
-            if _meta_ar:
-                from app.ai.llm_log import LlmCallLog
-                from app.config import get_env as _ge_ar
-                _usage_ar = _meta_ar.get("response_usage") or {}
-                LlmCallLog(_ge_ar().data_dir).log(
-                    conn_id=conn_id, skill="ai_review",
-                    model=_meta_ar.get("response_model"), provider=provider_cfg.get("provider"),
-                    request_json=_meta_ar.get("request_payload"),
-                    response_json=_meta_ar.get("response_usage"),
-                    input_tokens=_usage_ar.get("prompt_tokens", 0),
-                    output_tokens=_usage_ar.get("completion_tokens", 0),
-                )
-        except Exception:
-            pass
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None,
+                                    # 中央记账：一次调用一条 egress-review（成本 + 出网清单）
+                                    ctx={
+                                        "conn_id": conn_id, "connection": conn_id,
+                                        "skill": "ai_review", "source": "egress",
+                                        "status": "egress-review", "include_data": False,
+                                        "manifest": manifest,
+                                    })
         text = (getattr(resp, "content", "") or "").strip()
 
         # 更新 manifest 中的模型信息
@@ -122,25 +112,7 @@ async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, incl
         reasons = ["审查服务暂时不可用，默认safe"]
         suggestions = []
 
-    # 铁律3：审计写入（egress-review，含清单）
-    try:
-        cname = conn_id or "__ai_review__"
-        try:
-            cname = state.connections.get(conn_id).name
-        except Exception:
-            pass
-        state.audit.log(
-            connection=cname,
-            origin="ai",
-            tier="read",
-            verdict="egress",
-            status="egress-review",
-            sql=f"[ai_review] {sql[:60]}",
-            source="egress",
-            manifest=manifest,
-        )
-    except Exception:
-        pass
+    # 出网清单审计已由中央记账拦截器（gateway）统一写（source=egress，status=egress-review）
 
     return ToolOutcome(
         result={

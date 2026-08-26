@@ -61,6 +61,14 @@ export function KbReviewModal(): React.JSX.Element | null {
 
   const tagColor = (name: string): string => getTagColor(name, colorMap)
 
+  /** 反向索引：标签名 → 关联表名列表（后端 tags.tables 是 {表名: [标签名]} 方向） */
+  const tablesByTag = useMemo(() => {
+    const m: Record<string, string[]> = {}
+    for (const [tbl, names] of Object.entries(overview?.tags.tables ?? {}))
+      for (const n of names as string[]) (m[n] ??= []).push(tbl)
+    return m
+  }, [overview?.tags.tables])
+
   const { t } = useI18n()
   const reviewOpen = useKbGate((s) => s.reviewOpen)
   const closeReview = useKbGate((s) => s.closeReview)
@@ -69,20 +77,19 @@ export function KbReviewModal(): React.JSX.Element | null {
   const tagRows = (overview?.tags.library ?? []).map(tg => ({
     ...tg,
     color: tagColor(tg.name),
-    count: (overview?.tags.tables[tg.name] ?? []).length,
+    count: (tablesByTag[tg.name] ?? []).length,
   }))
 
   const untaggedCount = (() => {
-    const tagged = new Set<string>()
-    for (const names of Object.values(overview?.tags.tables ?? {})) for (const n of names) tagged.add(n)
-    return (overview?.tables ?? []).filter(tb => !tagged.has(tb.name)).length
+    const bound = new Set(Object.keys(overview?.tags.tables ?? {}))
+    return (overview?.tables ?? []).filter(tb => !bound.has(tb.name)).length
   })()
 
   const filteredTables = useMemo(() => {
     if (!overview) return []
     let ts: KbTableView[] = overview.tables
     if (selTag) {
-      const members = new Set(overview.tags.tables[selTag] ?? [])
+      const members = new Set(tablesByTag[selTag] ?? [])
       ts = ts.filter(tb => members.has(tb.name))
     }
     if (search.trim()) {
@@ -361,7 +368,6 @@ export function KbReviewModal(): React.JSX.Element | null {
                 edges={trgEdges(overview)}
                 columnsByTable={trgColumns(overview)}
                 layout={overview.graph.layout}
-                getTagColor={tagColor}
                 onAddEdge={(e) => trg2dActions.onAddEdge(e)}
                 onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
                 onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}

@@ -97,20 +97,24 @@ async def test_compress_hist_mechanical_path_makes_zero_model_calls(app_state, c
 
 
 async def test_llm_fallback_writes_egress_audit_before_model(app_state, conn_id, monkeypatch):
-    """机械压不完（海量叙事）→ LLM 摘要：先记 egress 审计（source=egress-compress）再调模型。"""
+    """机械压不完（海量叙事）→ LLM 摘要：经真实 gateway（mock）驱动，中央拦截器在模型调用前记
+    egress（source=egress-compress），再调模型。"""
     import app.ai.compress as comp
+    import app.ai.gateway as gw_mod
+    from app.ai.gateway import ChatResponse, LLMGateway
 
     app_state.runtime.update({"privacy_mode": "standard"})
     order = []
 
-    class _Prov:
-        async def chat(self, messages, tools=None):
-            order.append("chat")
-            return type("R", (), {"content": "历史要点：订单、客户、库存三块"})
+    # 补丁 MockProvider.chat 返回确定性摘要，但 gateway 仍走真实拦截器（egress 先于返回写）
+    async def _mock_chat(cls, messages, tools=None):
+        order.append("chat")
+        return ChatResponse(content="历史要点：订单、客户、库存三块", usage={"prompt_tokens": 1, "completion_tokens": 1})
+    monkeypatch.setattr(gw_mod.MockProvider, "chat", classmethod(_mock_chat))
 
     def fake_build(*a, **k):
         order.append("build")
-        return _Prov()
+        return LLMGateway({"provider": "mock", "model": "mock"})
 
     monkeypatch.setattr(gw_mod, "build_provider", fake_build)
     monkeypatch.setattr(gw_mod, "is_effective_mock", lambda cfg: False)
@@ -119,7 +123,7 @@ async def test_llm_fallback_writes_egress_audit_before_model(app_state, conn_id,
     out = await comp.compress_hist(app_state, conn_id, _big_history(400))
     assert order == ["build", "chat"], f"应恰好一次构建+调用模型，got {order}"
     assert out["stats"].get("llm_summarized", 0) > 0
-    # egress 审计已在模型调用前/同时落库（source=egress-compress）
+    # egress 审计先于模型调用落库（source=egress-compress）—— 由中央拦截器写
     entries = [e for e in app_state.audit.list() if e.get("status") == "egress-compress"]
     assert entries, "LLM 摘要必须记 egress 审计"
     assert entries[0]["verdict"] == "egress"
@@ -153,7 +157,7 @@ async def test_stream_wires_compression_of_large_server_history(app_state, conn_
 
     recorder = {"messages": None}
     class _RecProv:
-        async def chat_stream(self, messages, tools):
+        async def chat_stream(self, messages, tools, ctx=None):
             recorder["messages"] = messages
             if False:
                 yield

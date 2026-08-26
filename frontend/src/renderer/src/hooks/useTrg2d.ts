@@ -11,12 +11,13 @@ import { toastMsg } from '@renderer/utils/toast'
    同一数据源（overview）+ 同一组 action，宿主只管摆组件
    ═══════════════════════════════════════════════ */
 
-/** overview.tables → 组件节点（首标签聚类 + 排除灰显） */
+/** overview.tables → 组件节点（首标签聚类 + 排除灰显 + 规模驱动半径） */
 export function trgTables(ov: KnowledgeOverview): Trg2dTable[] {
   return ov.tables.map((tb) => ({
     name: tb.name,
     tags: tb.tags.map((tg) => tg.name),
     excluded: tb.excluded,
+    size: tb.column_count,
   }))
 }
 

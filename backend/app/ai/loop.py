@@ -330,25 +330,11 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     manifest = build_manifest(state, conn_id, context_meta, messages, bool(req.include_data), provider_cfg_for_manifest, context)
     if _text_redactions:
         manifest["redactions"] = _text_redactions[:5]
-    # 审计：egress 事件（单管道约束：context→manifest→gateway）— 经 logger 加锁
+    # 出网清单审计改由中央记账拦截器（gateway）统一写；此处仅保留连接名供 ctx.connection
     try:
-        try:
-            conn_name = state.connections.get(conn_id).name
-        except Exception:
-            conn_name = conn_id
-        state.audit.log(
-            connection=conn_name,
-            origin="ai",
-            tier="read",
-            verdict="egress",
-            status="egress",
-            sql=f"[manifest] {user_text[:60]}",
-            source="egress",
-            tables=manifest.get("tables"),
-            manifest=manifest,
-        )
+        conn_name = state.connections.get(conn_id).name
     except Exception:
-        pass
+        conn_name = conn_id
 
     yield {"type": "turn_start", "connection": conn_id}
     _pf_intent = getattr(getattr(req, "_preflight", None), "intent", None)
@@ -374,8 +360,15 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     _scoped_names = {t["function"]["name"] for t in skill_tool_schemas(req.skill_id)}
     for _ in range(MAX_TURNS):
         tool_calls: list = []
-        _t0_turn = time.monotonic()
-        async for chunk in provider.chat_stream(messages, skill_tool_schemas(req.skill_id)):
+        # 中央记账：拦截器在流式 finally 落一条（llm_log + cost + egress），ctx 带全上下文
+        async for chunk in provider.chat_stream(messages, skill_tool_schemas(req.skill_id), ctx={
+            "conn_id": conn_id, "connection": conn_name, "skill": getattr(req, "skill_id", None),
+            "session_id": getattr(req, "session_id", None), "source": "egress", "status": "egress",
+            "include_data": bool(req.include_data),
+            "redactions": _text_redactions[:5] if _text_redactions else [],
+            "context_meta": context_meta,
+            "manifest": manifest,
+        }):
             # B3 还原：叙述文本中的代号还原为真名（展示层）
             def _dec_text(t: str) -> str:
                 try:
@@ -390,36 +383,6 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                 yield {"type": "text", "content": _dec_text(chunk.content)}
             elif chunk.tool_calls:
                 tool_calls = chunk.tool_calls
-        # 铁律：流完成后写 LLM 日志（request JSON + response JSON + usage）
-        _turn_elapsed = int((time.monotonic() - _t0_turn) * 1000)
-        try:
-            _meta = getattr(provider, "last_meta", None)
-            if _meta:
-                from app.ai.llm_log import LlmCallLog
-                from app.config import get_env as _genv_ll
-                _prov_cfg = resolve_provider_cfg(state, req)
-                _usage = _meta.get("response_usage") or {}
-                LlmCallLog(_genv_ll().data_dir).log(
-                    conn_id=conn_id, skill=getattr(req, "skill_id", None),
-                    session_id=getattr(req, "session_id", None),
-                    model=_meta.get("response_model"), provider=_prov_cfg.get("provider"),
-                    request_json=_meta.get("request_payload"),
-                    response_json=_meta.get("response_usage"),
-                    input_tokens=_usage.get("prompt_tokens", 0),
-                    output_tokens=_usage.get("completion_tokens", 0),
-                    elapsed_ms=_turn_elapsed,
-                )
-                # 同步写 cost_log（成本仪表盘聚合用）
-                from app.ai.cost_tracker import CostTracker
-                CostTracker(_genv_ll().data_dir).log(
-                    connection=conn_id, skill=getattr(req, "skill_id", None),
-                    model=_meta.get("response_model"), provider=_prov_cfg.get("provider"),
-                    input_tokens=_usage.get("prompt_tokens", 0),
-                    output_tokens=_usage.get("completion_tokens", 0),
-                    elapsed_ms=_turn_elapsed,
-                )
-        except Exception:
-            pass
         if not tool_calls:
             break
         for tc in tool_calls:

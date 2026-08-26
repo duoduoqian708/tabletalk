@@ -22,7 +22,16 @@ import { getSettings, type SettingsPublic } from '@renderer/api/settings'
 import { listSkills } from '@renderer/api/skills'
 import { useI18n } from '@renderer/store/i18n'
 import { getRuntime } from '@renderer/api/client'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 const CmEditor = React.lazy(() => import('./CmEditor').then((m) => ({ default: m.CmEditor })))
+
+/* ---------- AI 文本的 MD 渲染（压平空行；react-markdown 默认不渲染原始 HTML，天然安全） ---------- */
+function AiMd({ text }: { text: string }): React.JSX.Element {
+  // 模型爱输出 \n\n\n… 段落间隔；压成最多一个空行，避免「空行刷屏」
+  const src = text.replace(/\n{3,}/g, '\n\n')
+  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{src}</ReactMarkdown>
+}
 
 /* ---------- 推理步骤状态机 ---------- */
 type StepStatus = string
@@ -1581,7 +1590,9 @@ export function AiRail(): React.JSX.Element {
                   )}
                   {turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : turn.steps && !(turn.text && (turn.text.includes('不处理此类问题') || turn.text.includes('不在处理范围') || turn.text.includes('引导'))) && <ThinkPanel steps={turn.steps} />}
                   {turn.manifest && <ManifestView manifest={turn.manifest} />}
-                  {turn.text && !turn.isReport && <div className="ai-txt">{turn.text}</div>}
+                  {turn.text && !turn.isReport && (
+                    <div className="ai-txt"><AiMd text={turn.text} /></div>
+                  )}
                   {turn.text && turn.isReport && turn.clarify && null}
                   {turn.cards && turn.cards.map((c, ci) => (
                     <SqlCard

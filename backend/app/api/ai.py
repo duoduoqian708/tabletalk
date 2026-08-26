@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -79,8 +80,10 @@ async def ai_test(
         except Exception:
             caps["function_calling"] = False
 
-        # 3. 推理能力探测（关键词硬覆盖 + 流式实测）
+        # 3. 推理能力探测（关键词硬覆盖 + 流式实测）+ 深度档位 + 落库到模型配置
         caps["reasoning"] = await _detect_reasoning(cfg)
+        caps["reasoning_effort"] = await _detect_reasoning_effort(cfg) if caps.get("reasoning") else None
+        _persist_capabilities(state, model_id, caps)
 
         # 4. 流式输出探测（SSE）
         caps["streaming"] = await _detect_streaming(cfg)
@@ -206,6 +209,55 @@ def _resolve_emb_cfg(state, model_id, provider, base_url, api_key, model) -> dic
     return cfg
 
 
+async def _detect_reasoning_effort(cfg: dict) -> str | None:
+    """探测该模型能接受的最大 reasoning_effort 档位（high→medium→low 逐个试）。
+    全部被拒 → 返回 None（推理经 thinking 仅启用，无档位）。"""
+    headers: dict[str, str] = {}
+    if cfg.get("api_key"):
+        headers["Authorization"] = f"Bearer {cfg['api_key']}"
+    url = (cfg.get("base_url") or "").rstrip("/") + "/chat/completions"
+    for effort in ("high", "medium", "low"):
+        payload = {
+            "model": cfg.get("model", ""),
+            "messages": [{"role": "user", "content": "1+1=?"}],
+            "max_tokens": 16,
+            "reasoning_effort": effort,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=12.0) as client:
+                r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 400:
+                continue
+            return effort
+        except Exception:  # noqa: BLE001 - 单个档位失败则试下一档
+            continue
+    return None
+
+
+def _persist_capabilities(state, model_id: str | None, caps: dict[str, Any]) -> None:
+    """把探测结果 {reasoning, reasoning_effort} 写回对应模型配置（settings 库），
+    供 KB 阶段2/3 与后续功能读取「支持即开最大深度」。"""
+    try:
+        rs = state.runtime.get()
+        target_id = model_id or rs.default_ai_model
+        if not target_id:
+            return
+        models = []
+        for m in rs.ai_models:
+            d = asdict(m)
+            if m.id == target_id:
+                d["capabilities"] = {
+                    "reasoning": bool(caps.get("reasoning")),
+                    "reasoning_effort": caps.get("reasoning_effort"),
+                }
+            models.append(d)
+        if not any(m.id == target_id for m in rs.ai_models):
+            return
+        state.runtime.update({"ai_models": models})
+    except Exception:  # noqa: BLE001 - 写回失败不影响探测响应
+        pass
+
+
 async def _detect_reasoning(cfg: dict) -> bool | None:
     """推理能力检测：先按模型名关键词硬覆盖（OpenAI 系推理内容 API 不可见，无法靠字段探测），
     否则实测一次流式补全，看响应是否带 reasoning_content / reasoning 字段。"""
@@ -247,6 +299,7 @@ async def _detect_reasoning_streaming(cfg: dict) -> bool:
             else:
                 payload["thinking"] = {"type": "enabled"}
         async with httpx.AsyncClient(timeout=20.0) as client:
+            found = False
             async with client.stream("POST", url, json=payload, headers=headers) as r:
                 if r.status_code != 200:
                     return False
@@ -264,8 +317,13 @@ async def _detect_reasoning_streaming(cfg: dict) -> bool:
                         delta = choice.get("delta", {})
                         rc = delta.get("reasoning_content") or delta.get("reasoning")
                         if rc and str(rc).strip():
-                            return True
-        return False
+                            found = True
+                            break
+                    if found:
+                        break
+                # 显式收流：MockTransport 场景提前结束迭代会留下未 awaited 的 aiter_text 协程
+                await r.aclose()
+        return found
     except Exception:  # noqa: BLE001
         return False
 

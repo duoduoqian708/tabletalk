@@ -132,7 +132,7 @@ async def llm_compress_oldest(
             redacted, _mp = redact_text(joined, salt, sensitive)
         except Exception:
             redacted = joined
-        # manifest + egress 审计（source=egress-compress）—— LLM 摘要本身就是一次出网，不得漏记
+        # 出网清单（先于模型调用经中央拦截器落审计，source=egress-compress；清单随 ctx 原样审计）
         try:
             from app.ai.manifest import build_manifest
 
@@ -141,21 +141,16 @@ async def llm_compress_oldest(
         except Exception:
             manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "mode": "standard",
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": cfg.get("model", ""), "provider": "llm-compress"}
-        try:
-            cname = state.connections.get(conn_id).name
-        except Exception:
-            cname = conn_id
-        try:
-            state.audit.log(connection=cname, origin="ai", tier="read", verdict="egress",
-                            status="egress-compress", sql=f"[compress] {joined[:60]}",
-                            source="egress", manifest=manifest)
-        except Exception:
-            pass
         provider = gw.build_provider(cfg)
         resp = await provider.chat([
             {"role": "system", "content": "把下面的历史对话浓缩成一句话（中文，≤80 字），只保留事实性要点，不编造；直接给摘要正文。"},
             {"role": "user", "content": redacted},
-        ])
+        ], ctx={
+            "conn_id": conn_id, "connection": conn_id, "skill": "compress",
+            "source": "egress", "status": "egress-compress",
+            "include_data": False, "context_meta": {"candidate_tables": [], "kb_docs": 0},
+            "manifest": manifest,
+        })
         summary = (getattr(resp, "content", "") or "").strip()
         if not summary:
             return {"rows": rows, "summarized": 0, "over": True, "degraded": False}
