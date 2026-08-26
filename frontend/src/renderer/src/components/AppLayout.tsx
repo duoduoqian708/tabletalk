@@ -7,6 +7,7 @@ import { useSchema } from '@renderer/store/schema'
 import { useUi, type View } from '@renderer/store/ui'
 import { useI18n } from '@renderer/store/i18n'
 import { previewTable } from '@renderer/api/schema'
+import { useAuditSignal } from '@renderer/store/auditSignal'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
@@ -26,6 +27,7 @@ import { ApprovalPage } from './ApprovalPage'
 import { TasksConsole } from './TasksConsole'
 import { CostDashboard } from './CostDashboard'
 import { SettingsDrawer } from './SettingsDrawer'
+import { AuditBadge } from './AuditBadge'
 import { LoginDialog } from './LoginDialog'
 import { setLoginRuntime } from '@renderer/hooks/useBootstrap'
 interface Props {
@@ -237,6 +239,12 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     return () => window.removeEventListener('tabletalk:locate', h as EventListener)
   }, [setView, setMainView])
 
+  // 安全徽章轮询启停（随应用生命周期）
+  useEffect(() => {
+    useAuditSignal.getState().start()
+    return () => useAuditSignal.getState().stop()
+  }, [])
+
   // 当前展示的表名（顶栏上下文指示）
   const subject = active ? active.title.replace(new RegExp('^' + t('ws.titleAsk').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '').replace(/^schema · /, '') : selectedTable ?? '—'
 
@@ -433,6 +441,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
             <b>{health?.ai_provider_name ?? '—'}-{health?.ai_model ?? '—'}</b>
           </span>
         </span>
+          <AuditBadge />
       </footer>
 
       <ConnectionModal open={modalOpen} editId={editingConnId} onClose={() => { setModalOpen(false); setEditingConnId(null) }} />

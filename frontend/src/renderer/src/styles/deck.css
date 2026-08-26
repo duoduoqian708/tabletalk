@@ -3731,3 +3731,14 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 :root[data-theme='light'] .manifest-body,
 :root[data-theme='light'] .blast-body,
 :root[data-theme='light'] .rollback-body{background:rgba(24,30,42,.015)}
+
+/* ── 状态栏安全徽章 ── */
+.sig-group { display: inline-flex; gap: 8px; margin-left: 12px; }
+.sig-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 999px; padding: 1px 10px; font-size: 12px;
+  border: 1px solid var(--line-strong); color: var(--ink-dim); background: transparent;
+}
+.sig-pill.ok { color: var(--green); border-color: var(--green-dim); background: var(--green-dim); }
+.sig-pill.danger { color: var(--red); border-color: var(--red-dim); background: var(--red-dim); cursor: pointer; }
+.sig-pill.warn { color: var(--amber); border-color: var(--amber-dim); background: var(--amber-dim); cursor: pointer; }
