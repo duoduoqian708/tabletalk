@@ -1,6 +1,6 @@
-/** CostDashboard mock 数据 — 开发/演示用，切真实数据时改 USE_MOCK = false 即可。 */
+/** CostDashboard mock 数据 — 已被真实数据接管（USE_MOCK=false，走 /api/v1/cost）；mock 函数保留供回归参考。 */
 
-export const USE_MOCK = true
+export const USE_MOCK = false
 
 const now = Date.now()
 const day = 86400_000

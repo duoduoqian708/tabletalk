@@ -145,7 +145,7 @@ class LlmCallLog:
             con = self._conn()
             try:
                 rows = con.execute(
-                    f"""SELECT session_id,
+                    f"""SELECT COALESCE(session_id, '__none__') AS session_id,
                                COUNT(*) as calls,
                                SUM(input_tokens + output_tokens) as total_tokens,
                                SUM(input_tokens) as input_tokens,
@@ -164,9 +164,13 @@ class LlmCallLog:
                 con.close()
 
     def session_calls(self, session_id: str, from_ts: str | None = None, to_ts: str | None = None) -> list[dict]:
-        """某 session 的所有 LLM 调用明细"""
-        where_parts = ["session_id = ?"]
-        params: list = [session_id]
+        """某 session 的所有 LLM 调用明细；'__none__' 代指无会话的系统调用（KB 构建/嵌入）。"""
+        if session_id == "__none__":
+            where_parts = ["session_id IS NULL"]
+            params: list = []
+        else:
+            where_parts = ["session_id = ?"]
+            params = [session_id]
         if from_ts:
             where_parts.append("ts >= ?")
             params.append(from_ts)

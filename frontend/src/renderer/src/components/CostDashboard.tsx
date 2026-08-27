@@ -28,15 +28,20 @@ function periodRange(p: Period): { from_ts: string | null; to_ts: string | null 
 const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n)
 const fmtMs = (ms: number | null) => ms == null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
 const shortTime = (ts: string) => ts.slice(11, 16) || ts.slice(0, 10)
+/** '__none__'/空/null → 系统调用组（无会话的 KB 构建/嵌入等），否则原样显示 */
+const sysLabel = (v: string | null | undefined, max = 10) =>
+  v === '__none__' || v === null || v === '' ? '系统调用' : String(v).slice(0, max)
 const h = () => ({ 'X-TableTalk-Token': localStorage.getItem('tt_token') || '' })
 
 const SKILL_COLORS: Record<string, string> = {
   query: 'var(--accent)', write: 'var(--amber)', report: 'var(--blue)',
   preflight: 'var(--violet)', ai_review: 'var(--orange)', embedding: 'var(--green)',
+  'kb-annotation': 'var(--green)', 'kb-tags': 'var(--violet)', 'kb-graph': 'var(--orange)', 'kb-sync': 'var(--blue)',
 }
 const SKILL_BG: Record<string, string> = {
   query: 'var(--accent-dim)', write: 'var(--amber-dim)', report: 'var(--blue-dim)',
   preflight: 'var(--violet-dim)', ai_review: 'var(--orange-dim)', embedding: 'var(--green-dim)',
+  'kb-annotation': 'var(--green-dim)', 'kb-tags': 'var(--violet-dim)', 'kb-graph': 'var(--orange-dim)', 'kb-sync': 'var(--blue-dim)',
 }
 
 /* ── JSON pretty print ── */
@@ -160,15 +165,16 @@ export function CostDashboard(): React.JSX.Element {
   useEffect(() => { void load() }, [load])
 
   const loadCalls = useCallback(async (sid: string | null) => {
-    setSelectedSid(sid)
+    const target = sid === null ? '__none__' : sid // 无会话系统调用统一走 __none__ 钻取
+    setSelectedSid(target)
     setSelectedCallId(null)
     selectedCallIdRef.current = null
     setCallDetail(null)
-    if (!sid) { setCalls([]); return }
+    if (!target) { setCalls([]); return }
     if (USE_MOCK) {
       setLoadingCalls(true)
       await new Promise(r => setTimeout(r, 150))
-      setCalls(getMockCalls(sid))
+      setCalls(getMockCalls(target))
       setLoadingCalls(false)
       return
     }
@@ -177,7 +183,7 @@ export function CostDashboard(): React.JSX.Element {
       const params = new URLSearchParams()
       if (range.from_ts) params.set('from_ts', range.from_ts)
       if (range.to_ts) params.set('to_ts', range.to_ts)
-      const res = await fetch(`${API}/sessions/${encodeURIComponent(sid)}?${params}`, { headers: h() })
+      const res = await fetch(`${API}/sessions/${encodeURIComponent(target)}?${params}`, { headers: h() })
       const data = await res.json()
       setCalls(data.ok ? data.calls || [] : [])
     } catch { setCalls([]) }
@@ -294,7 +300,7 @@ export function CostDashboard(): React.JSX.Element {
                   >
                     <div style={s.sessionRowTop}>
                       <span style={{ ...s.sessionId, color: active ? 'var(--accent-bright)' : 'var(--ink)' }}>
-                        {(ses.session_id || '').slice(0, 10)}
+                        {sysLabel(ses.session_id)}
                       </span>
                       <span style={s.callBadge}>{ses.calls} 次调用</span>
                     </div>
@@ -329,7 +335,7 @@ export function CostDashboard(): React.JSX.Element {
             <div style={s.detailPanel}>
               <div style={s.detailHeader}>
                 <span style={s.sectionLabel}>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{(selectedSid || '').slice(0, 12)}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{sysLabel(selectedSid, 12)}</span>
                   {' · '}{calls.length} 次调用
                 </span>
               </div>
