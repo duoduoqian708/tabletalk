@@ -446,6 +446,25 @@ async def test_confirm_all_batches_single_reembed(tmp_path):
     assert rebuild_calls == 1                           # 一次 vstore 重建，非 N×全量
 
 
+async def test_confirm_all_includes_graph_edges(tmp_path):
+    """一键确认启用纳入图边：全部 LLM draft 边确认入正式图谱，draft 清空，edges 计数正确。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb._llm_graph_edges["c1"] = [
+        {"from_table": "orders", "from_col": "status", "to_table": "customers",
+         "to_col": "id", "cardinality": "n:1", "reason": "测试边A", "status": "draft"},
+        {"from_table": "orders", "from_col": "id", "to_table": "customers",
+         "to_col": "name", "cardinality": "1:n", "reason": "测试边B", "status": "draft"},
+    ]
+    counts = await kb.confirm_all("c1")
+    assert counts["edges"] == 2
+    assert kb.llm_graph_edges("c1") == []
+    graph_edges = kb.graph("c1")["edges"]
+    llm_edges = [e for e in graph_edges if e.get("kind") == "llm"]
+    assert len(llm_edges) == 2
+    assert all(e.get("reason") in ("测试边A", "测试边B") for e in llm_edges)
+
+
 async def test_reject_reverts_chunk_rich_text(tmp_path):
     """撤下已确认内容 → chunk 富知识出文回结构壳，向量重算（撤下入口同样走即时重嵌）。"""
     kb = KnowledgeBase(tmp_path)

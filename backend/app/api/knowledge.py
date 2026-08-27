@@ -316,7 +316,7 @@ async def sync_kb(conn_id: str) -> dict:
 
 @router.post("/{conn_id}/confirm-all")
 async def confirm_all(conn_id: str) -> dict:
-    """确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。"""
+    """确认闸：一键确认全部草案文档 + draft 标签 + LLM draft 图边 → kb_status=ready（解锁数据源）。"""
     _have(conn_id)
     state = get_state()
     n = await state.knowledge.confirm_all(conn_id)
@@ -328,7 +328,7 @@ async def confirm_all(conn_id: str) -> dict:
         tier="read",
         verdict="allow",
         status="confirmed",
-        sql=f"-- kb confirm_all docs={n.get('docs', 0)} tags={n.get('tags', 0)}",
+        sql=f"-- kb confirm_all docs={n.get('docs', 0)} tags={n.get('tags', 0)} edges={n.get('edges', 0)}",
         source="manual",
     )
     return {**n, "kb_status": "ready"}

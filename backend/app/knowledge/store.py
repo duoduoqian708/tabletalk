@@ -1237,7 +1237,7 @@ class KnowledgeBase:
         return n
 
     async def confirm_all(self, conn_id: str) -> dict[str, int]:
-        """确认闸（构建后一键启用）：批量确认全部草案注释（表+列）+ 全部 draft 标签。
+        """确认闸（构建后一键启用）：批量确认全部草案注释（表+列）+ 全部 draft 标签 + 全部 LLM draft 图边。
 
         标签确认后才参与"问题→选表"路由；注释确认后进入权威知识卡。
         注释确认会改变合成文本 → confirm 内部收集受影响表集合一次重嵌（不逐表重建）。
@@ -1248,7 +1248,8 @@ class KnowledgeBase:
         for name in list(self._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
-        return {"docs": n_docs, "tags": n_tags}
+        n_edges = self.confirm_graph_edges(conn_id)
+        return {"docs": n_docs, "tags": n_tags, "edges": n_edges}
 
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
