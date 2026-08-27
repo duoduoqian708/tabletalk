@@ -18,6 +18,8 @@ interface BuildPhase {
   step_index?: number | null
   step_total?: number | null
   steps?: BuildStepMeta[] | null
+  /** LLM 调用心跳：本阶段正处于 AI 思考中（进度不动但跑光动画） */
+  busy?: boolean
 }
 interface BuildProgressState {
   stage: string

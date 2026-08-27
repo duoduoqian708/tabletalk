@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { buildCancel, confirmAllEnabled, kbStatus } from '@renderer/api/knowledge'
+import { buildCancel, kbStatus } from '@renderer/api/knowledge'
 import type { KbStatus } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useKnowledge } from '@renderer/store/knowledge'
+import { useUi } from '@renderer/store/ui'
 import { useI18n } from '@renderer/store/i18n'
 
 /**
@@ -11,7 +12,8 @@ import { useI18n } from '@renderer/store/i18n'
  * - 构建进度由 store 驱动（所有入口统一走 useKnowledge.buildTask → SSE 推送），本组件零轮询
  * - 当前连接 kb_status != ready → 弹出：none 引导构建 / building 进度条 / pending_review 引导确认
  * - 构建中强制显示（可最小化为胶囊，不可关闭），完成/取消后自动收起
- * - ✕/稍后 → 缩为常驻警告胶囊：none 点回浮卡、pending_review 直达审阅弹窗；ready 才消失
+ * - ✕/稍后 → 缩为常驻警告胶囊：none 点回浮卡、pending_review 跳知识库工作台（批量确认在那里）；
+ *   ready 才消失
  */
 export function KbBuildGate(): React.JSX.Element | null {
   const currentId = useConnections((s) => s.currentId)
@@ -31,8 +33,6 @@ export function KbBuildGate(): React.JSX.Element | null {
   const buildBusy = useKnowledge((s) => s.busy)
   const buildProgress = useKnowledge((s) => s.buildProgress)
   const reattachBuild = useKnowledge((s) => s.reattachBuild)
-  /** 审阅弹窗开→关沿：confirm-all 后 kb_status 变 ready，本地 status 需同步刷新 */
-  const reviewOpen = useKbGate((s) => s.reviewOpen)
 
   const conn = list.find((c) => c.id === currentId) ?? null
 
@@ -82,19 +82,6 @@ export function KbBuildGate(): React.JSX.Element | null {
     }
   }, [buildBusy, currentId])
 
-  // 审阅弹窗关闭沿 → 重新查一次状态（confirm-all 提交后 kb_status 变 ready，浮卡/胶囊随之消失）
-  const wasReviewOpen = useRef(false)
-  useEffect(() => {
-    if (reviewOpen) {
-      wasReviewOpen.current = true
-      return
-    }
-    if (wasReviewOpen.current && currentId) {
-      wasReviewOpen.current = false
-      kbStatus(currentId).then((s) => s && setStatus(s)).catch(() => undefined)
-    }
-  }, [reviewOpen, currentId])
-
   /* 构建中 = store busy + 有进度（SSE 已连接）；此时强制显示，无视 dismissed */
   const isBuilding = buildBusy && buildProgress !== null
   const needsBuild = status !== null && status.kb_status !== 'ready'
@@ -120,13 +107,13 @@ export function KbBuildGate(): React.JSX.Element | null {
     )
   }
 
-  /* 稍后 → 常驻警告胶囊（最终形态，无关闭按钮）：pending_review 点击直达审阅弹窗，否则点回完整卡 */
+  /* 稍后 → 常驻警告胶囊（最终形态，无关闭按钮）：pending_review 点击跳知识库工作台，否则点回完整卡 */
   const pillMode = !isBuilding && dismissed && forceConnId !== currentId
   if (pillMode) {
     const pend = status?.kb_status === 'pending_review'
     return (
       <div className={`kb-gate-min warn${pend ? ' goto-review' : ''}`}
-           onClick={() => (pend ? useKbGate.getState().openReview() : setDismissed(false))}
+           onClick={() => { clearForce(); useUi.getState().setView('knowledge') }}
            title={pend ? t('kb.pillPendingReview') : t('kb.pillNotBuilt')}>
         <span className="kb-min-pulse" />
         <span className="kb-min-label mono">
@@ -142,11 +129,11 @@ export function KbBuildGate(): React.JSX.Element | null {
     setStatus((s) => (s ? { ...s, kb_status: 'none', building: false } : s))
   }
 
-  async function goConfirm(): Promise<void> {
+  /** 去审查/确认：跳知识库工作台（批量确认与唯一入口在那里），清强制标记 */
+  function goReview(): void {
     if (!currentId) return
-    await confirmAllEnabled(currentId)
-    setStatus((s) => (s ? { ...s, kb_status: 'ready', building: false } : s))
     clearForce()
+    useUi.getState().setView('knowledge')
   }
 
   const badge = {
@@ -208,18 +195,22 @@ export function KbBuildGate(): React.JSX.Element | null {
                     <div className="kb-phase-head">
                       <span className="kb-phase-idx mono">{idx + 1}</span>
                       <span className="kb-phase-label mono">{ph.label}</span>
-                      {ph.step_label && (
-                        <span className="kb-phase-step mono">
-                          {ph.step_label}{stepNow ? ` ${stepNow}` : ''}
-                        </span>
-                      )}
-                      {ph.detail && !ph.step_label && (
-                        <span className="kb-phase-detail mono">正在处理 {ph.detail}</span>
+                      {ph.busy ? (
+                        /* LLM 思考中：头部改显思考计时（子步由下方 chips 指示） */
+                        <span className="kb-phase-busy mono">⟳ {ph.detail ?? 'AI 思考中'}</span>
+                      ) : (
+                        /* 完成值 + 实时 detail 并列：收尾期显示「构图收尾 · 嵌入 3/16」 */
+                        (ph.step_label || ph.detail) && (
+                          <span className="kb-phase-step mono">
+                            {ph.step_label}{stepNow ? ` ${stepNow}` : ''}
+                            {ph.detail ? ` · ${ph.detail}` : ''}
+                          </span>
+                        )
                       )}
                       <span className="kb-phase-pct mono">{ph.percent}%</span>
                     </div>
                     <div className="kb-bar">
-                      <div className="kb-bar-fill" style={{ width: `${ph.percent ?? 0}%` }} />
+                      <div className={`kb-bar-fill${ph.busy ? ' busy' : ''}`} style={{ width: `${ph.percent ?? 0}%` }} />
                     </div>
                     {ph.steps && ph.steps.length > 1 && (
                       <div className="kb-phase-chips">
@@ -247,6 +238,14 @@ export function KbBuildGate(): React.JSX.Element | null {
               </span>
             </div>
           )}
+          {/* 收尾可见性：三阶段条满后还有构图/向量化/落盘，实时显示当前环节（避免"走完了却还没结束"的错觉） */}
+          {(progress?.phases?.length ?? 0) > 0 && (
+            <div className="kb-gate-tail mono">
+              {progress?.stage ?? t('kb.queuing')}
+              {progress?.detail ? ` · ${progress.detail}` : ''}
+              {' · '} {progress?.percent ?? 0}%
+            </div>
+          )}
           <div className="kb-gate-actions">
             <button className="btn ghost" onClick={() => setShowCancelConfirm(true)}>{t('kb.cancelBuild')}</button>
           </div>
@@ -257,8 +256,8 @@ export function KbBuildGate(): React.JSX.Element | null {
         <div className="kb-gate-body">
           <div className="kb-gate-text">{t('kb.gatePendingDesc')}</div>
           <div className="kb-gate-actions">
-            <button className="btn tl" onClick={() => useKbGate.getState().openReview()}>{t('kb.goReview')}</button>
-            <button className="btn save" onClick={() => void goConfirm()}>{t('kb.confirmAll')}</button>
+            {/* 批量确认已迁至知识库工作台顶部操作条（唯一入口），这里只引导跳转 */}
+            <button className="btn tl" onClick={goReview}>{t('kb.goReview')}</button>
           </div>
         </div>
       )}

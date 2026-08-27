@@ -5536,6 +5536,36 @@ tr.clickable.open { background: var(--accent-dim); }
 }
 .kb-phase .kb-bar { height: 5px; }
 
+/* 心跳 busy 帧：LLM 思考中 → 跑光 + 呼吸字，进度不冻死 */
+.kb-phase-busy {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--accent-soft);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  animation: kb-blink 1.5s ease-in-out infinite;
+}
+@keyframes kb-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.kb-bar-fill.busy { position: relative; overflow: hidden; }
+.kb-bar-fill.busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.55) 50%, transparent 80%);
+  animation: kb-sheen 1.1s linear infinite;
+}
+@keyframes kb-sheen {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(120%); }
+}
+
 /* ═══════════════════════════════════════════════
    TableRelationGraph2D（trg2d-）— 手写 SVG 2D 关系图
    领域聚类布局 · 节点拖拽 · 字段级边标签 · 拖线连线面板 · 平移缩放

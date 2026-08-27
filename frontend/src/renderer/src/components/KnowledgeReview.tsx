@@ -333,8 +333,8 @@ export function KnowledgeReview(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
   const { overview, loading, busy, error, load, buildProgress,
-    confirmComment, rejectComment, confirmTag, rejectTag,
-    assignTags } = useKnowledge()
+    confirmComment, rejectComment, confirmTag, rejectTag, assignTags,
+    confirmAll, discardAll } = useKnowledge()
   const { t } = useI18n()
   const openBuildDialog = useKbGate((s) => s.openBuildDialog)
   const buildPct = buildProgress?.percent ?? null
@@ -353,6 +353,9 @@ export function KnowledgeReview(): React.JSX.Element {
   const [graphMode, setGraphMode] = useState<'display' | 'edit'>('display')
   /** 历史记录抽屉（审计 origin=kb_build 的构建/重建/放弃/启用留痕） */
   const [historyOpen, setHistoryOpen] = useState(false)
+  /** 顶部批量操作（仅 pending_review 显示）：确认启用 / 放弃本轮 的二次确认弹窗开关 */
+  const [batchConfirm, setBatchConfirm] = useState(false)
+  const [batchDiscard, setBatchDiscard] = useState(false)
   const trg2dActions = useTrg2dActions(currentId)
   const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): void => {
     trg2dActions.onLayoutChange(layout)
@@ -464,6 +467,29 @@ export function KnowledgeReview(): React.JSX.Element {
       .catch((e) => toastMsg(`保存失败：${(e as Error).message}`))
   }
 
+  /* 顶部批量操作（pending_review → 一键确认启用 / 放弃本轮） */
+  async function doBatchConfirm(): Promise<void> {
+    if (!currentId) return
+    try {
+      await confirmAll(currentId)
+      toastMsg(t('kb.batchConfirmOk'))
+      setBatchConfirm(false)
+    } catch (e) {
+      toastMsg(t('kb.confirmFail', { msg: (e as Error).message }))
+    }
+  }
+
+  async function doBatchDiscard(): Promise<void> {
+    if (!currentId) return
+    try {
+      await discardAll(currentId)
+      toastMsg(t('kb.batchDiscardOk'))
+      setBatchDiscard(false)
+    } catch (e) {
+      toastMsg(`放弃失败：${(e as Error).message}`)
+    }
+  }
+
   return (
     <div className="review kb-page">
       {error && <div className="review-err mono">{error}</div>}
@@ -500,6 +526,18 @@ export function KnowledgeReview(): React.JSX.Element {
               <span className="kb-topbar-pending mono">{t('kb.statsEdges')} {overview.graph.edges.length}</span>
             )}
             <span className="spacer" />
+            {overview.kb_status === 'pending_review' && (
+              <span className="kb-topbar-batch">
+                <button className="btn save mini" onClick={() => setBatchConfirm(true)}
+                        disabled={busy} title={t('kb.batchConfirmTitle')}>
+                  {t('kb.confirmAll')}
+                </button>
+                <button className="btn ghost mini" onClick={() => setBatchDiscard(true)}
+                        disabled={busy} title={t('kb.batchDiscardTitle')}>
+                  {t('kb.discardAll')}
+                </button>
+              </span>
+            )}
             {overview.synced_at && (
               <span className="kb-synced mono" title={t('kb.syncedTitle')}>
                 {t('kb.lastSync')} {overview.synced_at.replace('T', ' ').slice(5, 16)}
@@ -777,6 +815,36 @@ export function KnowledgeReview(): React.JSX.Element {
         connName={connName}
         onClose={() => setHistoryOpen(false)}
       />
+
+      {/* 批量操作二次确认：确认启用（不可逆）/ 放弃本轮 */}
+      {batchConfirm && (
+        <div className="kb-dialog-mask" onClick={() => setBatchConfirm(false)}>
+          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-dialog-title">{t('kb.batchConfirmTitle')}</div>
+            <p className="kb-dialog-sub">{t('kb.batchConfirmDesc')}</p>
+            <div className="kb-dialog-actions">
+              <button className="btn ghost" onClick={() => setBatchConfirm(false)}>{t('kb.dialogCancel')}</button>
+              <button className="btn save" disabled={busy} onClick={() => void doBatchConfirm()}>
+                {t('kb.confirmAll')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {batchDiscard && (
+        <div className="kb-dialog-mask" onClick={() => setBatchDiscard(false)}>
+          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-dialog-title">{t('kb.batchDiscardTitle')}</div>
+            <p className="kb-dialog-sub">{t('kb.batchDiscardDesc')}</p>
+            <div className="kb-dialog-actions">
+              <button className="btn ghost" onClick={() => setBatchDiscard(false)}>{t('kb.dialogCancel')}</button>
+              <button className="btn danger" disabled={busy} onClick={() => void doBatchDiscard()}>
+                {t('kb.discardAll')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 

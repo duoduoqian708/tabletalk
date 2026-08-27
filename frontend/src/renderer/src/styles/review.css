@@ -1035,6 +1035,9 @@
 
 /* ═══════ 知识库主页 v2：知识库/图库双Tab + 三列审阅 ═══════ */
 .kb-topbar-pending { font-size: 11px; color: var(--amber); margin-left: 8px; }
+/* 顶部批量操作条（仅 pending_review）：确认启用 / 放弃本轮 */
+.kb-topbar-batch { display: inline-flex; gap: 6px; align-items: center; margin-left: 8px; }
+.kb-topbar-batch .btn { padding: 2px 10px; font-size: 11px; }
 .rebuild-btn { color: var(--red) !important; border-color: var(--red) !important; }
 .rebuild-btn:hover { background: color-mix(in srgb, var(--red) 12%, transparent) !important; color: var(--red) !important; }
 

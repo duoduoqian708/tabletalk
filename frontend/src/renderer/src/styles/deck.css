@@ -2645,6 +2645,14 @@ body.resizing .drag-h {
   color: var(--accent-soft);
   font-family: var(--font-mono);
 }
+/* 三阶段条满后收尾(构图/向量化/落盘)实时显示 */
+.kb-gate-tail {
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 .kb-gate-actions {
   display: flex;
   gap: 10px;
