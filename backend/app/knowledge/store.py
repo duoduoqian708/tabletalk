@@ -409,6 +409,20 @@ class KnowledgeBase:
         enable_ai_annotation: 是否执行 AI 注释 + 标签生成（mock provider 时自动降级为伪注释）。
         self_check: 阶段2/3 审校式自检覆盖（None=沿用运行时 kb_build_self_check，默认开）。
         """
+        # 链路耗时审计：阶段段边界打点 → 构建结束一条汇总（每段也实时打印）
+        _t0 = time.monotonic()
+        _t_prev = _t0
+        _segs: list[tuple[str, float]] = []
+
+        def _seg(label: str) -> None:
+            nonlocal _t_prev
+            now = time.monotonic()
+            el = now - _t_prev
+            _segs.append((label, el))
+            _t_prev = now
+            logger.info("[kb.build] conn=%s 耗时[%s] %.1fs（累计 t+%.1fs）",
+                        conn_id, label, el, now - _t0)
+
         # 全量重建也遵守历史墓碑（用户删过的 overlap 边不复活）
         if conn_id not in self._edge_tombstones:
             try:
@@ -441,6 +455,7 @@ class KnowledgeBase:
             self._samples[conn_id] = samples
         if on_progress:
             on_progress("发现结构", 10, None)
+        _seg("发现结构")
 
         # ---- AI 语义增强：逐表注释（含取值对照/示例）+ 全局标签 ----
         ai_docs_added = 0
@@ -487,6 +502,7 @@ class KnowledgeBase:
                     samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
                 )
                 logger.info("[kb.build] conn=%s 阶段=annotate 完成：items=%s", conn_id, ai_docs_added)
+                _seg("阶段一·逐表注释")
             except Exception as e:
                 logger.warning("[kb.build] conn=%s 阶段=annotate AI注释异常：%s", conn_id, e)
                 if on_progress:
@@ -542,29 +558,35 @@ class KnowledgeBase:
                 on_progress("AI 关系识别", 0, None, phase="graph")
             await asyncio.gather(_run_tags(), _run_graph())
             if on_progress:
+                # 阶段二完成：tags 条打满（已由 annotate_domain 尾部上报；此分支兜底失败态）
                 on_progress("AI 标签提取", 100,
                             f"领域标签划分失败：{tags_error}（已跳过，图谱继续）" if tags_error else None,
                             phase="tags")
-                on_progress("AI 关系识别", 100, None, phase="graph")
+                # 注意：graph 条**不**在此强制打满——AI 段止步 74，其后 FK 构图与落盘
+                # 瞬时完成，由 run_build_job 置 done 时统一全满。graph 条打满 = 构建完成。
+            _seg("阶段二三·并行")
 
-        # ---- 构图（程序 FK 边） ----
-        if on_progress:
-            on_progress("构图", 80, None)
+        # ---- FK 构图 + 落盘（瞬时、无独立进度段）：FK 正式边由程序照搬外键约束，随阶段三
+        #      一并就位；draft 快照（表壳/图谱/标签/样本）写库。向量化**延迟到人工确认后**
+        #      （confirm/reject/edit → _reembed_tables）：确认前 AI 草案不入向量文本，
+        #      构建期嵌入纯属白做（必被确认重嵌覆盖），尤其 API 嵌入是真实 N 次 HTTP。----
         self._graph[conn_id] = self._build_graph(conn_id, schema, self._samples.get(conn_id, {}))
+        _seg("构图")
         self._emb = self._embedder()
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
         self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
-        # 向量化（一表一 chunk，spec §4）：统一表级嵌入
-        if on_progress:
-            on_progress("向量化", 82, None)
-        await self._embed_tables(conn_id, on_progress=on_progress, p0=82, p1=95)
-        if on_progress:
-            on_progress("落盘", 98, None)
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
+        _seg("落盘")
         # 记录嵌入模型用量（ApiEmbedder 累计 usage → llm_log）
         self._log_embedding_usage(conn_id, "build")
+        # 链路耗时汇总（一键总览：整体 + 各阶段 + 阶段间间隙）
+        logger.info(
+            "[kb.build] conn=%s 链路耗时 %.1fs ｜ %s",
+            conn_id, time.monotonic() - _t0,
+            " ⇒ ".join(f"{k} {v:.1f}s" for k, v in _segs),
+        )
         logger.info(
             "[kb.build] conn=%s build 完成：tables=%s docs=%s ai_items=%s tags=%s graph=%s",
             conn_id, len(self._tables.get(conn_id, {})), len(self._auto[conn_id]), ai_docs_added,
@@ -748,8 +770,8 @@ class KnowledgeBase:
             auto.extend(new_docs)
             docs_added = len(new_docs)
             self._auto[conn_id] = auto
-            # 变化表向量重算（一表一 chunk 收口，其余表向量保留）
-            await self._embed_tables(conn_id, rebuild_tables)
+            # 变化表向量延迟到人工确认后（confirm/reject/edit → _reembed_tables）：
+            # 确认前 draft 不入向量文本，构建期嵌入纯属白做
         else:
             self._auto[conn_id] = auto
 
@@ -902,7 +924,8 @@ class KnowledgeBase:
                             on_progress: Any | None = None, p0: int = 82, p1: int = 95) -> None:
         """统一表级嵌入（一表一 chunk）：文本 = _synthesize_table_text，key = 表名。
 
-        tables=None → 全量表（全量构建/重嵌）；否则只重算这些表（增量同步，其余保留）。
+        tables=None → 全量表（重嵌）；否则只重算这些表（确认后/reembed，其余保留）。
+        由确认/撤下/人工编辑路径（_reembed_tables）调用——构建期不嵌（确认前草案不入文）。
         """
         tabs = self._tables.get(conn_id, {})
         targets = [t for t in tabs if tables is None or t in tables]
@@ -911,8 +934,9 @@ class KnowledgeBase:
         vecs: dict[str, list[float]] = {}
         n = len(targets)
         for i, name in enumerate(targets):
-            if on_progress and i % max(1, n // 4) == 0:
-                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n), None)
+            if on_progress:
+                on_progress("向量化", p0 + (p1 - p0) * i // max(1, n),
+                            f"嵌入 {i + 1}/{n}")
             try:
                 vecs[name] = await self._emb.embed(self._synthesize_table_text(conn_id, tabs[name]))
             except Exception as e:

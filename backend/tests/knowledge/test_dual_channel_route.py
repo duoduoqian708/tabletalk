@@ -31,9 +31,12 @@ def _schema() -> dict:
 
 
 async def test_vector_route_recalls_unlabeled_table(tmp_path):
-    """向量通道：无标签但有语义相关注释的表也能被问题召回（补齐标签覆盖率短板）。"""
+    """向量通道（确认后建立）：无标签但有语义相关注释的表也能被问题召回（补齐标签覆盖率短板）。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())
+    # 构建期不嵌（确认前 draft 不入向量文本）→ 确认表注释后向量通道才有数据
+    kb.annotate_drafts("c1", [{"table": "refund_requests", "comment": "退款申请"}])
+    await kb.confirm("c1", "refund_requests")
     hits = await kb.vector_route_tables("c1", "哪些订单申请了退款", top_k=3)
     names = [t for t, _ in hits]
     assert "refund_requests" in names  # 语义命中"退款"→ 无标签表被召回

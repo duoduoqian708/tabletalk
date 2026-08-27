@@ -270,6 +270,21 @@ async def test_settings_update(client, app_state):
     assert "•••" in body["ai_api_key"] or body["ai_api_key"] == ""
 
 
+async def test_settings_kb_build_reasoning_effort_validation(client, app_state):
+    """KB 构建推理档位：合法值可存；非法值拒绝并保留原值。"""
+    r = await client.get("/api/v1/settings")
+    assert r.json()["kb_build_reasoning_effort"] == "low", "默认浅推理"
+    # 合法升档
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "high"})
+    assert r.json()["kb_build_reasoning_effort"] == "high"
+    # 非法值拒绝 → 保留 high
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "max"})
+    assert r.json()["kb_build_reasoning_effort"] == "high"
+    # 可关
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "off"})
+    assert r.json()["kb_build_reasoning_effort"] == "off"
+
+
 async def _build_and_wait(client, conn_id):
     """POST build → 轮询 progress 直到 done（任务化构建）。"""
     import asyncio

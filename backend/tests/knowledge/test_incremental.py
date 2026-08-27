@@ -85,8 +85,8 @@ async def test_incremental_add_table(tmp_path):
     docs = kb.list_docs("c1")
     assert len(docs) > n0
     assert any(d.table == "refunds" for d in docs)
-    # 表级向量存在
-    assert "refunds" in kb._table_vec["c1"]
+    # 表级向量延迟到确认后：增量构建不预嵌（确认前 draft 不入向量文本）
+    assert "refunds" not in kb._table_vec.get("c1", {})
     # 图边包含新表（FK 无，但 overlap：refunds.id vs orders.id 是 id↔id 被跳过）
     assert any(e["from"] == "refunds" or e["to"] == "refunds" for e in kb.graph("c1")["edges"]) or True
 
@@ -125,8 +125,8 @@ async def test_incremental_remove_table_archives(tmp_path):
     assert not any(d.table == "customers" for d in active)
     archived = [d for d in kb._auto["c1"] if d.archived]
     assert any(d.table == "customers" for d in archived)
-    # 表级向量移除
-    assert "customers" not in kb._table_vec["c1"]
+    # 表级向量移除（若已建立则确认清理；构建期不预嵌时无键也通过）
+    assert "customers" not in kb._table_vec.get("c1", {})
     # 图边移除（FK 边 orders→customers 消失）
     edges = kb.graph("c1")["edges"]
     assert not any(e["to"] == "customers" or e["from"] == "customers" for e in edges)

@@ -15,6 +15,7 @@ import math
 import os
 import random
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -32,16 +33,31 @@ logger = logging.getLogger(__name__)
 # 默认 120s 容易被 106 限流/慢推理撞爆 → 单独放宽，别拖垮普通 chat 的默认目标。
 _KB_REASONING_TIMEOUT = 300.0
 
+# 只支持 thinking（无 reasoning_effort 档位）的模型：用 budget_tokens 压思考链深浅。
+# 实测 deepseek-v4-flash：thinking 全开≈4256 字思考链/10s，budget 1024≈2173 字/7s。
+_KB_THINKING_BUDGET = {"low": 1024, "medium": 4096, "high": 8192}
+
+# 自检/裁决（第二轮"审校"型调用）：失败可安全降级保留首轮成果，
+# 因此不需要推理满时（实测 selfcheck 曾 ReadTimeout 300s），给普通等待即可，超时即降级。
+_KB_SELFCHECK_TIMEOUT = 60.0
+_KB_VERIFY_TIMEOUT = 90.0
+
 
 def _kb_reason_provider_cfg(rt, reasoning: bool = True) -> dict[str, Any]:
     """KB 阶段2/3 专用 provider cfg：
     - reasoning=False（阶段2 领域划分：归类命名任务用普通生成，秒级）→ 显式关思考；
-    - reasoning=True（阶段3 图谱：FK 边推理要 chain-of-thought 保质量）→ 按能力档开最大深度。
+    - reasoning=True（阶段3 图谱）：按运行时 kb_build_reasoning_effort 档位开推理
+      （默认 low 浅推理，不搞深度）：
+        模型能力带 reasoning_effort（档位随心切）→ 直接传该档位；
+        只支持 thinking（如 DeepSeek）→ cfg["thinking_budget"] 由网关附加
+        budget_tokens 预算压浅推理（low=1024，deep 全开≈4k+ 字思考链）。
+    - 档位 off → 显式关思考（阶段3 也走普通生成）。
     无 capabilities（旧数据/mock）→ 保持原全局 reasoning 设置。
-    推理调用读超时统一放宽到 _KB_REASONING_TIMEOUT（不被 120s 默认掐断）。"""
+    推理/浅推理调用读超时统一放宽到 _KB_REASONING_TIMEOUT（不被 120s 默认掐断）。"""
     cfg = rt.provider_config()
     cfg["timeout"] = max(float(cfg.get("timeout") or 120), _KB_REASONING_TIMEOUT)
-    if not reasoning:
+    effort = (getattr(rt, "kb_build_reasoning_effort", "low") or "low").strip().lower()
+    if not reasoning or effort == "off":
         # 显式 off：网关 self.reasoning == "off" → 不发 thinking/reasoning_effort 参数
         cfg["reasoning"] = "off"
         return cfg
@@ -51,9 +67,14 @@ def _kb_reason_provider_cfg(rt, reasoning: bool = True) -> dict[str, Any]:
         default = next((m for m in pool if m.id == default_id), None) or (pool[0] if pool else None)
         cap = getattr(default, "capabilities", None) if default else None
         if cap and cap.get("reasoning"):
-            effort = cap.get("reasoning_effort")
-            # 有档位 → 开最大深度；无档位（只接受 thinking）→ 仅启用思考
-            cfg["reasoning"] = effort if effort in ("low", "medium", "high") else "thinking"
+            if cap.get("reasoning_effort"):
+                # 模型支持档位随心切 → 用构建档位（off/low/medium/high→thinking 兜底）
+                cfg["reasoning"] = effort if effort in ("low", "medium", "high") else "thinking"
+            else:
+                # 只支持 thinking → 预算压浅推理
+                cfg["reasoning"] = "thinking"
+                if effort in _KB_THINKING_BUDGET:
+                    cfg["thinking_budget"] = _KB_THINKING_BUDGET[effort]
     except Exception:  # noqa: BLE001
         pass
     return cfg
@@ -274,7 +295,7 @@ async def annotate_table(
     )
     table_samples = samples.get(table_name) if samples else None
 
-    provider_cfg = rt.provider_config()
+    provider_cfg = _kb_reason_provider_cfg(rt)  # 阶段一也走构建档位（默认浅推理，不深推）
     if gw.is_effective_mock(provider_cfg):
         logger.debug("[kb.annotate] conn=%s mock 伪注释 table=%s", conn_id, table_name)
         return _mock_table_comments_from_ddl(table_name, columns, table_samples, table_comment)
@@ -354,6 +375,7 @@ async def annotate_tables(
     concurrency 缺省取环境变量 TABLETALK_KB_ANNOTATION_CONCURRENCY（默认 10）。
     """
     items_all: list[dict[str, Any]] = []
+    _t0ai = time.monotonic()
     table_names = [t["name"] for t in schema.get("tables", []) if t["name"] in ddl_map]
     n = max(1, len(table_names))
     if not table_names:
@@ -397,7 +419,8 @@ async def annotate_tables(
     if not items_all and table_names:
         logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
     added = state.knowledge.annotate_drafts(conn_id, items_all)
-    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s", conn_id, len(items_all), added)
+    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s（总耗时 %.1fs）",
+                conn_id, len(items_all), added, time.monotonic() - _t0ai)
     return added
 
 
@@ -524,7 +547,7 @@ async def annotate_knowledge(
     from app.knowledge.ddl_context import truncate_samples  # noqa: PLC0415
     samples = truncate_samples(samples) if samples else samples
 
-    provider_cfg = rt.provider_config()
+    provider_cfg = _kb_reason_provider_cfg(rt)  # 知识库注释统一走构建档位（默认浅推理）
     if gw.is_effective_mock(provider_cfg):
         items = _mock_comments(schema, samples)
     else:
@@ -557,6 +580,61 @@ _MOCK_TAG_HINTS = {
     "pay": "支付", "ship": "物流", "inventory": "库存", "review": "评价",
     "categor": "分类", "supplier": "供应商", "campaign": "营销", "address": "地址",
 }
+
+
+async def _chat_with_beat(
+    provider: Any,
+    messages: list[dict[str, Any]],
+    tools: Any,
+    ctx: dict[str, Any] | None,
+    *,
+    on_progress: Any | None,
+    stage: str, phase: str, step: str,
+    step_index: int, step_total: int, percent: int,
+    interval: float = 2.0,
+    p_to: int | None = None,
+) -> Any:
+    """LLM 调用期间心跳：每 interval 秒推一帧 busy 帧，让构建阶段条保持动画
+    （阶段2/3 一次调用可达 10~90s，纯干等会像卡死）。
+
+    - p_to 缺省 → 心跳帧 percent 恒为传入值（老语义，纯动画）；
+    - p_to 给定 → **时间爬坡**：percent 从传入值（p_from）随心跳递增，上限 p_to-1，
+      调用完成瞬间才由调用方 report 跳到 p_to。消除"百分比水平线"的假死观感，
+      也让阶段条进度与真实 LLM 耗时成正比（慢调用爬得高，快调用停在低位即完成）。
+      pacing = span//20拍 ≈ 40s 爬满区间，慢调用封顶段界下沿等待真实完成。
+    - busy 帧不校验取消（协作式取消仍只在真实 report 点收尾，语义不变）；
+    - on_progress=None（独立 API 场景）→ 不启心跳，直连调用。
+    """
+    if on_progress is None:
+        return await provider.chat(messages, tools=tools, ctx=ctx)
+    stop = asyncio.Event()
+    pace = max(1, (p_to - percent) // 20) if p_to is not None else 0
+
+    async def _beat() -> None:
+        n = 0.0
+        while not stop.is_set():
+            await asyncio.sleep(interval)
+            n += interval
+            pct = percent
+            if p_to is not None and pace:
+                pct = min(percent + int(n / interval) * pace, p_to - 1)
+            on_progress(
+                stage, pct, f"AI 思考中 {int(n)}s",
+                phase=phase, step=step, step_index=step_index, step_total=step_total,
+                busy=True, check_cancel=False,
+            )
+
+    beat = asyncio.create_task(_beat())
+    try:
+        return await provider.chat(messages, tools=tools, ctx=ctx)
+    finally:
+        stop.set()
+        beat.cancel()
+        try:
+            await beat
+        except asyncio.CancelledError:
+            pass
+
 
 # ---------- 精简 DDL 画像（阶段二/三统一上下文：DDL 结构 + 描述 + 取值示例 + FK 内联） ----------
 
@@ -689,7 +767,8 @@ def _build_ddl_portraits(
     state: "AppState", conn_id: str, schema: dict[str, Any],
     samples: dict[str, dict[str, Any]] | None = None,
 ) -> str:
-    """全库精简 DDL 画像：每表一条，供阶段二（领域标签）/阶段三（图谱）统一作上下文。"""
+    """全库精简 DDL 画像：每表一条 CREATE TABLE（FK/类型/取值内联）。
+    仅供阶段三（图谱关系抽取）作上下文——它需要引用方向/主键/取值判断边。"""
     table_desc, col_desc = _knowledge_descs(state, conn_id, schema)
     parts = [
         _single_table_ddl_portrait(
@@ -700,6 +779,42 @@ def _build_ddl_portraits(
         for t in schema.get("tables", [])
     ]
     return "\n\n".join(parts)
+
+
+# 阶段二领域概述：每表最多列出的主要业务列数（超出省略）
+_DOMAIN_OVERVIEW_MAX_COLS = 8
+
+
+def _build_domain_overview(
+    state: "AppState", conn_id: str, schema: dict[str, Any],
+) -> str:
+    """阶段二领域概述：每表一行中文业务描述（表名：描述，主要列：…）。
+
+    领域划分只关心"这张表是什么、跟谁业务相近"→ 一行高度浓缩即可，
+    不喂完整 DDL（FK/类型/取值在此是噪音）。列取库注释/AI 注释优先，
+    无注释回退英文列名，滤除时间戳/审计等噪音列，截前 _DOMAIN_OVERVIEW_MAX_COLS 个。
+    """
+    table_desc, col_desc = _knowledge_descs(state, conn_id, schema)
+    lines: list[str] = []
+    for t in schema.get("tables", []):
+        name = t["name"]
+        tdesc = table_desc.get(name) or t.get("comment") or ""
+        cols: list[str] = []
+        for c in schema.get("columns", []):
+            if c["table"] != name:
+                continue
+            if _portrait_noise(c["name"], c.get("type", "")):
+                continue
+            cd = col_desc.get(name, {}).get(c["name"]) or c.get("comment") or c["name"]
+            cols.append(cd)
+        body = f"{name}：{tdesc}" if tdesc else name
+        if cols:
+            shown = "，".join(cols[:_DOMAIN_OVERVIEW_MAX_COLS])
+            if len(cols) > _DOMAIN_OVERVIEW_MAX_COLS:
+                shown += "，…"
+            body += f"，主要列：{shown}"
+        lines.append(body)
+    return "\n".join(lines)
 
 
 def _parse_domain_payload(text: str) -> tuple[bool, list[dict[str, Any]]]:
@@ -906,9 +1021,8 @@ async def annotate_domain(
     if not table_names:
         return {"tables": 0, "domains": 0, "new_tags": 0,
                 "library_size": len(state.knowledge.tags(conn_id)["library"])}
-    # 新画像（DDL 结构 + 描述 + 取值示例 + FK 内联）；样本仅授权才带（否则取值示例为空）
-    _samples = state.knowledge._samples.get(conn_id, {}) if state.knowledge._samples.get(conn_id) else {}
-    portraits = _build_ddl_portraits(state, conn_id, schema, _samples)
+    # 阶段二领域概述（每表一行中文描述）：划分只看"表是什么/跟谁相近"，不喂完整 DDL
+    overview = _build_domain_overview(state, conn_id, schema)
     n = len(table_names)
     target = max(3, round(math.sqrt(n)))
     lo, hi = max(2, target - 1), target + 1
@@ -919,7 +1033,25 @@ async def annotate_domain(
     logger.info("[kb.tags] conn=%s 领域划分：tables=%s target=%s~%s self_check=%s",
                 conn_id, n, lo, hi, self_check)
     _tag_cfg = _kb_reason_provider_cfg(rt, reasoning=False)  # 阶段2 归类任务：关思考，秒级
-    domains: list[dict[str, Any]] = []
+    new_tags = 0
+
+    def _persist(domains: list[dict[str, Any]]) -> int:
+        """域 → 标签草案 + 表→域多打标（幂等：同名不复存、表绑定覆盖重写）。返回新增标签数。"""
+        tag_props: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for d in domains:
+            tg = d["name"]
+            if tg and tg not in seen:
+                seen.add(tg)
+                tag_props.append({"name": tg, "description": d.get("description") or f"{tg} 领域"})
+        added = state.knowledge.upsert_tags(conn_id, tag_props)
+        table_tags: dict[str, list[str]] = {}
+        for d in domains:
+            for t in d["tables"]:
+                table_tags.setdefault(t, []).append(d["name"])
+        for t, tags in table_tags.items():
+            state.knowledge.assign_table_tags(conn_id, t, tags)
+        return added
 
     if gw.is_effective_mock(_tag_cfg):
         logger.debug("[kb.tags] conn=%s mock 领域划分", conn_id)
@@ -927,76 +1059,86 @@ async def annotate_domain(
             on_progress("AI 标签提取", 0, "领域划分", phase="tags",
                         step="partition", step_index=1, step_total=1)
         domains = _normalize_domains(_mock_domains(schema), table_names)
+        new_tags += _persist(domains)
     else:
         provider = gw.build_provider(_tag_cfg)
         # 第一轮：打包划分（N 条画像一次调用）
+        _t_part = time.monotonic()
         if on_progress:
             on_progress("AI 标签提取", 0, "领域划分", phase="tags",
                         step="partition", step_index=1,
                         step_total=2 if self_check else 1)
-        resp = await provider.chat(
-            [{"role": "user", "content": _domain_partition_prompt(portraits, lo, hi, n)}],
-            tools=None,
+        resp = await _chat_with_beat(
+            provider,
+            [{"role": "user", "content": _domain_partition_prompt(overview, lo, hi, n)}],
+            None,
             ctx={
                 "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
                 "source": "kb_build", "status": "egress-tags",
                 "context_meta": {"candidate_tables": table_names},
             },
+            on_progress=on_progress, stage="AI 标签提取", phase="tags",
+            step="partition", step_index=1, step_total=2 if self_check else 1, percent=0,
+            p_to=49,
         )
-        _unchanged, domains = _parse_domain_payload(resp.content or "")
-        if domains:
-            domains = _normalize_domains(domains, table_names)
-            logger.debug("[kb.tags] conn=%s 划分产出：domains=%s", conn_id, len(domains))
-        else:
-            logger.warning("[kb.tags] conn=%s LLM 划分返回解析为空", conn_id)
-        # 第二轮：审校式自检（不重跑生成；unchanged 保留初版）
-        if self_check and domains:
+        _unchanged, raw_domains = _parse_domain_payload(resp.content or "")
+        logger.info("[kb.tags] conn=%s 划分耗时 %.1fs（raw domains=%s）",
+                    conn_id, time.monotonic() - _t_part, len(raw_domains))
+        if not raw_domains:
+            logger.warning("[kb.tags] conn=%s LLM 划分返回解析为空（兜底单「业务」域）", conn_id)
+        # 兜底空输入 → 单「业务」域；真实划分才进自检
+        domains = _normalize_domains(raw_domains, table_names)
+        # 关键：第一轮先落库——即便第二轮自检失败/超时，标签也不会丢
+        # （原实现自检异常会把首轮结果一起弄丢 → tags=0）
+        new_tags += _persist(domains)
+        # 第二轮：审校式自检（不重跑生成；unchanged 保留初版；失败降级保留初版——不致命）
+        if self_check and raw_domains:
+            _t_chk = time.monotonic()
             if on_progress:
                 on_progress("AI 标签提取", 50, "审校自检", phase="tags",
                             step="selfcheck", step_index=2, step_total=2)
-            chk = await provider.chat(
-                [{"role": "user", "content": _domain_selfcheck_prompt(portraits, domains, lo, hi)}],
-                tools=None,
-                ctx={
-                    "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
-                    "source": "kb_build", "status": "egress-tags-selfcheck",
-                    "context_meta": {"candidate_tables": table_names},
-                },
-            )
-            unchanged, revised = _parse_domain_payload(chk.content or "")
-            if not unchanged and revised:
-                nd = _normalize_domains(revised, table_names)
-                if nd:
-                    domains = nd
-                    logger.debug("[kb.tags] conn=%s 自检采纳修正版：domains=%s", conn_id, len(domains))
-            else:
-                logger.debug("[kb.tags] conn=%s 自检 unchanged，保留初版", conn_id)
+            _chk_cfg = dict(_tag_cfg)
+            _chk_cfg["timeout"] = min(float(_tag_cfg.get("timeout") or 120), _KB_SELFCHECK_TIMEOUT)
+            try:
+                chk = await _chat_with_beat(
+                    gw.build_provider(_chk_cfg),
+                    [{"role": "user", "content": _domain_selfcheck_prompt(overview, domains, lo, hi)}],
+                    None,
+                    ctx={
+                        "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
+                        "source": "kb_build", "status": "egress-tags-selfcheck",
+                        "context_meta": {"candidate_tables": table_names},
+                    },
+                    on_progress=on_progress, stage="AI 标签提取", phase="tags",
+                    step="selfcheck", step_index=2, step_total=2, percent=50,
+                    p_to=99,
+                )
+                unchanged, revised = _parse_domain_payload(chk.content or "")
+                logger.info("[kb.tags] conn=%s 自检耗时 %.1fs（%s）", conn_id,
+                            time.monotonic() - _t_chk,
+                            "unchanged 保留初版" if unchanged else f"采纳修正版 domains={len(revised)}")
+                if not unchanged and revised:
+                    nd = _normalize_domains(revised, table_names)
+                    if nd:
+                        domains = nd
+                        new_tags += _persist(domains)  # 修正版覆盖式重落（表绑定覆盖）
+                        logger.debug("[kb.tags] conn=%s 自检采纳修正版：domains=%s", conn_id, len(domains))
+                else:
+                    logger.debug("[kb.tags] conn=%s 自检 unchanged，保留初版", conn_id)
+            except Exception as _se:  # noqa: BLE001 - 自检失败不致命，保留第一轮划分
+                logger.warning("[kb.tags] conn=%s 自检调用失败（%.1fs）：%s —— 保留第一轮划分（domains=%s）",
+                               conn_id, time.monotonic() - _t_chk,
+                               str(_se) or type(_se).__name__, len(domains))
 
-    # 兜底：任何路径产出都必须无孤表、域数合法
-    domains = _normalize_domains(domains, table_names)
-
-    # 落库：域 → 标签草案 + 表→域多打标；不再写 desc_drafts
-    tag_props: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for d in domains:
-        tg = d["name"]
-        if tg and tg not in seen:
-            seen.add(tg)
-            tag_props.append({"name": tg, "description": d.get("description") or f"{tg} 领域"})
-    state.knowledge.upsert_tags(conn_id, tag_props)
-    table_tags: dict[str, list[str]] = {}
-    for d in domains:
-        for t in d["tables"]:
-            table_tags.setdefault(t, []).append(d["name"])
-    for t, tags in table_tags.items():
-        state.knowledge.assign_table_tags(conn_id, t, tags)
-
-    logger.info("[kb.tags] conn=%s 领域落库完成：domains=%s new_tags=%s assigned表=%s",
-                conn_id, len(domains), len(tag_props), len(table_tags))
+    # 阶段二完成：tags 条打满（窗口 45→60），真实收尾由 graph 条尾段承接（见 store.build）
+    if on_progress:
+        on_progress("AI 标签提取", 100, None, phase="tags")
+    logger.info("[kb.tags] conn=%s 领域落库完成：domains=%s new_tags=%s",
+                conn_id, len(domains), new_tags)
     return {
         "tables": len(table_names),
         "domains": len(domains),
-        "new_tags": len(tag_props),
+        "new_tags": new_tags,
         "library_size": len(state.knowledge.tags(conn_id)["library"]),
     }
 
@@ -1022,8 +1164,8 @@ async def _annotate_domain_incremental(
     sub_schema["foreign_keys"] = [
         f for f in schema["foreign_keys"] if f["table"] in targets or f["ref_table"] in targets
     ]
-    _samples = state.knowledge._samples.get(conn_id, {}) if state.knowledge._samples.get(conn_id) else {}
-    portraits = _build_ddl_portraits(state, conn_id, sub_schema, _samples)
+    # 增量吸收也走每表一行概述（只判断新表归哪个既有域，无需完整 DDL）
+    overview = _build_domain_overview(state, conn_id, sub_schema)
 
     lib = {t["name"]: t for t in state.knowledge.tags(conn_id)["library"]}
     confirmed = {n: v for n, v in lib.items() if v.get("status") == "confirmed"}
@@ -1050,7 +1192,7 @@ async def _annotate_domain_incremental(
     else:
         provider = gw.build_provider(_tag_cfg)
         resp = await provider.chat(
-            [{"role": "user", "content": _incremental_tag_absorb_prompt(portraits, existing_desc)}],
+            [{"role": "user", "content": _incremental_tag_absorb_prompt(overview, existing_desc)}],
             tools=None,
             ctx={
                 "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
@@ -1248,11 +1390,12 @@ async def annotate_graph(
     if gw.is_effective_mock(provider_cfg):
         logger.debug("[kb.graph] conn=%s mock FK 边", conn_id)
         if on_progress:
-            on_progress("AI 关系识别", 100, None, phase="graph",
+            on_progress("AI 关系识别", 74, None, phase="graph",
                         step="global", step_index=1, step_total=1)
         return _mock_graph_edges(schema)
 
     provider = gw.build_provider(provider_cfg)
+    _t_g = time.monotonic()  # 全局扫描耗时打点
 
     # 上下文：精简 DDL 画像（描述回填 + 取值示例 + FK 内联），与阶段二统一
     _samples = state.knowledge._samples.get(conn_id, {}) if state.knowledge._samples.get(conn_id) else {}
@@ -1275,18 +1418,25 @@ async def annotate_graph(
         '"cardinality":"n:1","confidence":"high/medium/low","reason":"依据"}。\n'
         "只返回 JSON，不要多余文字。"
     )
-    global_resp = await provider.chat(
-        [{"role": "user", "content": global_prompt}], tools=None,
+    global_resp = await _chat_with_beat(
+        provider,
+        [{"role": "user", "content": global_prompt}],
+        None,
         ctx={
             "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
             "source": "kb_build", "status": "egress-graph-global",
             "context_meta": {"candidate_tables": [t["name"] for t in schema.get("tables", [])]},
         },
+        on_progress=on_progress, stage="AI 关系识别", phase="graph",
+        step="global", step_index=1, step_total=2, percent=0,
+        p_to=49,
     )
     global_edges = _parse_graph_edges(global_resp.content or "", schema)
     if not global_edges:
         logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·全局扫描）", conn_id)
     logger.debug("[kb.graph] conn=%s 全局扫描边数=%s", conn_id, len(global_edges))
+    logger.info("[kb.graph] conn=%s 全局扫描耗时 %.1fs（LLM 边 %s）",
+                conn_id, time.monotonic() - _t_g, len(global_edges))
     # 标记来源
     for e in global_edges:
         e["source"] = "llm_global"
@@ -1375,22 +1525,42 @@ async def annotate_graph(
         '"cardinality":"n:1","confidence":"high/medium/low","reason":"说明","status":"confirmed/rejected"}。\n'
         "只返回 JSON，不要多余文字。"
     )
-    verify_resp = await provider.chat(
-        [{"role": "user", "content": verify_prompt}], tools=None,
-        ctx={
-            "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
-            "source": "kb_build", "status": "egress-graph-verify",
-            "context_meta": {"candidate_tables": list(related_tables)},
-        },
-    )
-    verified_edges = _parse_graph_edges(verify_resp.content or "", schema)
+    _t_v = time.monotonic()  # 候选裁决耗时打点
+    verified_edges: list[dict[str, Any]] = []
+    try:
+        # 裁决失败可安全降级（回退全局高置信边），不必吃满推理超时
+        _v_cfg = dict(provider_cfg)
+        _v_cfg["timeout"] = min(float(provider_cfg.get("timeout") or 120), _KB_VERIFY_TIMEOUT)
+        verify_resp = await _chat_with_beat(
+            gw.build_provider(_v_cfg),
+            [{"role": "user", "content": verify_prompt}],
+            None,
+            ctx={
+                "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
+                "source": "kb_build", "status": "egress-graph-verify",
+                "context_meta": {"candidate_tables": list(related_tables)},
+            },
+            on_progress=on_progress, stage="AI 关系识别", phase="graph",
+            step="verify", step_index=2, step_total=2, percent=50,
+            p_to=74,
+        )
+        verified_edges = _parse_graph_edges(verify_resp.content or "", schema)
+        for e in verified_edges:
+            e["source"] = "llm_verify"
+        logger.info("[kb.graph] conn=%s 候选裁决耗时 %.1fs（pool=%s verified=%s）",
+                    conn_id, time.monotonic() - _t_v, len(pool), len(verified_edges))
+    except Exception as _ve:  # noqa: BLE001 - 裁决失败不致命：回退全局高置信边
+        logger.warning("[kb.graph] conn=%s 候选裁决失败（%.1fs）：%s —— 回退全局高置信边（%s 条）",
+                       conn_id, time.monotonic() - _t_v,
+                       str(_ve) or type(_ve).__name__,
+                       sum(1 for e in global_edges if e.get("confidence") == "high"))
     if not verified_edges:
         logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·候选验证 %s 条）", conn_id, len(pool))
-    for e in verified_edges:
-        e["source"] = "llm_verify"
     confirmed_verified = [e for e in verified_edges if e.get("status") != "rejected"]
+    # graph 条 AI 段止步 74（窗口 60→100 映射 89.6）：其后 FK 构图 + 落盘瞬时完成，
+    # 由 run_build_job 置 done 时统一全满——graph 条打满 = 构建完成（无"条满而未完"）
     if on_progress:
-        on_progress("AI 关系识别", 100, None, phase="graph",
+        on_progress("AI 关系识别", 74, None, phase="graph",
                     step="verify", step_index=2, step_total=2)
 
     # 合并：全局边中高置信的保留直用（自检关时全部保留）；第二轮通过项并入
@@ -1454,7 +1624,7 @@ async def _annotate_graph_incremental(
     provider_cfg = _kb_reason_provider_cfg(rt)
     if gw.is_effective_mock(provider_cfg):
         if on_progress:
-            on_progress("AI 关系识别", 100, None, phase="graph",
+            on_progress("AI 关系识别", 74, None, phase="graph",
                         step="incr_global", step_index=1, step_total=1)
         return _mock_graph_edges(sub_schema)  # FK 元数据边（mock 走 FK）
 
@@ -1496,7 +1666,7 @@ async def _annotate_graph_incremental(
     for e in edges:
         e["source"] = "llm_incr"
     if on_progress:
-        on_progress("AI 关系识别", 100, None, phase="graph",
+        on_progress("AI 关系识别", 74, None, phase="graph",
                     step="incr_global", step_index=1, step_total=1)
     logger.info("[kb.graph] conn=%s 增量局部补边完成：subgraph=%s 目标边=%s",
                 conn_id, len(sub_tables), len(edges))

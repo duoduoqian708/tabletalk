@@ -75,6 +75,8 @@ class LLMGateway:
         self.timeout = cfg.get("timeout", 120)
         # 推理强度：off/low/medium/high（None/空/False 视为 off；True 视为 high）
         self.reasoning = cfg.get("reasoning")
+        # 只支持 thinking（无 reasoning_effort 档位）的模型：预算压浅推理（budget_tokens）
+        self.thinking_budget = cfg.get("thinking_budget")
 
     def _request(self, messages: list[dict], tools: list[dict] | None, stream: bool) -> tuple[str, dict, dict]:
         """构造 POST /chat/completions 的 url / payload / headers（chat 与 chat_stream 共用）。"""
@@ -101,8 +103,11 @@ class LLMGateway:
             if effort:
                 payload["reasoning_effort"] = effort
             else:
-                # 不支持 effort 档位的推理模型：仅启用思考
-                payload["thinking"] = {"type": "enabled"}
+                # 不支持 effort 档位的推理模型：仅启用思考；可配预算压浅推理
+                thinking: dict = {"type": "enabled"}
+                if self.thinking_budget:
+                    thinking["budget_tokens"] = self.thinking_budget
+                payload["thinking"] = thinking
         headers: dict = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"

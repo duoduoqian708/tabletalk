@@ -290,3 +290,84 @@ async def test_annotate_domain_selfcheck_param_overrides_runtime_on(app_state, m
     res = await ann.annotate_domain(st, conn, schema=schema, self_check=False)
     assert len(prov.rounds) == 1
     assert res["domains"] >= 1
+
+
+class _DomainProvSelfcheckFail:
+    """假 provider：第一轮划分正常，第二轮自检直接抛异常（模拟超时/网络失败）。"""
+
+    def __init__(self) -> None:
+        self.rounds = 0
+
+    async def chat(self, messages, tools=None, ctx=None):
+        self.rounds += 1
+        if "【初版划分】" in messages[0]["content"]:
+            raise RuntimeError("selfcheck ReadTimeout")
+        return type("R", (), {"content": json.dumps([
+            {"name": "订单域", "description": "订单一类", "tables": ["orders", "order_items"], "reason": "核心"},
+            {"name": "客户域", "description": "客户", "tables": ["customers"], "reason": ""},
+        ])})()
+
+
+async def test_annotate_domain_selfcheck_failure_keeps_round1(app_state, monkeypatch):
+    """自检抛异常 → 不致命：第一轮划分已先落库，标签不丢（回归：曾 ReadTimeout→tags=0）。"""
+    from app.knowledge import annotator as ann
+
+    st = app_state
+    conn = "c-dom-selfcheck-fail"
+    schema = _dom_schema()
+    await _setup_kb(st, conn, schema)
+    prov = _DomainProvSelfcheckFail()
+    monkeypatch.setattr(ann.gw, "is_effective_mock", lambda cfg: False)
+    monkeypatch.setattr(ann.gw, "build_provider", lambda cfg: prov)
+
+    res = await ann.annotate_domain(st, conn, schema=schema)  # 不应抛
+    assert res["domains"] >= 1 and res["new_tags"] >= 1
+    names = {t["name"] for t in st.knowledge.tags(conn)["library"]}
+    assert "订单域" in names and "客户域" in names, "自检失败不得清掉第一轮划分"
+    assert prov.rounds == 2  # 划分 + 自检（自检失败但已调用）
+
+
+async def test_build_domain_overview_lines_and_cap(app_state):
+    """阶段二概述：每表一行（表名：描述，主要列：…）；库注释优先；噪音列滤除；列数封顶。"""
+    from app.knowledge import annotator as ann
+
+    schema = {
+        "tables": [
+            {"name": "orders", "comment": "订单主表", "column_count": 9},
+            {"name": "audit_log", "comment": "", "column_count": 1},
+        ],
+        "columns": [
+            {"table": "orders", "name": "id", "pk": True, "comment": "订单号"},
+            *[{"table": "orders", "name": f"f{i}", "pk": False, "comment": ""} for i in range(8)],
+            {"table": "audit_log", "name": "created_at", "pk": False, "comment": ""},
+        ],
+        "foreign_keys": [],
+    }
+    ov = ann._build_domain_overview(app_state, "c-ov", schema)
+    lines = ov.splitlines()
+    assert len(lines) == 2, "每张表一行"
+    orders = next(ln for ln in lines if ln.startswith("orders"))
+    assert orders.startswith("orders：订单主表，主要列：订单号")  # 库注释 + 列注释优先
+    assert "f6" in orders and "f7" not in orders, "超过 8 列（id+f0..f6）止步省略"
+    assert "…" in orders
+    audit = next(ln for ln in lines if ln.startswith("audit_log"))
+    assert audit == "audit_log", "时间戳噪音列不进概述"; assert "created_at" not in audit
+
+
+async def test_build_domain_overview_with_injected_ai_comments(app_state):
+    """概述回退阶段一 AI 注释（库注释缺时用 AI 注释）。"""
+    from app.knowledge import annotator as ann
+
+    st = app_state
+    conn = "c-ov-ai"
+    schema = {
+        "tables": [{"name": "t1", "comment": "", "column_count": 1}],
+        "columns": [{"table": "t1", "name": "c1", "comment": "", "type": "TEXT"}],
+        "foreign_keys": [],
+    }
+    await _setup_kb(st, conn, schema)  # 先建表壳，AI 草案才能落进知识库
+    # 造一个阶段一 AI 列注释（draft）进知识库
+    st.knowledge.annotate_drafts(conn, [{"table": "t1", "column": "c1", "comment": "状态列"}])
+    ov = ann._build_domain_overview(st, conn, schema)
+    line = ov.splitlines()[0]
+    assert "状态列" in line and "t1" in line and "主要列" in line

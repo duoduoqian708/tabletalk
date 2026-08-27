@@ -72,6 +72,7 @@ class RuntimeSettings:
     kb_sample_rows: int = 15
     kb_ai_annotation_samples: bool = False
     kb_build_self_check: bool = True   # 阶段2/3 审校式自检开关（默认开，可运行时关）
+    kb_build_reasoning_effort: str = "low"  # KB 阶段3 推理档位（off/low/medium/high；默认浅推理 low，不搞深度）
     kb_sync_minutes: int = 30
     privacy_mode: str = "standard"
     query_max_rows: int = 1000
@@ -151,6 +152,7 @@ class RuntimeSettings:
             "kb_sample_rows": self.kb_sample_rows,
             "kb_ai_annotation_samples": self.kb_ai_annotation_samples,
             "kb_build_self_check": self.kb_build_self_check,
+            "kb_build_reasoning_effort": self.kb_build_reasoning_effort,
             "kb_sync_minutes": self.kb_sync_minutes,
             "privacy_mode": self.privacy_mode,
             "query_max_rows": self.query_max_rows,
@@ -207,6 +209,7 @@ _PERSISTED_KEYS = {
     "kb_sample_rows",
     "kb_ai_annotation_samples",
     "kb_build_self_check",
+    "kb_build_reasoning_effort",
     "privacy_mode",
     "query_max_rows",
     "pool_size",
@@ -283,6 +286,7 @@ class SettingsStore:
             "kb_sample_rows": env.kb_sample_rows,
             "kb_ai_annotation_samples": env.kb_ai_annotation_samples,
             "kb_build_self_check": True,
+            "kb_build_reasoning_effort": "low",
             "privacy_mode": "standard",
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
@@ -440,6 +444,7 @@ class SettingsStore:
             kb_sample_rows=data.get("kb_sample_rows", 15),
             kb_ai_annotation_samples=data.get("kb_ai_annotation_samples", False),
             kb_build_self_check=data.get("kb_build_self_check", True),
+            kb_build_reasoning_effort=data.get("kb_build_reasoning_effort", "low"),
             privacy_mode=pm,
             query_max_rows=data.get("query_max_rows", 1000),
             pool_size=data.get("pool_size", 3),
@@ -490,6 +495,7 @@ class SettingsStore:
                         target[model_k] = patch[legacy_k]
             for k in ("gate_review_threshold", "gate_rules",
                       "kb_sample_rows", "kb_ai_annotation_samples", "kb_build_self_check",
+                      "kb_build_reasoning_effort",
                       "privacy_mode",
                       "query_max_rows", "pool_size"):
                 if k in patch:
@@ -497,6 +503,10 @@ class SettingsStore:
                     if k == "privacy_mode":
                         if v not in ("strict", "standard", "open"):
                             continue
+                    if k == "kb_build_reasoning_effort":
+                        if v not in ("off", "low", "medium", "high"):
+                            continue
+                        v = str(v)
                     if k in ("query_max_rows", "pool_size"):
                         try:
                             vi = int(v)

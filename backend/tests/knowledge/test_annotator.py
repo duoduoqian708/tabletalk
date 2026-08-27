@@ -45,20 +45,43 @@ def test_mock_comments_can_include_samples():
     assert "示例取值" in id_item["comment"]
 
 
-def _reason_rt(timeout=60, cap=None, mid=""):
+def _reason_rt(timeout=60, cap=None, mid="", effort="low"):
     return SimpleNamespace(
         provider_config=lambda: {"provider": "cloud", "model": "m", "timeout": timeout},
         default_ai_model=mid,
         ai_models=[SimpleNamespace(id=mid, capabilities=cap)] if mid else [],
+        kb_build_reasoning_effort=effort,
     )
 
 
-def test_kb_reason_provider_cfg_extends_timeout_and_reasoning():
+def test_kb_reason_provider_cfg_extends_timeout_and_shallow_default():
     cfg = _kb_reason_provider_cfg(
         _reason_rt(timeout=60, cap={"reasoning": True, "reasoning_effort": "high"}, mid="m")
     )
     assert cfg["timeout"] == 300.0, "推理调用读超时应放宽到 300s（不被 120s 掐断）"
-    assert cfg["reasoning"] == "high"
+    assert cfg["reasoning"] == "low", "默认浅推理（不搞深度）→ 支持档位模型直接传 low"
+
+
+def test_kb_reason_provider_cfg_effort_knob_overrides():
+    """kb_build_reasoning_effort=medium/high → 跟随档位；off → 显式关思考。"""
+    rt = _reason_rt(timeout=60, cap={"reasoning": True, "reasoning_effort": "high"}, mid="m")
+    assert _kb_reason_provider_cfg(SimpleNamespace(**{**vars(rt), "kb_build_reasoning_effort": "high"}))["reasoning"] == "high"
+    assert _kb_reason_provider_cfg(SimpleNamespace(**{**vars(rt), "kb_build_reasoning_effort": "medium"}))["reasoning"] == "medium"
+    off = _kb_reason_provider_cfg(SimpleNamespace(**{**vars(rt), "kb_build_reasoning_effort": "off"}))
+    assert off["reasoning"] == "off", "档位 off → 阶段3 也走普通生成"
+
+
+def test_kb_reason_provider_cfg_thinking_only_gets_budget_shallow():
+    """只支持 thinking 的模型（如 DeepSeek）：档位 low → thinking + budget_tokens=1024 压浅推理。"""
+    cfg = _kb_reason_provider_cfg(
+        _reason_rt(timeout=60, cap={"reasoning": True}, mid="m")  # 无 reasoning_effort
+    )
+    assert cfg["reasoning"] == "thinking", "thinking-only 模型 → 只启思考"
+    assert cfg["thinking_budget"] == 1024, "浅推理 → budget_tokens 1024 压思考链"
+
+    rt_hi = _reason_rt(timeout=60, cap={"reasoning": True}, mid="m", effort="high")
+    hi = _kb_reason_provider_cfg(rt_hi)
+    assert hi["thinking_budget"] == 8192, "高档 → 更大预算"
 
 
 def test_kb_reason_provider_cfg_respects_user_longer_timeout():
@@ -383,3 +406,35 @@ async def test_annotate_graph_selfcheck_param_overrides_runtime(app_state, monke
     verify_prompt = prov.rounds[1][0]
     assert "order_item.product_id → product.id" not in verify_prompt  # 显式关 → 不并入低置信
     assert "order_item.order_id → order.id" in verify_prompt          # 程序候选照旧
+
+
+class _GraphProvVerifyFail:
+    """假 provider：第一轮全局扫描正常，第二轮候选裁决抛异常（模拟超时）。"""
+
+    def __init__(self) -> None:
+        self.rounds = 0
+
+    async def chat(self, messages, tools=None, ctx=None):
+        self.rounds += 1
+        if "【待裁决候选关系】" in messages[0]["content"]:
+            raise RuntimeError("verify ReadTimeout")
+        return type("R", (), {"content": json.dumps([
+            {"from_table": "order", "from_col": "customer_id", "to_table": "customer",
+             "to_col": "id", "cardinality": "n:1", "confidence": "high", "reason": "订单归属客户"},
+            {"from_table": "order_item", "from_col": "product_id", "to_table": "product",
+             "to_col": "id", "cardinality": "n:1", "confidence": "medium", "reason": "低置信发现"},
+        ])})()
+
+
+async def test_annotate_graph_verify_failure_falls_back_high_conf(app_state, monkeypatch):
+    """裁决轮抛异常 → 不致命：回退全局高置信边（低置信边丢弃，不再把图边弄丢）。"""
+    from app.knowledge import annotator as ann
+
+    prov = _GraphProvVerifyFail()
+    monkeypatch.setattr(ann.gw, "is_effective_mock", lambda cfg: False)
+    monkeypatch.setattr(ann.gw, "build_provider", lambda cfg: prov)
+    edges = await ann.annotate_graph(app_state, "c", _graph_schema_v2())  # 不应抛
+    assert len(edges) >= 1, "全局高置信边应保留"
+    assert any(e["from_col"] == "customer_id" and e["confidence"] == "high" for e in edges)
+    assert not any(e.get("source") == "llm_verify" for e in edges), "裁决失败 → 无通过项"
+    assert prov.rounds == 2  # 全局 + 裁决（裁决失败但已调用）

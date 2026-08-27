@@ -14,15 +14,18 @@ def test_overall_window_monotonic_mapping():
     assert _overall("annotate", 100) == 45
     assert _overall("tags", 50) == 52           # 45 + 15*0.5
     assert _overall("graph", 0) == 60
-    assert _overall("graph", 100) == 78
-    assert _overall(None, 98) == 98             # 落盘（全局原始）
-    # 典型构建序列：结构性 10 → 阶段一 0..100 → 阶段二 → 阶段三 → 构图/向量化/落盘 → 完成
+    # graph 条窗口 60→100：AI 段（global/verify）止步 74，其后 FK 构图+落盘瞬时、
+    # 无独立进度帧，由 done 一帧收满——"最后一段补完=完成"
+    assert _overall("graph", 74) == 89
+    assert _overall("graph", 100) == 100        # 窗口终点=完成
+    assert _overall(None, 98) == 98             # 发现结构/抽样（全局原始）直接透传
+    # 典型构建序列：结构性 10 → 阶段一 0..100 → 阶段二 → 阶段三(AI 0..74) → 落盘(done 100)
     seq = [
         _overall(None, 10),                # 发现结构
         _overall("annotate", 0), _overall("annotate", 33), _overall("annotate", 100),
-        _overall("tags", 0), _overall("tags", 50), _overall("tags", 100),
-        _overall("graph", 0), _overall("graph", 100),
-        _overall(None, 80), _overall(None, 95), _overall(None, 98), 100,
+        _overall("tags", 0), _overall("tags", 100),
+        _overall("graph", 0), _overall("graph", 49), _overall("graph", 74),
+        100,
     ]
     assert seq == sorted(seq), f"overall 应单调不降：{seq}"
 
@@ -37,6 +40,11 @@ def test_new_progress_has_steps_metadata_and_substep_fields():
     assert tags["steps"] == [
         {"key": "partition", "label": "领域划分"},
         {"key": "selfcheck", "label": "审校自检"},
+    ]
+    graph = next(ph for ph in p["phases"] if ph["key"] == "graph")
+    assert graph["steps"] == [
+        {"key": "global", "label": "全局扫描"},
+        {"key": "verify", "label": "候选裁决"},
     ]
     # 动态子步字段初始为空
     for ph in p["phases"]:

@@ -288,9 +288,17 @@ async def test_retrieve_returns_table_cards(tmp_path):
 
 
 async def test_vstore_single_table_system(tmp_path):
-    """一表一 chunk：vstore 恰 N 表条 chunk，collection=table，payload 进 chunk。"""
+    """一表一 chunk（确认后建立）：构建期不向量化（确认前 draft 不入文），
+    确认全部后才恰 N 表条 chunk，collection=table，payload 进 chunk。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples(), enable_ai_annotation=False)
+    # 构建期不预嵌：确认前 vstore 无任何 table chunk（向量延迟到人工确认后）
+    assert len(kb._vector_store("c1")) == 0
+    kb.annotate_drafts("c1", [
+        {"table": "orders", "comment": "订单主表"},
+        {"table": "customers", "comment": "客户主表"},
+    ])
+    await kb.confirm_all("c1")
     vs = kb._vector_store("c1")
     assert len(vs) == 2
     chunk = vs._chunks["tbl-orders"]
@@ -387,7 +395,8 @@ async def test_layout_persists_across_instances_without_reembed(tmp_path):
 
 
 async def test_confirm_reembeds_chunk_text_and_vector(tmp_path):
-    """confirm 前 chunk 停留纯结构文本；确认后富知识（业务注释/可选值/示例）进 chunk，向量同步变化。"""
+    """向量化延迟到确认：确认前无 table chunk（构建期不预嵌）；确认后富知识
+    （业务注释/可选值/示例）进 chunk 文本，一表一 chunk 建立。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), enable_ai_annotation=False)
     kb.annotate_drafts("c1", [
@@ -395,18 +404,15 @@ async def test_confirm_reembeds_chunk_text_and_vector(tmp_path):
         {"table": "orders", "column": "status", "comment": "订单状态",
          "values": "P=待付款；S=已发货", "example": "P"},
     ])
-    before = kb._vector_store("c1")._chunks["tbl-orders"]
-    # 确认前：草案不入文 → chunk 无业务注释/取值
-    assert "订单主表" not in before.text
-    assert "订单状态" not in before.text and "待付款" not in before.text and "可选值" not in before.text
-    before_vec = list(before.vector)
+    # 确认前：草案不入文，且构建期未预嵌 → vstore 无该表 chunk
+    assert "tbl-orders" not in kb._vector_store("c1")._chunks
 
     assert await kb.confirm("c1", "orders") == 2
 
     after = kb._vector_store("c1")._chunks["tbl-orders"]
-    assert "订单主表" in after.text
+    assert "订单主表" in after.text   # 确认后：注释/取值/示例入文
     assert "可选值：P=待付款；S=已发货" in after.text and "示例为P" in after.text
-    assert after.vector != before_vec  # 文本变 → HashingEmbedder 确定性向量必变
+    assert after.vector  # 有向量（非空）
     assert after.payload["draft_count"] == 0
 
 
@@ -441,10 +447,9 @@ async def test_confirm_all_batches_single_reembed(tmp_path):
 
 
 async def test_reject_reverts_chunk_rich_text(tmp_path):
-    """撤下已确认内容 → chunk 富知识出文回结构壳，向量同步回退（与确认前一致）。"""
+    """撤下已确认内容 → chunk 富知识出文回结构壳，向量重算（撤下入口同样走即时重嵌）。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), enable_ai_annotation=False)
-    structural_vec = list(kb._vector_store("c1")._chunks["tbl-orders"].vector)
     kb.annotate_drafts("c1", [{
         "table": "orders", "column": "status",
         "comment": "订单状态", "values": "P=待付款", "example": "P",
@@ -452,9 +457,10 @@ async def test_reject_reverts_chunk_rich_text(tmp_path):
     await kb.confirm("c1", "orders", "status")
     rich = kb._vector_store("c1")._chunks["tbl-orders"]
     assert "可选值：P=待付款" in rich.text and "订单状态" in rich.text
+    rich_vec = list(rich.vector)
 
     assert await kb.reject_comment("c1", "orders", "status") == 1
 
     after = kb._vector_store("c1")._chunks["tbl-orders"]
     assert "订单状态" not in after.text and "待付款" not in after.text and "可选值" not in after.text
-    assert after.vector == structural_vec  # 文本回到同一结构壳 → 确定性向量一致
+    assert after.vector != rich_vec  # 文本回退 → 确定性向量变化

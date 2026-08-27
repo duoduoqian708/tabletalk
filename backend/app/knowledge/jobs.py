@@ -23,6 +23,12 @@ STAGES = ["发现结构", "抽样取值", "生成注释文档", "构图", "向�
 
 # 三阶段独立进度条 + 每阶段子步（段7）：阶段一=逐表注释；阶段二=划分→审校自检；
 # 阶段三=全局扫描→候选裁决；子步由 annotator 内部 on_progress 上报。
+#
+# 「最后一段补完 = 完成」不变式：graph 条窗口 60→100，AI 段（global/verify）内部
+# 0→74（映射 60→89.6），其后 FK 构图 + 落盘瞬时完成（无独立进度段），
+# run_build_job 收尾时统一置满各条 + done。graph 条打满 = 构建完成 → 关浮卡可审核。
+# 向量化不占构建进度：它延迟到人工确认后（confirm → _reembed_tables），确认前
+# AI 草案不入向量文本，构建期嵌入纯属白做。
 PHASES = [
     {"key": "annotate", "label": "AI 正在处理", "steps": [
         {"key": "per_table", "label": "逐表注释"},
@@ -38,12 +44,14 @@ PHASES = [
 ]
 
 # 全局 overall 条权重窗口（段7.3）：phase 内部 0-100 映射到全局单调进度；
-# phase=None 的全局原始值（发现结构/抽样/构图/向量化/落盘）直接透传。
+# phase=None 的全局原始值（发现结构/抽样）直接透传。
+# graph 窗口 60→100：AI 段 0→74，收尾（FK 构图+落盘）瞬时由 done 一帧收满——
+# 不存在"阶段条满但构建未完"的假完成段。
 # 窗口须高于前置原始值上界（非授权时抽样跳过，自动取窗口起点）。
 PHASE_WINDOW = {
     "annotate": (16, 45),
     "tags":     (45, 60),
-    "graph":    (60, 78),
+    "graph":    (60, 100),
 }
 
 BuildFn = Callable[[Callable[..., None]], Awaitable[dict]]
@@ -75,6 +83,7 @@ def _new_progress() -> dict[str, Any]:
         "phases": [
             {"key": p["key"], "label": p["label"], "percent": 0, "detail": None,
              "step": None, "step_label": None, "step_index": None, "step_total": None,
+             "busy": False,
              "steps": [{"key": s["key"], "label": s["label"]} for s in p.get("steps", [])]}
             for p in PHASES
         ],
@@ -158,9 +167,10 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
         # step: 子步 key（per_table/partition/selfcheck/global/verify）+ step_index/total。
         def report(stage: str, percent: int, detail: str | None = None,
                    phase: str | None = None, step: str | None = None,
-                   step_index: int | None = None, step_total: int | None = None) -> None:
+                   step_index: int | None = None, step_total: int | None = None,
+                   busy: bool = False, check_cancel: bool = True) -> None:
             nonlocal last_phase, last_step
-            if job.cancelled:
+            if job.cancelled and check_cancel:
                 raise asyncio.CancelledError()
             last_phase = phase
             last_step = step
@@ -181,6 +191,8 @@ async def run_build_job(job: BuildJob, build_fn: BuildFn) -> dict:
                         p["step_index"] = step_index
                         p["step_total"] = step_total
                         p["step_label"] = _step_label(phase, step) if step else None
+                        # 心跳 busy 帧：LLM 调用期间进度不变但跑光动画；真实帧复位
+                        p["busy"] = bool(busy)
                         break
             job.event.set()  # 唤醒 SSE 订阅者
 
