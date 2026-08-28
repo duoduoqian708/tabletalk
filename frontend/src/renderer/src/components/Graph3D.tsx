@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MIN_R, colorFor, radiusFor, spherePositions, project } from '@renderer/lib/sphere'
+import { graphFontBasis } from '@renderer/lib/graphFont'
 import { useI18n } from '@renderer/store/i18n'
 
 export interface GraphNode {
@@ -65,6 +66,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
   const yawRef = useRef(0.55)
   const pitchRef = useRef(0.35)
   const zoomRef = useRef(1)
+  const uzoomRef = useRef(1)   // 用户整幅缩放：只作用于 project 的位置比例，不重排绘制
   const pausedRef = useRef(paused)
   const searchFlashRef = useRef<string | null>(null)
   const flashUntilRef = useRef(0)
@@ -324,7 +326,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
     }
 
-    const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current, D, W, H })
+    const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current, uzoom: uzoomRef.current, D, W, H })
 
     // 邻居集合缓存：选中期间每帧都要点亮相邻节点，重建 Set + 遍历全部 FK 的代价不必要
     let hlCache: { focus: number; fkLen: number; n: number; set: Set<number> } | null = null
@@ -355,7 +357,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
 
     let raf = 0
     let frame = 0
-    let lastFs = -1
     // 复用投影缓冲：projBy 按节点下标索引（边端点/弹窗取用）；orderIdx 是深度序下标数组。
     // sort 后按下标取 projBy[a] 仍是节点 a（历史高亮错乱 bug 的教训），深度序只存在 orderIdx 里。
     let projBy: { i: number; p: ReturnType<typeof rotate> }[] = []
@@ -524,6 +525,20 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         if (a < 0 || b < 0) return
         const A = projBy[a], B = projBy[b]
         const lit = focus != null && (a === focus || b === focus)
+        // 自环（表内自关联，如 parent_id）：节点上方画椭圆环 + 流动粒子，代替退化的零长度线
+        if (a === b) {
+          const r2 = Math.max(MIN_R, RADII[a] * Math.min(1.5, A.p.scale))
+          const lr = Math.max(9, Math.min(16, r2 * 0.62))         // 环随节点大小缩放但保上下限
+          const lx = A.p.x, ly = A.p.y - r2 - lr * 0.8 - 2         // 环心在节点正上方
+          ctx.strokeStyle = lit ? 'rgba(52,245,197,0.8)' : 'rgba(150,170,220,0.45)'
+          ctx.lineWidth = lit ? 1.8 : 1.2
+          ctx.beginPath(); ctx.ellipse(lx, ly, lr, lr * 0.8, 0, 0, Math.PI * 2); ctx.stroke()
+          const ph = (t / 1600 + a * 0.13) % 1
+          const ang = ph * Math.PI * 2
+          ctx.fillStyle = lit ? 'rgba(52,245,197,.95)' : 'rgba(150,170,220,.55)'
+          ctx.beginPath(); ctx.arc(lx + lr * Math.cos(ang), ly + lr * 0.8 * Math.sin(ang), lit ? 2.1 : 1.4, 0, 7); ctx.fill()
+          return
+        }
         const ra = Math.max(MIN_R, RADII[a] * Math.min(1.5, A.p.scale))
         const rb = Math.max(MIN_R, RADII[b] * Math.min(1.5, B.p.scale))
         const dx = B.p.x - A.p.x, dy = B.p.y - A.p.y
@@ -542,6 +557,9 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         ctx.fillStyle = lit ? 'rgba(52,245,197,.95)' : 'rgba(120,150,205,.3)'
         ctx.beginPath(); ctx.arc(qx, qy, lit ? 2.1 : 1.2, 0, 7); ctx.fill()
       })
+
+      // 每帧读一次档位 → 基准字号（档位变化下一帧即生效；不随画布缩放）
+      const fontBasis = graphFontBasis()
 
       for (let oi = 0; oi < orderIdx.length; oi++) {
         const i = orderIdx[oi]
@@ -605,11 +623,10 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           ctx.stroke()
         }
         if (!miniRef.current) {
-          const fs = isFocus ? 12.8 : Math.min(12, 9.5 + p.scale * 2.2)
-          if (fs !== lastFs) {
-            ctx.font = `600 ${fs}px var(--sans, sans-serif)`
-            lastFs = fs
-          }
+          // 档位值即真实字号：非焦点直接渲染 fontBasis，焦点 +1.5 高亮；不随画布/透视缩放
+          const fs = isFocus ? fontBasis + 1.5 : fontBasis
+          // canvas font 不解析 CSS 变量（var() 会被整行忽略、回退默认 10px），必须字面量字体栈
+          ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
           ctx.textAlign = 'center'
           ctx.globalAlpha = lit || isFlash ? 1 : 0.45 + depth * 0.4
           // 深色底衬两次 fillText 替代 shadowBlur（阴影走软件渲染路径，是每帧文字绘制的性能悬崖）
@@ -687,7 +704,8 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
       auto = 0; lastAct = performance.now()
-      zoomRef.current = Math.max(0.5, Math.min(2.4, zoomRef.current * (e.deltaY < 0 ? 1.09 : 1 / 1.09)))
+      const z = uzoomRef.current
+      uzoomRef.current = Math.max(0.5, Math.min(2.2, z * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
       cancelFlight()
     }
     const onClick = (e: MouseEvent): void => {

@@ -1549,6 +1549,30 @@ body.resizing {
 .set-row.inline .tg { margin-left: 0; }
 .set-row.inline .tg + .hint { flex: 1; }
 
+/* font preview row — graph font size selector */
+.set-row-col { gap: 8px; }
+.font-preview-row {
+  display: flex; flex-direction: row; align-items: flex-end; gap: 6px;
+  padding: 8px; width: 100%;
+}
+.font-preview-pill {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 10px 4px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-2); cursor: pointer;
+  transition: all 0.16s cubic-bezier(.16,1,.3,1);
+}
+.font-preview-pill:hover { border-color: var(--line-strong); background: var(--panel); }
+.font-preview-pill.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 1px 6px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.font-preview-text {
+  font-weight: 600; color: var(--ink); line-height: 1.3;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.font-preview-pill.on .font-preview-text { color: var(--accent-ink); }
+
 .p-b { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 
 .proxy-rows { opacity: 0.42; transition: opacity 0.18s; pointer-events: none; }
@@ -5630,7 +5654,7 @@ tr.clickable.open { background: var(--accent-dim); }
 }
 .trg2d-node-name {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--graph-node-font, 10.5px);
   fill: var(--ink-dim);
   dominant-baseline: middle;
   pointer-events: none;
@@ -5639,7 +5663,7 @@ tr.clickable.open { background: var(--accent-dim); }
 /* 文字描边背景层：垫在 .trg2d-node-name 之下，半透明深色描边遮挡穿过的边线 */
 .trg2d-node-name-bg {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--graph-node-font, 10.5px);
   fill: none;
   stroke: var(--void-1, #0d1017);
   stroke-width: 3.5px;
@@ -5648,19 +5672,13 @@ tr.clickable.open { background: var(--accent-dim); }
   pointer-events: none;
   letter-spacing: 0.01em;
 }
-/* 连线感应带光圈：hover 时出现，脉冲动画引导拖拽 */
-.trg2d-link-ring {
-  fill: none;
-  stroke: var(--accent);
+/* 4 连线锚点（编辑态拖出/拖入点）：hover 节点或拖线时浮现 */
+.trg2d-anchor {
+  fill: var(--panel);
+  stroke: var(--accent, #34f5c5);
   stroke-width: 1.5;
-  stroke-dasharray: 3.5 2.5;
   pointer-events: none;
-  opacity: 0.85;
-  animation: trg2d-ring-pulse 1.1s ease-in-out infinite;
-}
-@keyframes trg2d-ring-pulse {
-  0%, 100% { opacity: 0.4; transform: scale(1); }
-  50%      { opacity: 0.9; transform: scale(1.12); }
+  transition: r 60ms ease;
 }
 /* 排除表：灰显半透明，整体禁交互 */
 .trg2d-node.is-excluded { opacity: 0.35; filter: grayscale(1); pointer-events: none; }
@@ -5728,6 +5746,60 @@ tr.clickable.open { background: var(--accent-dim); }
   stroke-linecap: round;
 }
 .trg2d-edge.is-sel .trg2d-edge-ticks line { stroke: var(--amber); }
+/* 自环（表内自关联，如 parent_id）：青绿加粗，与普通外连区分 */
+.trg2d-edge.is-self .trg2d-edge-line {
+  stroke: var(--accent, #34f5c5);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.trg2d-edge.is-self:hover .trg2d-edge-line,
+.trg2d-edge.is-self.is-sel .trg2d-edge-line { stroke: var(--g-edge-hot); stroke-width: 3; }
+/* ── 边悬停信息卡：图与左侧列表共用（fixed 随光标，可换行，绝不溢出） ── */
+.edge-tip {
+  position: fixed;
+  z-index: 100;
+  max-width: 260px;
+  min-width: 130px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+.edge-tip-title { color: var(--ink-bright); font-weight: 600; overflow-wrap: anywhere; word-break: break-all; }
+.edge-tip-content {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
+.edge-tip-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.edge-tip-card {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--accent-bright, var(--amber));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.edge-tip-meta { color: var(--accent-bright, var(--amber)); font-size: 9.5px; }
+.edge-tip-body {
+  color: var(--ink-dim);
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
 
 /* ── 连线预览 ── */
 .trg2d-preview path {

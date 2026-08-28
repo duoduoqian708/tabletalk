@@ -747,7 +747,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
 <div className="trg2d-split">
                     <GraphEdgeList edges={trgEdges(overview)} activeKey={hlEdgeKey}
                       onPick={(key) => setHlEdgeKey((cur) => (cur === key ? null : key))} />
-                    <div className="kb-trg2d-wrap">
+                    <div className="kb-trg2d-wrap" style={{ '--graph-node-font': '10.5px' } as React.CSSProperties}>
                       <button type="button" className="trg2d-reset" onClick={handleResetLayout}
                         title={t('kb.resetLayoutTitle')}>⟳ {t('kb.resetLayout')}</button>
                       <TableRelationGraph2D
@@ -762,6 +762,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                           onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
                           onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}
                           onLayoutChange={handleLayoutChange}
+                          onTableClick={(name) => setSelTable((prev) => (prev === name ? null : name))}
                         />
                       </div>
                   </div>

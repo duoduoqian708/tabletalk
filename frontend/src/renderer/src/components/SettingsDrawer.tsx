@@ -9,6 +9,7 @@ import type { SensitiveEntry } from '@renderer/api/types'
 import type { AiModelConfig, EmbeddingModelConfig, SettingsPublic, SettingsPatch } from '@renderer/api/settings'
 import { SkillPlaza } from './SkillPlaza'
 import { useI18n } from '@renderer/store/i18n'
+import { getGraphFontLevel, setGraphFontLevel, GRAPH_FONT_LEVELS } from '@renderer/lib/graphFont'
 
 interface Props {
   open: boolean
@@ -201,6 +202,9 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
     try { localStorage.setItem('tabletalk-theme', t) } catch { /* ignore */ }
     document.documentElement.setAttribute('data-theme', t)
   }
+  // 图上节点字号档位（1..5），localStorage 记忆
+  const [graphFont, setGraphFont] = useState<number>(() => getGraphFontLevel())
+  const applyGraphFont = (l: number): void => { setGraphFontLevel(l); setGraphFont(l) }
 
   // 平台级运行参数（安全闸门 / 通用）
   const [settings, setSettings] = useState<SettingsPublic | null>(null)
@@ -740,6 +744,24 @@ export function SettingsDrawer({ open, onClose, onNewConnection, onEditConnectio
                         </button>
                       </div>
                       <span className="set-hint">{t('settings.languageHint')}</span>
+                    </div>
+                    <div className="set-row set-row-col">
+                      <label>{t('settings.graphFont')}</label>
+                      <div className="font-preview-row">
+                        {GRAPH_FONT_LEVELS.map((px, i) => {
+                          const lv = i + 1
+                          return (
+                            <button
+                              key={lv}
+                              className={`font-preview-pill${graphFont === lv ? ' on' : ''}`}
+                              onClick={() => applyGraphFont(lv)}
+                            >
+                              <span className="font-preview-text" style={{ fontSize: `${px}px` }}>users</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <span className="set-hint">{t('settings.graphFontHint')}</span>
                     </div>
                   </div>
                 </div>

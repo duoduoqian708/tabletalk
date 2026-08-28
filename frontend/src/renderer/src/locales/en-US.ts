@@ -88,6 +88,8 @@ export const enUS: Messages = {
     sub: 'Platform-level · independent of data source',
     language: 'Language',
     languageHint: 'Switch UI language, applies instantly',
+    graphFont: 'Graph node font size',
+    graphFontHint: '1st level = current size · 5 levels · independent of canvas zoom',
     lang: {
       zh: '中文',
       en: 'English',

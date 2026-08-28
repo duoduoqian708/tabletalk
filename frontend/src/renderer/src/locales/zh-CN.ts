@@ -86,6 +86,8 @@ export const zhCN = {
     sub: '平台级 · 与数据源无关',
     language: '语言',
     languageHint: '切换界面语言，立即生效',
+    graphFont: '图上节点字号',
+    graphFontHint: '最小档为当前字号 · 5 档可选 · 不随画布缩放',
     lang: {
       zh: '中文',
       en: 'English',
