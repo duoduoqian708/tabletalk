@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { patchTable, type TableEditInput } from '@renderer/api/knowledge'
-import type { KbColumnView, KnowledgeOverview, RouteResult } from '@renderer/api/types'
+import { patchTable, fieldHistory, applyFieldHistory, type TableEditInput } from '@renderer/api/knowledge'
+import type { FieldHistoryItem, KbColumnView, KnowledgeOverview, RouteResult, TagInfo } from '@renderer/api/types'
 import type { GraphNode as Graph3DNode, GraphEdge as Graph3DEdge } from './Graph3D'
 import { useConnections } from '@renderer/store/connections'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useKbGate } from '@renderer/store/kbgate'
 import { useI18n } from '@renderer/store/i18n'
-import { assignUniqueColors, getTagColor, TAG_COLORS, loadColorMap, saveColorMap } from '@renderer/utils/tagColors'
+import { assignUniqueColors, getTagColor, TAG_COLORS } from '@renderer/utils/tagColors'
 import { toastMsg } from '@renderer/utils/toast'
 import { tagColorForTable } from '@renderer/lib/colors'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { Graph3D } from './Graph3D'
-import { TableRelationGraph2D } from './TableRelationGraph2D'
+import { TableRelationGraph2D, computeInitialLayout } from './TableRelationGraph2D'
+import { GraphEdgeList } from './GraphEdgeList'
 import { KbHistoryDrawer } from './KbHistoryDrawer'
 import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hooks/useTrg2d'
 
@@ -23,15 +25,16 @@ import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hook
    右详情面板两块：向量化片段（可编辑覆盖） / 元数据（type 固定 table_schema）
    ═══════════════════════════════════════════════ */
 
-function Tag({ name, status, onConfirm, onReject }: {
+function Tag({ name, status, color, onConfirm, onReject }: {
   name: string
   status: string
+  color?: string
   onConfirm: () => void
   onReject: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   return (
-    <span className={`tag-chip ${status}`}>
+    <span className={`tag-chip ${status}`} style={{ '--tag-c': color } as React.CSSProperties}>
       {name}
       {status === 'draft' && (
         <span className="tag-acts">
@@ -67,12 +70,7 @@ function NewTagDialog({ connId, onClose }: {
     setSaving(true)
     try {
       const { createTag } = await import('@renderer/api/knowledge')
-      await createTag(connId, nm, desc.trim())
-      if (color) {
-        const map = loadColorMap()
-        map[nm] = color
-        saveColorMap(map)
-      }
+      await createTag(connId, nm, desc.trim(), color ?? '')
       await load(connId)
       onClose()
     } catch (e) {
@@ -120,12 +118,81 @@ function NewTagDialog({ connId, onClose }: {
 }
 
 /* ═══════════════════════════════════════════════
+   编辑已有标签弹窗：改名（后端同步表绑定）/ 改描述 / 改颜色（后端持久化）
+   ═══════════════════════════════════════════════ */
+function EditTagDialog({ connId, tag, onClose }: {
+  connId: string
+  tag: { name: string; description: string; color: string }
+  onClose: () => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const { load } = useKnowledge()
+  const [name, setName] = useState(tag.name)
+  const [desc, setDesc] = useState(tag.description)
+  const [color, setColor] = useState<string | null>(tag.color || null)
+  const [saving, setSaving] = useState(false)
+
+  async function submit(): Promise<void> {
+    const nm = name.trim()
+    if (!nm || saving) return
+    setSaving(true)
+    try {
+      const { updateTag } = await import('@renderer/api/knowledge')
+      await updateTag(connId, tag.name, { newName: nm, description: desc.trim(), color: color ?? '' })
+      await load(connId)
+      onClose()
+    } catch (e) {
+      toastMsg(`保存失败：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="kb-dialog-mask" onClick={onClose}>
+      <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="kb-dialog-title">{t('kb.editTag')}</div>
+        <label className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagName')}</span>
+          <input className="rs-input" autoFocus value={name} placeholder={t('kb.tagNamePh')}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+        </label>
+        <label className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagDesc')}</span>
+          <input className="rs-input" value={desc} placeholder={t('kb.tagDescPh')}
+            onChange={(e) => setDesc(e.target.value)} />
+        </label>
+        <div className="kb-field">
+          <span className="kb-field-k mono">{t('kb.tagColor')}</span>
+          <div className="tag-swatches">
+            <button type="button" className={`tag-sw auto${color === null ? ' on' : ''}`}
+              title={t('kb.autoColorTitle')} onClick={() => setColor(null)}>A</button>
+            {TAG_COLORS.map((c) => (
+              <button key={c} type="button" className={`tag-sw${color === c ? ' on' : ''}`}
+                style={{ background: c }} title={c} onClick={() => setColor(c)} />
+            ))}
+          </div>
+        </div>
+        <div className="kb-dialog-actions">
+          <button className="btn ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button className="btn save" disabled={saving || !name.trim()} onClick={() => void submit()}>
+            {saving ? t('kb.saving') : t('common.save')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════
    右：选中表详情面板 —— 两块（向量化片段 / 元数据）
    ═══════════════════════════════════════════════ */
-function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
+function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGraph }: {
   overview: KnowledgeOverview
   selName: string | null
   currentId: string
+  colorByTag: Record<string, string>
   /** 图库跳转：关联关系由图库 Tab 负责，详情面板只留入口 */
   onOpenGraph?: () => void
 }): React.JSX.Element {
@@ -139,6 +206,32 @@ function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
   const [cmtDraft, setCmtDraft] = useState('')
   const [colEditing, setColEditing] = useState<string | null>(null)
   const [colDraft, setColDraft] = useState({ comment: '', values: '', example: '' })
+  /* 字段版本回溯：历史版本列表（确认时归档，N=3） */
+  const [histOpen, setHistOpen] = useState<{ table: string; column: string } | null>(null)
+  const [histItems, setHistItems] = useState<FieldHistoryItem[]>([])
+  const [histLoading, setHistLoading] = useState(false)
+
+  function openHistory(table: string, column: string): void {
+    setHistOpen({ table, column })
+    setHistItems([])
+    setHistLoading(true)
+    void fieldHistory(currentId, table, column)
+      .then((r) => setHistItems(r.items))
+      .catch(() => setHistItems([]))
+      .finally(() => setHistLoading(false))
+  }
+
+  async function applyHistory(item: FieldHistoryItem): Promise<void> {
+    if (!histOpen) return
+    try {
+      await applyFieldHistory(currentId, histOpen.table, histOpen.column, item.id)
+      setHistOpen(null)
+      void load(currentId)
+      toastMsg(t('kb.fieldHistoryApply'))
+    } catch (e) {
+      toastMsg(`回溯失败：${(e as Error).message}`)
+    }
+  }
 
   const tbl = useMemo(() => (selName ? overview.tables.find((tb) => tb.name === selName) ?? null : null),
     [overview, selName])
@@ -213,14 +306,32 @@ function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
           <span className="tdp-kv-v tdp-kv-lock mono">table_schema <span title={t('kb.typeLocked')}>🔒</span></span>
         </div>
         <div className="tdp-kv">
+          <span className="tdp-kv-k mono">{t('kb.version')}</span>
+          <span className="tdp-kv-v mono">v{overview.version ?? 0}</span>
+        </div>
+        <div className="tdp-kv">
           <span className="tdp-kv-k mono">{t('kb.tblName')}</span>
           <span className="tdp-kv-v mono">
             {tbl.name}
             {tbl.kind === 'view' && <span className="tdp-view-badge">view</span>}
             <span className="tdp-tcount mono">{tbl.column_count}</span>
-            {tbl.tags.map((tg) => (
-              <span key={tg.name} className="tag-chip confirmed">{tg.name}</span>
-            ))}
+          </span>
+        </div>
+
+        {/* 标签（独立字段展示，引用式带色） */}
+        <div className="tdp-kv">
+          <span className="tdp-kv-k mono">{t('kb.statsTags')}</span>
+          <span className="tdp-kv-v tdp-kv-tags">
+            {tbl.tags.length === 0 ? (
+              <span className="kb-none">{t('kb.noDesc')}</span>
+            ) : (
+              tbl.tags.map((tg) => (
+                <span key={tg.name} className="tag-chip confirmed"
+                  style={{ '--tag-c': getTagColor(tg.name, colorByTag) } as React.CSSProperties}>
+                  {tg.name}
+                </span>
+              ))
+            )}
           </span>
         </div>
 
@@ -269,6 +380,7 @@ function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
                 <span className="tdp-ctype mono">{col.type}</span>
                 {col.pk && <span className="ckey mono">PK</span>}
                 {col.fk && <span className="ckey fk mono">FK</span>}
+                {col.is_enum && <span className="ckey enum mono">ENUM</span>}
                 <span className="spacer" />
                 <button className="mini-edit" onClick={() => beginColEdit(col)}>✎</button>
                 {col.status === 'draft' && (
@@ -297,6 +409,9 @@ function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
                   </label>
                   <div className="kb-edit-acts">
                     <button className="btn ghost" onClick={() => setColEditing(null)}>{t('common.cancel')}</button>
+                    <button className="btn ghost" onClick={() => openHistory(tbl.name, col.name)}>
+                      ⟲ {t('kb.fieldHistory')}
+                    </button>
                     <button className="btn save" onClick={() => void saveEdit({
                       table: tbl.name,
                       column_comments: [{ name: col.name, ...colDraft }],
@@ -322,6 +437,35 @@ function TableDetailPanel({ overview, selName, currentId, onOpenGraph }: {
           <span className="tdp-graph-link-go">{t('kb.goGraph')} →</span>
         </div>
       </section>
+
+      {/* 字段版本回溯：历史版本列表（点击应用覆盖当前字段） */}
+      {histOpen && (
+        <div className="kb-dialog-mask" onClick={() => setHistOpen(null)}>
+          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="kb-dialog-title">{t('kb.fieldHistory')} · <span className="mono">{histOpen.table}.{histOpen.column}</span></div>
+            <div className="fh-list">
+              {histLoading && <div className="rv-none mono">{t('common.loading')}</div>}
+              {!histLoading && histItems.length === 0 && <div className="rv-none mono">{t('kb.fieldHistoryEmpty')}</div>}
+              {histItems.map((it) => (
+                <div key={it.id} className="fh-row" title={t('kb.fieldHistoryApply')}
+                  onClick={() => void applyHistory(it)}>
+                  <div className="fh-head mono">
+                    <b>v{it.version}</b>
+                    <span>{fmtDT(it.batch_ts)}</span>
+                    {it.status && <em className="fh-status">{it.status}</em>}
+                  </div>
+                  {it.comment && <div className="fh-body">{it.comment}</div>}
+                  {it.values && <div className="fh-meta mono">{t('kb.colValues')}: {it.values}</div>}
+                  {it.example && <div className="fh-meta mono">{t('kb.colExample')}: {it.example}</div>}
+                </div>
+              ))}
+            </div>
+            <div className="kb-dialog-actions">
+              <button className="btn ghost" onClick={() => setHistOpen(null)}>{t('common.cancel')}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -347,19 +491,30 @@ export function KnowledgeReview(): React.JSX.Element {
   const [adding, setAdding] = useState<string | null>(null)
   const [kq, setKq] = useState('')
   const [newTagOpen, setNewTagOpen] = useState(false)
+  const [editTag, setEditTag] = useState<TagInfo | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   /** 图库 Tab 形态：display=3D 展示态（只读）| edit=2D 编辑态（拖线/增删边/持久化布局） */
   const [graphMode, setGraphMode] = useState<'display' | 'edit'>('display')
+  /** 2D 编辑页：关系预览列表选中的边 key（联动高亮定位） */
+  const [hlEdgeKey, setHlEdgeKey] = useState<string | null>(null)
   /** 历史记录抽屉（审计 origin=kb_build 的构建/重建/放弃/启用留痕） */
   const [historyOpen, setHistoryOpen] = useState(false)
   /** 顶部批量操作（仅 pending_review 显示）：确认启用 / 放弃本轮 的二次确认弹窗开关 */
   const [batchConfirm, setBatchConfirm] = useState(false)
   const [batchDiscard, setBatchDiscard] = useState(false)
+  /** 确认启用中的版本写入等待遮罩（写入向量库 → 清理旧版本 → 生效） */
+  const [confirming, setConfirming] = useState(false)
   const trg2dActions = useTrg2dActions(currentId)
-  const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): void => {
+const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): void => {
     trg2dActions.onLayoutChange(layout)
-    toastMsg('布局已保存')
+  }
+  /** 一键重新铺开：均匀网格布局全量落盘（覆盖旧布局），并刷新 overview 使坐标生效 */
+  const handleResetLayout = (): void => {
+    if (!overview || !currentId) return
+    const fresh = computeInitialLayout(trgTables(overview))
+    trg2dActions.onLayoutChange(fresh)
+    void load(currentId)
   }
 
   const totalPending = (overview?.draft_count ?? 0)
@@ -376,11 +531,16 @@ export function KnowledgeReview(): React.JSX.Element {
     [overview?.graph.edges],
   )
 
-  /* 标签色：展示期不撞色（≤20 色色色不同，>20 循环）；图库/左列表同源 */
-  const colorByTag = useMemo(
-    () => assignUniqueColors((overview?.tags.library ?? []).map((x) => x.name)),
-    [overview?.tags.library],
-  )
+  /* 标签色：后端持久化色优先（引用式，改一处全端同步），缺省哈希色板展示期不撞色 */
+  const colorByTag = useMemo(() => {
+    const names = (overview?.tags.library ?? []).map((x) => x.name)
+    const base = assignUniqueColors(names)
+    const fromData: Record<string, string> = {}
+    for (const tg of overview?.tags.library ?? []) {
+      if (tg.color) fromData[tg.name] = tg.color
+    }
+    return { ...base, ...fromData }
+  }, [overview?.tags.library])
 
   /* 节点颜色映射：标签色驱动，无标签=基准灰，多标签=混色 */
   const nodeColorMap = useMemo(() => {
@@ -470,12 +630,16 @@ export function KnowledgeReview(): React.JSX.Element {
   /* 顶部批量操作（pending_review → 一键确认启用 / 放弃本轮） */
   async function doBatchConfirm(): Promise<void> {
     if (!currentId) return
+    setBatchConfirm(false)
+    setConfirming(true)
     try {
       await confirmAll(currentId)
+      await load(currentId)
       toastMsg(t('kb.batchConfirmOk'))
-      setBatchConfirm(false)
     } catch (e) {
       toastMsg(t('kb.confirmFail', { msg: (e as Error).message }))
+    } finally {
+      setConfirming(false)
     }
   }
 
@@ -522,9 +686,6 @@ export function KnowledgeReview(): React.JSX.Element {
             {mode === 'kb' && totalPending > 0 && (
               <span className="kb-topbar-pending mono">{t('kb.statsDraft')} {totalPending}</span>
             )}
-            {mode === 'graph' && (
-              <span className="kb-topbar-pending mono">{t('kb.statsEdges')} {overview.graph.edges.length}</span>
-            )}
             <span className="spacer" />
             {overview.kb_status === 'pending_review' && (
               <span className="kb-topbar-batch">
@@ -540,7 +701,7 @@ export function KnowledgeReview(): React.JSX.Element {
             )}
             {overview.synced_at && (
               <span className="kb-synced mono" title={t('kb.syncedTitle')}>
-                {t('kb.lastSync')} {overview.synced_at.replace('T', ' ').slice(5, 16)}
+                {t('kb.lastSync')} {fmtDT(overview.synced_at)}
               </span>
             )}
             <button className="iconbtn" onClick={() => setHistoryOpen(true)} title="查看知识库历史记录（构建/重建/放弃/启用）">
@@ -572,8 +733,8 @@ export function KnowledgeReview(): React.JSX.Element {
                 </span>
               </div>
               <div className="kb-graph-body">
-                <div className="kb-trg2d-wrap">
-                  {graphMode === 'display' ? (
+                {graphMode === 'display' ? (
+                  <div className="kb-trg2d-wrap">
                     <Graph3D
                       tables={g3dNodes}
                       foreignKeys={g3dEdges}
@@ -581,21 +742,30 @@ export function KnowledgeReview(): React.JSX.Element {
                       onOpenData={() => {}}
                       colorOverride={nodeColorMap}
                     />
-                  ) : (
-                    <TableRelationGraph2D
-                      tables={trgTables(overview)}
-                      edges={trgEdges(overview)}
-                      columnsByTable={trgColumns(overview)}
-                      layout={overview.graph.layout}
-                      mode="edit"
-                      colorMap={nodeColorMap}
-                      onAddEdge={(e) => trg2dActions.onAddEdge(e)}
-                      onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
-                      onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}
-                      onLayoutChange={handleLayoutChange}
-                    />
-                  )}
-                </div>
+                  </div>
+                ) : (
+<div className="trg2d-split">
+                    <GraphEdgeList edges={trgEdges(overview)} activeKey={hlEdgeKey}
+                      onPick={(key) => setHlEdgeKey((cur) => (cur === key ? null : key))} />
+                    <div className="kb-trg2d-wrap">
+                      <button type="button" className="trg2d-reset" onClick={handleResetLayout}
+                        title={t('kb.resetLayoutTitle')}>⟳ {t('kb.resetLayout')}</button>
+                      <TableRelationGraph2D
+                          tables={trgTables(overview)}
+                          edges={trgEdges(overview)}
+                          columnsByTable={trgColumns(overview)}
+                          layout={overview.graph.layout}
+                          mode="edit"
+                          colorMap={nodeColorMap}
+                          highlightKey={hlEdgeKey}
+                          onAddEdge={(e) => trg2dActions.onAddEdge(e)}
+                          onDeleteEdge={(e) => trg2dActions.onDeleteEdge(e)}
+                          onConfirmEdge={(e) => trg2dActions.onConfirmEdge(e)}
+                          onLayoutChange={handleLayoutChange}
+                        />
+                      </div>
+                  </div>
+                )}
                 {(overview.graph.llm_draft_edges ?? []).length > 0 && (
                   <div className="kb-drafts">
                     <div className="kb-drafts-h mono">{t('kb.kindGraph')} · {t('kb.draft')}</div>
@@ -644,12 +814,17 @@ export function KnowledgeReview(): React.JSX.Element {
                     const on = selTags.has(tg.name)
                     const color = getTagColor(tg.name, colorByTag)
                     return (
-                      <div key={tg.name} className={`kb-tag-row${on ? ' on' : ''}`} onClick={() => toggleTag(tg.name)}>
-                        <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                        <span className="kb-tag-name" style={{ color: tg.status === 'draft' ? 'var(--amber)' : undefined }}>{tg.name}</span>
-                        <span className="kb-tag-cnt mono">{tg.count}</span>
+                      <div key={tg.name} className={`kb-tag-row${on ? ' on' : ''}`}
+                        style={{ '--tag-c': color } as React.CSSProperties}
+                        onClick={() => toggleTag(tg.name)}>
+                        <span className="kb-tag-chip">
+                          <span className="kb-tag-name" style={{ color: tg.status === 'draft' ? 'var(--amber)' : undefined }}>{tg.name}</span>
+                          <span className="kb-tag-cnt mono">{tg.count}</span>
+                        </span>
+                        <button className="mini-edit" title={t('kb.editTag')}
+                          onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
                         {tg.status === 'draft' && (
-                          <span className="mini-acts" style={{ marginLeft: 'auto' }}>
+                          <span className="mini-acts">
                             <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
                             <button title={t('kb.rejectTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
                           </span>
@@ -667,10 +842,15 @@ export function KnowledgeReview(): React.JSX.Element {
                     <div className="kb-pending-tags">
                       <div className="kb-route-cap mono">{t('kb.pendingGroup')}</div>
                       {pendingTags.map((tg) => (
-                        <div key={tg.name} className={`kb-tag-row${selTags.has(tg.name) ? ' on' : ''}`} onClick={() => toggleTag(tg.name)}>
-                          <span style={{ width: 9, height: 9, borderRadius: '50%', background: getTagColor(tg.name, colorByTag), flexShrink: 0 }} />
-                          <span className="kb-tag-name" style={{ color: 'var(--amber)' }}>{tg.name}</span>
-                          <span className="mini-acts" style={{ marginLeft: 'auto' }}>
+                        <div key={tg.name} className={`kb-tag-row${selTags.has(tg.name) ? ' on' : ''}`}
+                          style={{ '--tag-c': getTagColor(tg.name, colorByTag) } as React.CSSProperties}
+                          onClick={() => toggleTag(tg.name)}>
+                          <span className="kb-tag-chip">
+                            <span className="kb-tag-name" style={{ color: 'var(--amber)' }}>{tg.name}</span>
+                          </span>
+                          <button className="mini-edit" title={t('kb.editTag')}
+                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
+                          <span className="mini-acts">
                             <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
                           </span>
                         </div>
@@ -718,7 +898,8 @@ export function KnowledgeReview(): React.JSX.Element {
                   )}
                   {filteredTables.map((tbl) => {
                     return (
-                      <div key={tbl.name} className="rv-table" data-tname={tbl.name}>
+                      <div key={tbl.name} className="rv-table" data-tname={tbl.name}
+                        style={{ borderLeftColor: tagColorForTable(tbl, colorByTag) }}>
                         <div className={`rv-table-row${selTable === tbl.name ? ' sel' : ''}`}
                           onClick={() => setSelTable(tbl.name)}>
                           <span className="tname mono">{tbl.name}</span>
@@ -757,7 +938,7 @@ export function KnowledgeReview(): React.JSX.Element {
                         </div>
                         <div className="rv-tags">
                           {tbl.tags.map((tg) => (
-                            <Tag key={tg.name} name={tg.name} status={tg.status}
+                            <Tag key={tg.name} name={tg.name} status={tg.status} color={getTagColor(tg.name, colorByTag)}
                               onConfirm={() => confirmTag(currentId, tg.name)}
                               onReject={() => rejectTag(currentId, tg.name)} />
                           ))}
@@ -789,7 +970,7 @@ export function KnowledgeReview(): React.JSX.Element {
 
               {/* ── 右：详情面板（两块：向量化片段 / 元数据） ── */}
               <section className="kb-panel-detail">
-                <TableDetailPanel overview={overview} selName={selTable} currentId={currentId}
+                <TableDetailPanel overview={overview} selName={selTable} currentId={currentId} colorByTag={colorByTag}
                   onOpenGraph={() => setMode('graph')} />
               </section>
             </div>
@@ -806,6 +987,10 @@ export function KnowledgeReview(): React.JSX.Element {
 
       {newTagOpen && currentId && (
         <NewTagDialog connId={currentId} onClose={() => setNewTagOpen(false)} />
+      )}
+
+      {editTag && currentId && (
+        <EditTagDialog connId={currentId} tag={editTag} onClose={() => setEditTag(null)} />
       )}
 
       {/* 历史记录抽屉：审计 origin=kb_build 留痕 */}
@@ -842,6 +1027,23 @@ export function KnowledgeReview(): React.JSX.Element {
                 {t('kb.discardAll')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 确认启用：版本写入等待遮罩（同步等待向量写入/清理/生效，完成后自动消失） */}
+      {confirming && (
+        <div className="kb-version-mask">
+          <div className="kb-version-card">
+            <div className="kb-version-spinner" />
+            <div className="kb-version-title">{t('kb.enablingVersion')}</div>
+            <ol className="kb-version-steps mono">
+              <li>{t('kb.vStepArchive')}</li>
+              <li>{t('kb.vStepVector')}</li>
+              <li>{t('kb.vStepClean')}</li>
+              <li>{t('kb.vStepActivate')}</li>
+            </ol>
+            <div className="kb-version-hint">{t('kb.enablingHint')}</div>
           </div>
         </div>
       )}

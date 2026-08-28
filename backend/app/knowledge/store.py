@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -130,6 +131,7 @@ class KnowledgeBase:
         self._tables: dict[str, dict[str, TableKnowledge]] = {}           # conn -> 表名 -> TableKnowledge（v2 核心存储）
         self._schema: dict[str, dict[str, Any]] = {}                      # conn -> 表/列/外键快照（增量 diff/图谱校验用）
         self._table_vec: dict[str, dict[str, list[float]]] = {}           # conn -> 表名 -> 表级向量（唯一向量体系，一表一 chunk）
+        self._supplemented: dict[str, set[str]] = {}                      # conn -> 本次注释补充了取值知识的表（待重嵌）
         self._artifact_fingerprint: dict[str, str] = {}                   # conn -> 构建时的嵌入指纹
         self._schema_fingerprint_map: dict[str, str] = {}                 # conn -> 结构指纹（增量对比）
         self._edge_tombstones: dict[str, list[dict]] = {}                 # conn -> 用户删除的 overlap 边（不复活）
@@ -138,6 +140,7 @@ class KnowledgeBase:
         self._vstore: dict[str, VectorStore] = {}                        # conn -> 统一向量索引（doc+table 归一，collection 区分）
         self._llm_graph_edges: dict[str, list[dict[str, Any]]] = {}     # conn -> LLM 发现的 draft 边（待人工确认）
         self._llm_edge_tombstones: dict[str, list[dict[str, Any]]] = {}  # conn -> 用户拒绝过的 LLM 边（重建不复活）
+        self._stash: dict[str, dict[str, Any]] = {}                     # conn -> 当前版本全量备份（放弃回滚源）
         self._lock = threading.Lock()
 
     # ---------- 持久化：存储后端（JsonStorage 回退 / SqliteStorage 标准格式） ----------
@@ -210,6 +213,153 @@ class KnowledgeBase:
             self._storage(conn_id).save(snap)
         except Exception as e:
             logger.warning("[kb.store] conn=%s 快照落盘失败：%s", conn_id, e)
+
+    # ---------- 版本制（stash / 历史归档 / 启用 / 放弃） ----------
+
+    def current_version(self, conn_id: str) -> int:
+        """当前生效版本号（0=未启用过；确认时 +1，放弃不消耗）。"""
+        try:
+            return self._storage(conn_id).get_kb_version()
+        except Exception:
+            return 0
+
+    def _stash_snapshot(self, conn_id: str) -> dict[str, Any] | None:
+        """深拷贝当前版本全量（含向量）——放弃回滚源。无内容返回 None。"""
+        if not self._tables.get(conn_id) and not self._tags.get(conn_id) \
+                and not self._llm_graph_edges.get(conn_id):
+            return None
+        import copy
+        return {
+            "tables": {n: tk.to_dict() for n, tk in self._tables.get(conn_id, {}).items()},
+            "tags": copy.deepcopy(self._tags.get(conn_id, {})),
+            "table_tags": copy.deepcopy(self._table_tags.get(conn_id, {})),
+            "llm_graph_edges": copy.deepcopy(self._llm_graph_edges.get(conn_id, [])),
+            "llm_edge_tombstones": copy.deepcopy(self._llm_edge_tombstones.get(conn_id, [])),
+            "edge_tombstones": copy.deepcopy(self._edge_tombstones.get(conn_id, [])),
+            "table_vec": copy.deepcopy(self._table_vec.get(conn_id, {})),
+            "samples": copy.deepcopy(self._samples.get(conn_id, {})),
+            "schema": copy.deepcopy(self._schema.get(conn_id, {})),
+            "excluded": list(self._excluded.get(conn_id, set())),
+            "graph": copy.deepcopy(self._graph.get(conn_id, {})),
+            "synced_at": self._synced_at.get(conn_id, ""),
+        }
+
+    def _stash_persisted(self, conn_id: str) -> bool:
+        try:
+            return self._storage(conn_id).load_stash() is not None
+        except Exception:
+            return False
+
+    def _restore_stash(self, conn_id: str) -> bool:
+        """从 stash（内存优先，落盘兜底）恢复当前版本；返回是否成功。"""
+        stash = self._stash.get(conn_id)
+        if stash is None:
+            try:
+                stash = self._storage(conn_id).load_stash()
+            except Exception:
+                stash = None
+        if not stash:
+            return False
+        self._tables[conn_id] = {
+            n: TableKnowledge.from_dict(v) for n, v in stash["tables"].items()
+        }
+        self._tags[conn_id] = stash["tags"]
+        self._table_tags[conn_id] = stash["table_tags"]
+        self._llm_graph_edges[conn_id] = stash["llm_graph_edges"]
+        self._llm_edge_tombstones[conn_id] = stash["llm_edge_tombstones"]
+        self._edge_tombstones[conn_id] = stash["edge_tombstones"]
+        self._table_vec[conn_id] = stash["table_vec"]
+        self._samples[conn_id] = stash["samples"]
+        self._schema[conn_id] = stash["schema"]
+        self._excluded[conn_id] = set(stash.get("excluded", []))
+        self._graph[conn_id] = stash["graph"]
+        self._synced_at[conn_id] = stash.get("synced_at", "")
+        self._rebuild_vstore(conn_id)
+        return True
+
+    def _clear_stash(self, conn_id: str) -> None:
+        self._stash.pop(conn_id, None)
+        try:
+            self._storage(conn_id).clear_stash()
+        except Exception:
+            pass
+
+    def _persist_stash(self, conn_id: str) -> None:
+        """构建完成落盘草稿时，同步把 stash（当前版本）落盘——pending 期间刷新不丢回滚源。"""
+        stash = self._stash.get(conn_id)
+        if not stash:
+            return
+        try:
+            self._storage(conn_id).save_stash(stash)
+        except Exception as e:
+            logger.warning("[kb.store] conn=%s stash 落盘失败：%s", conn_id, e)
+
+    def _archive_stash(self, conn_id: str) -> int:
+        """确认启用：stash（当前版本）字段文本归档进 version_archive，N=3 物理裁剪。"""
+        stash = self._stash.get(conn_id)
+        if stash is None:
+            try:
+                stash = self._storage(conn_id).load_stash()
+            except Exception:
+                stash = None
+        if not stash:
+            return 0
+        storage = self._storage(conn_id)
+        ver = storage.get_kb_version()
+        rows: list[dict[str, Any]] = []
+        for name, tk in stash["tables"].items():
+            rows.append({
+                "kind": "table", "table": name, "column": "",
+                "payload": {
+                    "comment": tk.get("comment", ""), "status": tk.get("status", ""),
+                    "ddl": tk.get("ddl", ""), "vector_override": tk.get("vector_override", ""),
+                },
+            })
+            for cname, ci in (tk.get("columns") or {}).items():
+                rows.append({
+                    "kind": "column", "table": name, "column": cname,
+                    "payload": {
+                        "comment": ci.get("comment", ""), "values": ci.get("values", ""),
+                        "example": ci.get("example", ""), "status": ci.get("status", ""),
+                    },
+                })
+        if not rows:
+            return 0
+        try:
+            storage.archive_fields(utcnow_iso(), ver, rows)
+            storage.trim_archive(3)
+        except Exception as e:
+            logger.warning("[kb.store] conn=%s 历史归档失败：%s", conn_id, e)
+            return 0
+        return len(rows)
+
+    def field_history(self, conn_id: str, table: str, column: str) -> list[dict[str, Any]]:
+        """字段历史版本（倒序，供「版本回溯」）。"""
+        try:
+            return self._storage(conn_id).field_history(table, column)
+        except Exception:
+            return []
+
+    def apply_field_history(self, conn_id: str, table: str, column: str, history_id: int) -> bool:
+        """用历史版本覆盖当前字段（comment/values/example，状态不变）。"""
+        try:
+            row = self._storage(conn_id).archive_row(history_id)
+        except Exception:
+            row = None
+        if not row or row["kind"] != "column" or row["table"] != table or row["column"] != column:
+            return False
+        tk = self._tables.get(conn_id, {}).get(table)
+        if tk is None:
+            return False
+        ci = tk.columns.get(column)
+        if ci is None:
+            return False
+        p = row["payload"]
+        ci.comment = p.get("comment", "")
+        ci.values = p.get("values", "")
+        ci.example = p.get("example", "")
+        self._save_conn(conn_id)
+        return True
 
     # ---------- 自动抽取 ----------
     @staticmethod
@@ -431,6 +581,15 @@ class KnowledgeBase:
             except Exception as e:
                 logger.warning("[kb.build] conn=%s 读取历史墓碑失败：%s", conn_id, e)
                 self._edge_tombstones[conn_id] = []
+        # 版本制：重建前把当前版本全量存入 stash（放弃回滚源），并从零重建——
+        # 注释/标签/LLM 边/向量全部重新生成（版本隔离，无新旧共存）
+        self._stash[conn_id] = self._stash_snapshot(conn_id)
+        self._tables[conn_id] = {}
+        self._tags.pop(conn_id, None)
+        self._table_tags.pop(conn_id, None)
+        self._llm_graph_edges.pop(conn_id, None)
+        self._table_vec.pop(conn_id, None)
+        self._samples.pop(conn_id, None)
         if on_progress:
             on_progress("发现结构", 5, None)
         schema = dict(schema)
@@ -575,9 +734,11 @@ class KnowledgeBase:
         self._emb = self._embedder()
         self._artifact_fingerprint[conn_id] = self._emb_fingerprint()
         self._schema_fingerprint_map[conn_id] = self._schema_fingerprint(schema)
-        self._synced_at[conn_id] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self._synced_at[conn_id] = utcnow_iso()
         self._rebuild_vstore(conn_id)
         self._save_conn(conn_id)
+        # 版本制：草稿落盘同时把 stash（当前版本）落盘——pending 期间刷新，放弃仍可完整回滚
+        self._persist_stash(conn_id)
         _seg("落盘")
         # 记录嵌入模型用量（ApiEmbedder 累计 usage → llm_log）
         self._log_embedding_usage(conn_id, "build")
@@ -747,7 +908,7 @@ class KnowledgeBase:
         touched |= {f[2] for f in diff["added_fks"]} | {f[2] for f in diff["removed_fks"]}
 
         auto = self._auto.get(conn_id, [])
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
 
         # 2. 删除的表：auto 文档归档 + 移除表级向量
         removed = set(diff["removed_tables"])
@@ -1025,7 +1186,7 @@ class KnowledgeBase:
         from collections import Counter
 
         chunks: list[VectorChunk] = []
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         fp = self._artifact_fingerprint.get(conn_id, "")
         tabs = self._tables.get(conn_id, {})
         vecs = self._table_vec.get(conn_id, {})
@@ -1159,7 +1320,9 @@ class KnowledgeBase:
 
         items: [{table, column|None, comment, values?, example?}]。
         - 列项 → ColumnInfo(comment/values/example)；表级 → TableKnowledge.comment；
-        - 已确认（confirmed）内容不被草案覆盖；
+        - 已确认（confirmed）内容不被草案覆盖：comment 保留原样，但**缺失的
+          values/example 会被补充**（带样本重建时 AI 新知识进得来）；
+        - 补充的表记入 _supplemented，由调用方取走重嵌（合成文本已变化）；
         - 表/列不在库中（敏感过滤/已删除）忽略。
         """
         tabs = self._tables.get(conn_id, {})
@@ -1177,11 +1340,24 @@ class KnowledgeBase:
                 ci = tk.columns.get(column)
                 if ci is None:
                     continue
+                new_values = str(it.get("values") or "").strip()
+                new_example = str(it.get("example") or "").strip()[:60]
                 if ci.status == "confirmed":
-                    continue  # 已确认内容不被草案覆盖
+                    # 已确认：不覆盖注释/状态；缺失的取值知识补充（样本授权重建时）
+                    if new_values and not ci.values:
+                        ci.values = new_values
+                        self._supplemented.setdefault(conn_id, set()).add(table)
+                    if new_example and not ci.example:
+                        ci.example = new_example
+                        self._supplemented.setdefault(conn_id, set()).add(table)
+                    continue
                 ci.comment = comment
-                ci.values = str(it.get("values") or "").strip()
-                ci.example = str(it.get("example") or "").strip()[:60]
+                # values/example 只在 AI 有新产出时更新；无样本构建不返回 →
+                # 保留已有取值知识，防止"未勾选确认的重建"清空历史成果
+                if new_values:
+                    ci.values = new_values
+                if new_example:
+                    ci.example = new_example
                 ci.status = "draft"
             else:
                 if tk.status == "confirmed":
@@ -1189,9 +1365,13 @@ class KnowledgeBase:
                 tk.comment = comment
                 tk.status = "draft"
             applied += 1
-        if applied:
+        if applied or self._supplemented.get(conn_id):
             self._save_conn(conn_id)
         return applied
+
+    def take_supplemented(self, conn_id: str) -> list[str]:
+        """取走本次注释中补充了取值知识的表（合成文本已变 → 调用方重嵌）。"""
+        return list(self._supplemented.pop(conn_id, set()))
 
     async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
         """人工确认草案 → 权威（v2：状态机 none/draft → confirmed）。
@@ -1237,19 +1417,28 @@ class KnowledgeBase:
         return n
 
     async def confirm_all(self, conn_id: str) -> dict[str, int]:
-        """确认闸（构建后一键启用）：批量确认全部草案注释（表+列）+ 全部 draft 标签 + 全部 LLM draft 图边。
+        """确认闸（构建后一键启用）：版本启用流程。
 
-        标签确认后才参与"问题→选表"路由；注释确认后进入权威知识卡。
-        注释确认会改变合成文本 → confirm 内部收集受影响表集合一次重嵌（不逐表重建）。
+        1. 归档：stash（当前版本）字段文本 → version_archive（N=3 物理裁剪）；
+        2. 确认：批量确认全部草案注释（表+列）+ 全部 draft 标签 + 全部 LLM draft 图边；
+        3. 全量写向量：确认后文本入向量（await 同步，调用方全程等待）；
+        4. 生效：清理 stash（旧版本向量随之清除）、版本号 +1、落盘。
         kb_status → ready 由调用方（api 层）负责。
         """
+        archived = self._archive_stash(conn_id)
         n_docs = await self.confirm(conn_id)
         n_tags = 0
         for name in list(self._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
         n_edges = self.confirm_graph_edges(conn_id)
-        return {"docs": n_docs, "tags": n_tags, "edges": n_edges}
+        # 全量嵌入（含未变化表）：版本启用 = 所有表文本入向量，写入完成才返回
+        await self._embed_tables(conn_id, None)
+        self._clear_stash(conn_id)
+        self._storage(conn_id).bump_kb_version()
+        self._save_conn(conn_id)
+        return {"docs": n_docs, "tags": n_tags, "edges": n_edges, "archived": archived,
+                "version": self.current_version(conn_id)}
 
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
@@ -1501,14 +1690,17 @@ class KnowledgeBase:
         return await self.reject_comment(conn_id, table, column)
 
     async def discard_drafts(self, conn_id: str) -> dict[str, int]:
-        """放弃本轮全部草案（审阅弹窗「放弃」）：撤下 draft，保留历史已确认内容。
+        """版本制「放弃」：丢弃本轮草稿，从 stash 恢复当前版本（零回滚逻辑、不重嵌）。
 
-        - 列/表注释 status=="draft" → "none"（文本不清空，便于下次重建对照）；
-          confirmed 一律不动；
-        - draft 标签 → 移除并解绑（对齐 reject_tag 行为）；
-        - LLM draft 边 → 删除并记墓碑（对齐 reject_graph_edges 语义，重建不复活）。
+        有 stash（重建过且未确认）→ 草稿丢弃、stash 原样恢复（含向量/标签/图/布局）；
+        无 stash（首轮构建）→ 撤下全部草案（draft→none、draft 标签移除解绑、LLM 边删除+墓碑）。
         返回 {columns, tables, tags, edges} 撤下计数。
         """
+        if self._stash.get(conn_id) is not None or self._stash_persisted(conn_id):
+            self._restore_stash(conn_id)
+            self._clear_stash(conn_id)
+            self._save_conn(conn_id)
+            return {"columns": 0, "tables": 0, "tags": 0, "edges": 0}
         tabs = self._tables.get(conn_id, {})
         n_cols = 0
         n_tables = 0
@@ -1559,7 +1751,7 @@ class KnowledgeBase:
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
     def clear_tags(self, conn_id: str) -> int:
-        """全量重构：清空该连接的标签库与表→标签绑定（残留 0 表标签不复活）。"""
+        """全量重构：清空该连接的标签库与表→标签绑定（版本制下重建从零，无新旧共存）。"""
         lib = self._tags.pop(conn_id, {})
         bound = self._table_tags.pop(conn_id, {})
         n = len(lib)
@@ -1581,19 +1773,23 @@ class KnowledgeBase:
             self._save_conn(conn_id)
         return added
 
-    def create_tag(self, conn_id: str, name: str, description: str = "") -> bool:
-        """人工新建标签（直接 confirmed，立即可用可路由）。"""
+    def create_tag(self, conn_id: str, name: str, description: str = "", color: str = "") -> bool:
+        """人工新建标签（直接 confirmed，立即可用可路由）。color 为空 → 前端回退哈希色板。"""
         name = (name or "").strip()
         lib = self._tags.setdefault(conn_id, {})
         if not name or name in lib:
             return False
-        lib[name] = {"description": (description or "").strip(), "status": "confirmed"}
+        lib[name] = {
+            "description": (description or "").strip(),
+            "status": "confirmed",
+            "color": (color or "").strip(),
+        }
         self._save_conn(conn_id)
         return True
 
     def update_tag(self, conn_id: str, old_name: str, new_name: str | None = None,
-                   description: str | None = None) -> bool:
-        """人工编辑标签：改名（同步所有表绑定）/改描述。"""
+                   description: str | None = None, color: str | None = None) -> bool:
+        """人工编辑标签：改名（同步所有表绑定）/改描述/改颜色。"""
         lib = self._tags.setdefault(conn_id, {})
         if old_name not in lib:
             return False
@@ -1602,6 +1798,8 @@ class KnowledgeBase:
             raise ValueError(f"标签 {nn} 已存在")
         if description is not None:
             lib[old_name]["description"] = description.strip()
+        if color is not None:
+            lib[old_name]["color"] = (color or "").strip()
         if nn and nn != old_name:
             lib[nn] = lib.pop(old_name)
             for t, names in self._table_tags.get(conn_id, {}).items():
@@ -1645,7 +1843,12 @@ class KnowledgeBase:
         lib = self._tags.get(conn_id, {})
         return {
             "library": [
-                {"name": n, "description": v.get("description", ""), "status": v.get("status", "draft")}
+                {
+                    "name": n,
+                    "description": v.get("description", ""),
+                    "status": v.get("status", "draft"),
+                    "color": v.get("color", ""),
+                }
                 for n, v in lib.items()
             ],
             "tables": self._table_tags.get(conn_id, {}),
@@ -1759,7 +1962,7 @@ class KnowledgeBase:
             tags=tags or [table or "", column or ""],
             source="user",
             status="confirmed",
-            updated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            updated_at=utcnow_iso(),
         )
         self._user.setdefault(conn_id, []).append(doc)
         self._save_conn(conn_id)
@@ -1815,7 +2018,11 @@ class KnowledgeBase:
 
         def table_tags(table: str) -> list[dict[str, Any]]:
             return [
-                {"name": n, "status": lib.get(n, {}).get("status", "draft")}
+                {
+                    "name": n,
+                    "status": lib.get(n, {}).get("status", "draft"),
+                    "color": lib.get(n, {}).get("color", ""),
+                }
                 for n in self._table_tags.get(conn_id, {}).get(table, []) if n in lib
             ]
 
@@ -1835,6 +2042,7 @@ class KnowledgeBase:
                     "db_comment": ci.db_comment,
                     "comment": ci.comment,
                     "values": ci.values,
+                    "is_enum": bool(ci.values),  # 契约：有 key-value 枚举数组才算枚举
                     "example": ci.example,
                     "status": ci.status,
                 })

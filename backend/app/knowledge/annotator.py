@@ -232,9 +232,62 @@ def _distinct_values(samples: dict[str, list[Any]] | None, column: str) -> list[
 def _mock_values_for(column: str, samples: dict[str, list[Any]] | None) -> str:
     """mock：对去重值 ∈ [2,50] 的列生成确定性占位对照（真实含义待人工确认）。"""
     distinct = _distinct_values(samples, column)
-    if not (2 <= len(distinct) <= ENUM_MAX_VALUES):
+    if len(distinct) < 2 or len(distinct) > ENUM_MAX_VALUES:
         return ""
     return "；".join(f"{v}={v}（业务含义待确认）" for v in distinct)
+
+
+def _split_enum_items(text: str) -> list[str]:
+    """按逗号切分枚举值列表（兼容值内带逗号/引号），去空。"""
+    items: list[str] = []
+    cur, in_q, q = "", False, ""
+    for ch in text:
+        if in_q:
+            cur += ch
+            if ch == q:
+                in_q = False
+        elif ch in ("'", '"'):
+            in_q, q = True, ch
+        elif ch == ",":
+            if cur.strip():
+                items.append(cur.strip().strip("'").strip('"'))
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        items.append(cur.strip().strip("'").strip('"'))
+    return items
+
+
+def _explicit_enum(table_ddl: str, column: str, col_type: str = "") -> list[str] | None:
+    """结构显式枚举（不依赖样本）：MySQL ENUM 类型 或 DDL 的 CHECK (col IN (...)) 约束。
+
+    返回去重保序的枚举值列表；无显式枚举 → None。仅凭结构，不编造。
+    """
+    values: list[str] = []
+    m = re.search(r"ENUM\s*\(([^)]*)\)", col_type or "", re.IGNORECASE)
+    if m:
+        values.extend(_split_enum_items(m.group(1)))
+    if not values:
+        col_pat = re.escape(column)
+        m = re.search(
+            rf"CHECK\s*\(\s*[`\"\[\]]?{col_pat}[`\"\]]?\s+IN\s*\(([^)]*)\)",
+            table_ddl, re.IGNORECASE,
+        )
+        if m:
+            values.extend(_split_enum_items(m.group(1)))
+    if not values:
+        return None
+    seen: list[str] = []
+    for v in values:
+        if v and v not in seen:
+            seen.append(v)
+    return seen or None
+
+
+def _enum_placeholder(enum: list[str]) -> str:
+    """结构显式枚举 → 占位 key-value 对照（无业务含义时的兜底，与 mock 占位同款）。"""
+    return "；".join(f"{v}={v}（业务含义待确认）" for v in enum)
 
 
 def _mock_table_comments_from_ddl(
@@ -242,10 +295,13 @@ def _mock_table_comments_from_ddl(
     columns: list[dict[str, Any]],
     samples: dict[str, list[Any]] | None,
     table_comment: str = "",
+    table_ddl: str = "",
 ) -> list[dict[str, Any]]:
     """mock：为单表生成伪注释（无 LLM 时的 fallback）；低基数列附 values/example。
 
     表级描述草案：仅当无库注释时产出（库注释视为权威，不产竞争草案）。
+    values 来源：有样本 → 去重值占位对照；无样本 → 结构显式枚举（CHECK/ENUM）。
+    example 仅在授权样本时产生。
     """
     items: list[dict[str, Any]] = []
     if not table_comment:
@@ -264,6 +320,10 @@ def _mock_table_comments_from_ddl(
             "comment": f"列 {c['name']}，类型 {c.get('type', '')}{extra}。",
         }
         values = _mock_values_for(c["name"], samples)
+        if not values:
+            enum = _explicit_enum(table_ddl, c["name"], c.get("type", ""))
+            if enum:
+                values = _enum_placeholder(enum)
         if values:
             item["values"] = values
         example = _first_example(samples, c["name"])
@@ -298,7 +358,7 @@ async def annotate_table(
     provider_cfg = _kb_reason_provider_cfg(rt)  # 阶段一也走构建档位（默认浅推理，不深推）
     if gw.is_effective_mock(provider_cfg):
         logger.debug("[kb.annotate] conn=%s mock 伪注释 table=%s", conn_id, table_name)
-        return _mock_table_comments_from_ddl(table_name, columns, table_samples, table_comment)
+        return _mock_table_comments_from_ddl(table_name, columns, table_samples, table_comment, table_ddl)
 
     # 样本值段（授权才有样本 → values/example 的天然门控）；已有注释内嵌在 DDL，不单独重复
     samples_ref = "【样本取值（真实数据；用于辅助理解字段含义）】\n"
@@ -338,12 +398,18 @@ async def annotate_table(
     # 表级项（column 省略）只保留无库注释的表：库注释视为权威，不产竞争草案
     if table_comment:
         items = [it for it in items if it.get("column") is not None]
-    # 无采样硬闸（段4）：无授权样本 → 丢弃 LLM 可能硬凑的 values/example
-    # （未经实际数据校验，且"未授权不落盘"红线）；有样本 → example 后端规范化提取。
+    # 无采样硬闸（段4）：无授权样本 → 丢弃 LLM 可能硬凑的 example；
+    # values 回退到结构显式枚举（CHECK/ENUM），没有则不带键——不编造数据知识。
     if not table_samples:
         for it in items:
             it.pop("values", None)
             it.pop("example", None)
+            col_name = it.get("column")
+            if col_name:
+                ctype = next((c.get("type", "") for c in columns if c["name"] == col_name), "")
+                enum = _explicit_enum(table_ddl, col_name, ctype)
+                if enum:
+                    it["values"] = _enum_placeholder(enum)
     else:
         # example 从样本提取（后端规范化，不依赖 LLM）：首个非空值截断 60
         for it in items:
@@ -389,6 +455,7 @@ async def annotate_tables(
 
     async def _one(name: str):
         await limiter.acquire()
+        _t_tbl = time.monotonic()
         try:
             try:
                 tbl_items = await _retry_chat(
@@ -399,6 +466,9 @@ async def annotate_tables(
                 logger.warning("[kb.annotate] conn=%s 单表注释失败 table=%s：%s", conn_id, name, e)
                 tbl_items = []
             done["n"] += 1
+            _tbl_el = time.monotonic() - _t_tbl
+            if _tbl_el > 30:
+                logger.warning("[kb.annotate] conn=%s 慢表 table=%s 耗时 %.1fs（含重试）", conn_id, name, _tbl_el)
             if on_progress:
                 on_progress(
                     "AI 正在处理", p0 + (p1 - p0) * done["n"] // n,
@@ -419,8 +489,12 @@ async def annotate_tables(
     if not items_all and table_names:
         logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
     added = state.knowledge.annotate_drafts(conn_id, items_all)
-    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s（总耗时 %.1fs）",
-                conn_id, len(items_all), added, time.monotonic() - _t0ai)
+    # 已确认列补充了取值知识（合成文本变化）→ 重嵌受影响表，避免向量停留旧文本
+    supp = getattr(state.knowledge, "take_supplemented", lambda cid: [])(conn_id)
+    if supp:
+        await state.knowledge._reembed_tables(conn_id, supp)
+    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s 补充重嵌=%s（总耗时 %.1fs）",
+                conn_id, len(items_all), added, len(supp), time.monotonic() - _t0ai)
     return added
 
 
@@ -607,14 +681,24 @@ async def _chat_with_beat(
     """
     if on_progress is None:
         return await provider.chat(messages, tools=tools, ctx=ctx)
+    conn_id = (ctx or {}).get("conn_id", "?")
+    _t0 = time.monotonic()
+    logger.info("[kb.llm] conn=%s 调用开始 stage=%s step=%s", conn_id, stage, step)
     stop = asyncio.Event()
     pace = max(1, (p_to - percent) // 20) if p_to is not None else 0
+    _warned = 0.0
 
     async def _beat() -> None:
+        nonlocal _warned
         n = 0.0
         while not stop.is_set():
             await asyncio.sleep(interval)
             n += interval
+            # 超长告警：单次 LLM 调用等待 ≥60s 仍未返回 → warning 一次，此后每 30s 复报
+            if n >= 60 and n - _warned >= 30:
+                _warned = n
+                logger.warning("[kb.llm] conn=%s 调用超长：stage=%s step=%s 已等待 %.0fs（仍在等待）",
+                               conn_id, stage, step, n)
             pct = percent
             if p_to is not None and pace:
                 pct = min(percent + int(n / interval) * pace, p_to - 1)
@@ -626,7 +710,10 @@ async def _chat_with_beat(
 
     beat = asyncio.create_task(_beat())
     try:
-        return await provider.chat(messages, tools=tools, ctx=ctx)
+        resp = await provider.chat(messages, tools=tools, ctx=ctx)
+        logger.info("[kb.llm] conn=%s 调用完成 stage=%s step=%s 耗时 %.1fs",
+                    conn_id, stage, step, time.monotonic() - _t0)
+        return resp
     finally:
         stop.set()
         beat.cancel()
@@ -1234,11 +1321,43 @@ async def _annotate_domain_incremental(
 # ---------- LLM 图谱识别（两轮：全局扫描 + 候选验证） ----------
 
 
-def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
-    """程序启发式：根据列名匹配 + 类型兼容，生成可能有关联的表对候选。
+# 引用列后缀：业务系统引用列的常见命名模式（可扩展）
+_REF_SUFFIXES = ("_id", "_code", "_no", "_num", "_key", "_ref")
 
-    策略：A 表某列名（去掉 _id 后缀）≈ B 表名，或两表有同名非通用列且类型兼容。
+
+def _table_name_variants(base: str) -> set[str]:
+    """表名单复数变体：category_id → {category, categories}；addresses_id → {addresses, address}。"""
+    out = {base}
+    if base.endswith("ies"):
+        out.add(base[:-3] + "y")      # categories → category
+    elif base.endswith("es"):
+        out.add(base[:-2])            # addresses → address
+    elif base.endswith("y"):
+        out.add(base[:-1] + "ies")    # category → categories
+    elif base.endswith("s"):
+        out.add(base[:-1])            # status → statu（粗糙单数化，匹配不到则无害）
+    out.add(base + "s")
+    out.add(base + "es")
+    return out
+
+
+def _type_family(t: str | None) -> str | None:
+    """类型族：INT 族 / 文本族；未知返回 None（保守：不参与候选）。"""
+    u = (t or "").upper()
+    if u.startswith(("INT", "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT", "NUMERIC", "DECIMAL")):
+        return "int"
+    if u.startswith(("CHAR", "VARCHAR", "TEXT", "NCHAR", "NVARCHAR", "STRING")):
+        return "text"
+    return None
+
+
+def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
+    """程序启发式：根据引用列名（_id/_code/_no/_num/_key/_ref 后缀）+ 类型族，生成关联候选。
+
+    策略：A 表某引用列名（去掉引用后缀）≈ B 表名（含单复数变体），且引用列与
+    B 表目标列（主键优先，其次 id/code）类型族一致。
     边 v2：from 恒为持有引用列的表（多侧）；列兼主键 → 1:1，否则 n:1。
+    产出仅供第 2 步 LLM 裁决（可修正/拒绝），不直接上线。
     """
     candidates: list[dict[str, str]] = []
     tables = schema.get("tables", [])
@@ -1258,25 +1377,47 @@ def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
             cname = c["name"].lower()
             if cname in generic_names:
                 continue
-            # 去掉 _id 后缀，尝试匹配另一张表名
-            base = cname.removesuffix("_id")
-            if base != cname and base in table_names and base != tname:
-                pair = tuple(sorted([tname, base]))
-                ref_col = next(
-                    (cc["name"] for cc in cols_by_table.get(base, [])
-                     if cc["name"].lower() == "id"),
-                    "id",
-                )
-                cardinality = "1:1" if c.get("pk") else "n:1"
-                key = (pair[0], pair[1], c["name"], ref_col)
-                if key not in seen_pairs:
-                    candidates.append({
-                        "from_table": tname, "from_col": c["name"],
-                        "to_table": base, "to_col": ref_col,
-                        "cardinality": cardinality,
-                        "reason": f"列名匹配：{tname}.{c['name']} → {base}.{ref_col}",
-                    })
-                    seen_pairs.add(key)
+            base = cname
+            matched_sfx = False
+            for sfx in _REF_SUFFIXES:
+                if cname.endswith(sfx):
+                    base = cname[:-len(sfx)]
+                    matched_sfx = True
+                    break
+            if not matched_sfx or not base or base in generic_names:
+                continue
+            if base == tname.lower():
+                continue  # 自环
+            # 目标表：单复数变体匹配
+            variants = _table_name_variants(base)
+            to_table = next((n for n in table_names if n.lower() in variants), None)
+            if to_table is None or to_table == tname:
+                continue
+            # 目标列：主键优先、其次 id/code，且与引用列类型族一致（不同族不配对）
+            fam = _type_family(c.get("type", ""))
+            if fam is None:
+                continue
+            ref_col: str | None = None
+            for cc in sorted(
+                cols_by_table.get(to_table, []),
+                key=lambda x: (0 if x.get("pk") else 1, 0 if x["name"].lower() in ("id", "code") else 1),
+            ):
+                if _type_family(cc.get("type", "")) == fam:
+                    ref_col = cc["name"]
+                    break
+            if ref_col is None:
+                continue
+            cardinality = "1:1" if c.get("pk") else "n:1"
+            key = (tname, to_table, c["name"], ref_col)
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            candidates.append({
+                "from_table": tname, "from_col": c["name"],
+                "to_table": to_table, "to_col": ref_col,
+                "cardinality": cardinality,
+                "reason": f"列名匹配：{tname}.{c['name']} → {to_table}.{ref_col}",
+            })
 
     return candidates
 
@@ -1497,14 +1638,14 @@ async def annotate_graph(
             f"  （{c.get('cardinality', 'n:1')}，来源：{src}，依据：{c.get('reason', '')}）"
         )
 
-    # 相关表的精简结构（供 LLM 判断字段语义）
+    # 相关表的精简结构（供 LLM 判断字段语义；类型/长度对裁决是噪音，只留主键标记）
     rel_schema_lines: list[str] = []
     for t in schema.get("tables", []):
         if t["name"] not in related_tables:
             continue
         cols = [cc for cc in schema.get("columns", []) if cc["table"] == t["name"]]
         col_txt = ", ".join(
-            f"{cc['name']}({cc.get('type', '')}{' PK' if cc.get('pk') else ''})"
+            f"{cc['name']}{' PK' if cc.get('pk') else ''}"
             for cc in cols
         )
         rel_schema_lines.append(f"- {t['name']}: {col_txt}")

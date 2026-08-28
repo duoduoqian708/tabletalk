@@ -80,6 +80,25 @@
   background: var(--teal);
 }
 
+.appbar .tab .tab-badge {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg);
+  pointer-events: none;
+}
+
 .appbar .gw {
   display: flex;
   align-items: center;
@@ -5682,12 +5701,6 @@ tr.clickable.open { background: var(--accent-dim); }
   animation: trg2d-flow 1.2s linear infinite;
 }
 @keyframes trg2d-flow { to { stroke-dashoffset: -13; } }
-.trg2d-edge-labelbg {
-  fill: color-mix(in srgb, var(--void-1) 88%, transparent);
-  stroke: var(--line);
-  stroke-width: 1;
-  pointer-events: none;
-}
 .trg2d-edge-label {
   font-family: var(--font-mono);
   font-size: 9.5px;
@@ -5695,8 +5708,20 @@ tr.clickable.open { background: var(--accent-dim); }
   text-anchor: middle;
   dominant-baseline: central;
   pointer-events: none;
+  /* 无背景框：描边保证线与文字重叠时可读 */
+  paint-order: stroke;
+  stroke: var(--void-1);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 .trg2d-edge.is-sel .trg2d-edge-label { fill: var(--amber); }
+/* 关系预览列表高亮联动：accent 加粗 + 光晕 */
+.trg2d-edge.is-highlight .trg2d-edge-line {
+  stroke: var(--accent);
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 65%, transparent));
+}
+.trg2d-edge.is-highlight .trg2d-edge-label { fill: var(--accent); font-weight: 700; }
 .trg2d-edge-ticks line {
   stroke: var(--ink-dim);
   stroke-width: 1.6;

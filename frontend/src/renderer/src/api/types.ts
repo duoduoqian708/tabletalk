@@ -160,6 +160,8 @@ export interface TagInfo {
   name: string
   description: string
   status: 'draft' | 'confirmed'
+  /** 后端持久化颜色（空 = 前端哈希色板兜底） */
+  color: string
 }
 
 /** 知识条目状态机（v2：comment+values 整体确认） */
@@ -177,6 +179,8 @@ export interface KbColumnView {
   comment: string
   /** 可选值对照 "P=待付款; S=已发货"（授权采样构建时非空） */
   values: string
+  /** 枚举标记：契约 = 有 key-value 枚举数组（values 非空）才算枚举 */
+  is_enum: boolean
   /** 示例值（首个非空样本，截断 60 字符） */
   example: string
   status: KbItemStatus
@@ -231,6 +235,8 @@ export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
   synced_at?: string
+  /** 当前生效版本号（版本制：确认启用时 +1；0=未启用） */
+  version?: number
   tables: KbTableView[]
   graph: { edges: GraphEdge[]; excluded?: string[]; llm_draft_edges?: GraphDraftEdge[]; layout?: GraphLayout }
   tags: { library: TagInfo[]; tables: Record<string, string[]> }
@@ -238,6 +244,17 @@ export interface KnowledgeOverview {
   draft_count: number
   tag_draft_count: number
   embedding_provider: string
+}
+
+/** 字段历史版本（版本制：确认时归档，供「版本回溯」复用旧值） */
+export interface FieldHistoryItem {
+  id: number
+  batch_ts: string
+  version: number
+  comment: string
+  values: string
+  example: string
+  status: string
 }
 
 export interface BuildProgress {

@@ -84,7 +84,8 @@ export function KbBuildGate(): React.JSX.Element | null {
 
   /* 构建中 = store busy + 有进度（SSE 已连接）；此时强制显示，无视 dismissed */
   const isBuilding = buildBusy && buildProgress !== null
-  const needsBuild = status !== null && status.kb_status !== 'ready'
+  // 只对「未构建」与「构建中」弹出；pending_review 待审核不再打扰（入口在知识库页顶栏）
+  const needsBuild = status !== null && status.kb_status === 'none'
   const show = currentId !== null && conn !== null
     && (isBuilding || needsBuild)
 
@@ -196,8 +197,10 @@ export function KbBuildGate(): React.JSX.Element | null {
                       <span className="kb-phase-idx mono">{idx + 1}</span>
                       <span className="kb-phase-label mono">{ph.label}</span>
                       {ph.busy ? (
-                        /* LLM 思考中：头部改显思考计时（子步由下方 chips 指示） */
-                        <span className="kb-phase-busy mono">⟳ {ph.detail ?? 'AI 思考中'}</span>
+                        /* LLM 思考中：头部保留步骤名+序号（第2步可感知），附思考计时 */
+                        <span className="kb-phase-busy mono">
+                          {ph.step_label ? `${ph.step_label}${stepNow ? ` ${stepNow}` : ''} · ` : ''}⟳ {ph.detail ?? 'AI 思考中'}
+                        </span>
                       ) : (
                         /* 完成值 + 实时 detail 并列：收尾期显示「构图收尾 · 嵌入 3/16」 */
                         (ph.step_label || ph.detail) && (
@@ -236,14 +239,6 @@ export function KbBuildGate(): React.JSX.Element | null {
                 {progress?.detail ? ` · ${progress.detail}` : ''}
                 {' '}· {progress?.percent ?? 0}%
               </span>
-            </div>
-          )}
-          {/* 收尾可见性：三阶段条满后还有构图/向量化/落盘，实时显示当前环节（避免"走完了却还没结束"的错觉） */}
-          {(progress?.phases?.length ?? 0) > 0 && (
-            <div className="kb-gate-tail mono">
-              {progress?.stage ?? t('kb.queuing')}
-              {progress?.detail ? ` · ${progress.detail}` : ''}
-              {' · '} {progress?.percent ?? 0}%
             </div>
           )}
           <div className="kb-gate-actions">

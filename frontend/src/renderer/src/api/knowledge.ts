@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { BuildProgress, GraphEdge, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
+import type { BuildProgress, FieldHistoryItem, GraphEdge, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
 
 export interface TagLibrary {
   library: TagInfo[]
@@ -59,16 +59,21 @@ export function rejectTag(connId: string, name: string): Promise<{ rejected: boo
   return request(`/api/v1/knowledge/${connId}/tags/reject`, { method: 'POST', body: JSON.stringify({ name }) })
 }
 
-/** 人工新建标签（直接 confirmed，立即可路由）。 */
-export function createTag(connId: string, name: string, description = ''): Promise<{ created: boolean }> {
-  return request(`/api/v1/knowledge/${connId}/tags/create`, { method: 'POST', body: JSON.stringify({ name, description }) })
+/** 人工新建标签（直接 confirmed，立即可路由）。color 空 → 哈希色板兜底。 */
+export function createTag(connId: string, name: string, description = '', color = ''): Promise<{ created: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/tags/create`, { method: 'POST', body: JSON.stringify({ name, description, color }) })
 }
 
-/** 人工编辑标签：改名（同步表绑定）/ 改描述。颜色仅存前端 localStorage。 */
-export function updateTag(connId: string, name: string, patch: { newName?: string; description?: string }): Promise<{ updated: boolean }> {
+/** 人工编辑标签：改名（同步表绑定）/改描述/改颜色（后端持久化，全端引用同步）。 */
+export function updateTag(connId: string, name: string, patch: { newName?: string; description?: string; color?: string }): Promise<{ updated: boolean }> {
   return request(`/api/v1/knowledge/${connId}/tags/update`, {
     method: 'POST',
-    body: JSON.stringify({ name, new_name: patch.newName ?? null, description: patch.description ?? null }),
+    body: JSON.stringify({
+      name,
+      new_name: patch.newName ?? null,
+      description: patch.description ?? null,
+      color: patch.color ?? null,
+    }),
   })
 }
 
@@ -208,5 +213,19 @@ export function rejectGraphDrafts(connId: string, fromTable?: string | null): Pr
   return request(`/api/v1/knowledge/${connId}/graph/reject`, {
     method: 'POST',
     body: JSON.stringify({ from_table: fromTable ?? null }),
+  })
+}
+
+/** 字段历史版本（版本制「版本回溯」：确认时归档，复用旧值）。 */
+export function fieldHistory(connId: string, table: string, column: string): Promise<{ items: FieldHistoryItem[] }> {
+  const p = new URLSearchParams({ table, column })
+  return request(`/api/v1/knowledge/${connId}/field-history?${p.toString()}`)
+}
+
+/** 用历史版本覆盖当前字段（comment/values/example，状态不变）。 */
+export function applyFieldHistory(connId: string, table: string, column: string, historyId: number): Promise<{ applied: boolean }> {
+  return request(`/api/v1/knowledge/${connId}/field-history/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ table, column, history_id: historyId }),
   })
 }

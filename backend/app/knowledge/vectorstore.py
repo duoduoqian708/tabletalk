@@ -10,7 +10,7 @@ Pydantic 契约：VectorChunk / SearchQuery / SearchHit —— 跨后端的唯�
 """
 from __future__ import annotations
 
-import time
+from app.core.timeutil import utcnow_iso
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -125,4 +125,4 @@ class NumpyVectorStore(VectorStore):
 
 
 def now_ts() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+    return utcnow_iso()

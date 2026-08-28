@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from app.knowledge.annotator import _first_example, _mock_values_for, _parse_items
+from app.knowledge.annotator import _first_example, _mock_values_for, _parse_items, _explicit_enum
 
 
 def _schema() -> dict:
@@ -53,6 +53,46 @@ async def test_build_authorized_writes_values_and_example(app_state):
     assert tk.status == "draft" and tk.comment      # 表级注释草案
     assert stats["ai_docs_added"] > 0
     assert tk.ddl                                   # DDL 进 TableKnowledge
+
+
+async def test_sync_without_samples_preserves_existing_values(app_state):
+    """增量同步无样本：变化表不清空已有 values/example——draft 列防护（版本制重建已从零，此防护服务 sync）。"""
+    st = app_state
+    conn = "c-preserve"
+    await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
+    ci = _status_ci(st.knowledge, conn)
+    assert ci.values and ci.example  # 前置：授权构建已产出 values/example
+    prev_values, prev_example = ci.values, ci.example
+    # 增量同步（无样本）：注释可被结构注释覆盖，但取值知识不清
+    import copy
+    schema2 = copy.deepcopy(_schema())
+    schema2["columns"][1]["comment"] = "订单状态"  # 触发 changed table
+    await st.knowledge.incremental_build(conn, schema2, {}, include_samples=False)
+    ci2 = _status_ci(st.knowledge, conn)
+    assert ci2.values == prev_values
+    assert ci2.example == prev_example
+
+
+async def test_sync_supplements_missing_values_on_confirmed(app_state):
+    """增量同步带样本：confirmed 列缺失的 values/example 被补充（comment 不被覆盖）。"""
+    st = app_state
+    conn = "c-supp"
+    await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
+    kb = st.knowledge
+    ci = kb._tables[conn]["orders"].columns["status"]
+    ci.status = "confirmed"
+    ci.values = ""
+    ci.example = ""
+    kb._save_conn(conn)
+    import copy
+    schema2 = copy.deepcopy(_schema())
+    schema2["columns"][1]["comment"] = "订单状态"  # 触发 changed table
+    await kb.incremental_build(conn, schema2, _samples(), include_samples=True)
+    ci2 = kb._tables[conn]["orders"].columns["status"]
+    assert ci2.status == "confirmed"
+    assert ci2.comment                       # comment 保留
+    assert ci2.values                        # values 补充
+    assert ci2.example                       # example 补充
 
 
 async def test_build_unauthorized_empty_values_example(app_state):
@@ -130,3 +170,53 @@ def test_mock_values_deterministic_range_gated():
     assert vals == "P=P（业务含义待确认）；S=S（业务含义待确认）；R=R（业务含义待确认）"
     assert _mock_values_for("id", {"id": [f"v{i}" for i in range(51)]}) == ""  # >50 非枚举
     assert _mock_values_for("a", {"a": ["only-one"]}) == ""                    # <2 非枚举
+
+
+# ---------- 结构显式枚举（不勾样本也能有 values） ----------
+
+
+def test_explicit_enum_from_check_constraint():
+    ddl = (
+        'CREATE TABLE "orders" (\n'
+        '  "id" INTEGER PRIMARY KEY,\n'
+        '  "status" TEXT CHECK (status IN (\'P\',\'S\',\'R\'))\n'
+        ');'
+    )
+    assert _explicit_enum(ddl, "status", "TEXT") == ["P", "S", "R"]
+    assert _explicit_enum(ddl, "id", "INTEGER") is None
+
+
+def test_explicit_enum_from_mysql_enum_type():
+    ddl = "CREATE TABLE t (s ENUM('a','b','c'))"
+    assert _explicit_enum(ddl, "s", "ENUM('a','b','c')") == ["a", "b", "c"]
+    assert _explicit_enum(ddl, "s", "enum('a','b')") == ["a", "b"]  # 小写兼容
+
+
+async def test_build_unauthorized_extracts_explicit_enum(app_state):
+    """不勾样本：显式枚举（ENUM 类型）转占位 key-value 提为 values；example 仍为空。"""
+    st = app_state
+    schema = _schema()
+    schema["columns"][1]["type"] = "ENUM('P','S','R')"  # status 变显式枚举
+    conn = "c-enum"
+    await st.knowledge.build(conn, schema, {}, include_samples=False)
+    ci = st.knowledge._tables[conn]["orders"].columns["status"]
+    assert ci.values == "P=P（业务含义待确认）；S=S（业务含义待确认）；R=R（业务含义待确认）"
+    assert ci.example == ""
+
+
+async def test_overview_marks_is_enum_by_values(app_state):
+    """is_enum 契约：有 key-value 枚举数组才算枚举（LLM/结构/手动同一判定）。"""
+    st = app_state
+    # 授权构建 → 低基数列有 values → is_enum=true；单值列无枚举 → false
+    conn = "c-flag"
+    samples = _samples()
+    samples["orders"]["id"] = [1]  # 单值 → mock 不产占位枚举
+    await st.knowledge.build(conn, _schema(), samples, include_samples=True)
+    cols = {c["name"]: c for c in st.knowledge.overview(conn)["tables"][0]["columns"]}
+    assert cols["status"]["is_enum"] is True
+    assert cols["id"]["is_enum"] is False
+    # 无样本无显式枚举 → 无 values → 非枚举
+    conn2 = "c-flag2"
+    await st.knowledge.build(conn2, _schema(), {}, include_samples=False)
+    cols2 = {c["name"]: c for c in st.knowledge.overview(conn2)["tables"][0]["columns"]}
+    assert all(c["is_enum"] is False for c in cols2.values())

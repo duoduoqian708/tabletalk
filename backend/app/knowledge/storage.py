@@ -126,7 +126,14 @@ class JsonStorage:
                 snap.edges = edges
                 snap.vec = data.get("vec", {})
                 snap.table_vec = data.get("table_vec", {})
-                snap.tags = data.get("tags", {})
+                snap.tags = {
+                    n: {
+                        "description": v.get("description", ""),
+                        "status": v.get("status", "draft"),
+                        "color": v.get("color", ""),
+                    }
+                    for n, v in (data.get("tags", {}) or {}).items()
+                }
                 snap.table_tags = data.get("table_tags", {})
                 snap.schema = data.get("schema", {})
                 snap.emb_fingerprint = data.get("emb_fingerprint", "")
@@ -196,10 +203,20 @@ CREATE TABLE IF NOT EXISTS edges (
   kind TEXT, weight REAL, shared INTEGER,
   cardinality TEXT, reason TEXT
 );
-CREATE TABLE IF NOT EXISTS tags (name TEXT PRIMARY KEY, description TEXT, status TEXT);
+CREATE TABLE IF NOT EXISTS tags (name TEXT PRIMARY KEY, description TEXT, status TEXT, color TEXT);
 CREATE TABLE IF NOT EXISTS table_tags (table_name TEXT PRIMARY KEY, tags TEXT);
 CREATE TABLE IF NOT EXISTS embeddings (doc_id TEXT PRIMARY KEY, vec BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS table_embeddings (table_name TEXT PRIMARY KEY, vec BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS version_archive (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_ts TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  kind TEXT NOT NULL,            -- 'column' | 'table'
+  table_name TEXT NOT NULL,
+  column_name TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL          -- JSON：{comment, values, example, status, ddl, vector_override}
+);
+CREATE INDEX IF NOT EXISTS idx_va_lookup ON version_archive(table_name, column_name, batch_ts);
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_table);
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_table);
 """
@@ -263,6 +280,11 @@ class SqliteStorage:
                 conn.execute(f"ALTER TABLE edges ADD COLUMN {col} TEXT")
         if "cardinality" not in ecols or "reason" not in ecols:
             conn.commit()
+        # 旧库迁移：tags 表补 color 列（标签颜色后端持久化，已存在则跳过）
+        tcols = {row["name"] for row in conn.execute("PRAGMA table_info(tags)")}
+        if "color" not in tcols:
+            conn.execute("ALTER TABLE tags ADD COLUMN color TEXT")
+            conn.commit()
         if self._vec_ok:
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
@@ -278,6 +300,8 @@ class SqliteStorage:
         try:
             conn = self._conn()
             try:
+                # 结构迁移先行：旧库缺列（如 tags.color）在此补齐，避免 SELECT 失败丢数据
+                self._init(conn)
                 # 版本门控：v1 工件（无 version 或 version<2）作废不迁移，按空库处理
                 if self._meta(conn, "version") != str(KB_SNAPSHOT_VERSION):
                     logger.warning(
@@ -309,8 +333,12 @@ class SqliteStorage:
                     e.setdefault("cardinality", "n:1")  # 旧库边无基数 → 默认 n:1
                     e.setdefault("reason", "")
                     snap.edges.append(e)
-                for row in conn.execute("SELECT name, description, status FROM tags"):
-                    snap.tags[row["name"]] = {"description": row["description"] or "", "status": row["status"]}
+                for row in conn.execute("SELECT name, description, status, color FROM tags"):
+                    snap.tags[row["name"]] = {
+                        "description": row["description"] or "",
+                        "status": row["status"],
+                        "color": row["color"] or "",
+                    }
                 for row in conn.execute("SELECT table_name, tags FROM table_tags"):
                     snap.table_tags[row["table_name"]] = json.loads(row["tags"] or "[]")
                 tables_json = self._meta(conn, "tables")
@@ -355,7 +383,7 @@ class SqliteStorage:
                 conn.execute("DELETE FROM table_tags")
                 conn.execute("DELETE FROM embeddings")
                 conn.execute("DELETE FROM table_embeddings")
-                conn.execute("DELETE FROM meta")
+                conn.execute("DELETE FROM meta WHERE key NOT IN ('kb_version', 'prev_stash')")  # 版本机制 key 由专属方法管理，不随快照重建
                 for d in snap.auto + snap.user:
                     conn.execute(
                         "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at, archived) "
@@ -374,8 +402,8 @@ class SqliteStorage:
                          e.get("cardinality") or "n:1", e.get("reason") or ""),
                     )
                 for name, v in snap.tags.items():
-                    conn.execute("INSERT INTO tags (name, description, status) VALUES (?,?,?)",
-                                 (name, v.get("description", ""), v.get("status", "draft")))
+                    conn.execute("INSERT INTO tags (name, description, status, color) VALUES (?,?,?,?)",
+                                 (name, v.get("description", ""), v.get("status", "draft"), v.get("color", "") or None))
                 for table, names in snap.table_tags.items():
                     conn.execute("INSERT INTO table_tags (table_name, tags) VALUES (?,?)",
                                  (table, json.dumps(names, ensure_ascii=False)))
@@ -433,6 +461,165 @@ SELECT DISTINCT name FROM reach ORDER BY name;"""
         if not self._vec_ok:
             raise NotImplementedError("sqlite-vec 不可用，无法提供 vec0 SQL 查询")
         return f"SELECT doc_id, distance FROM doc_vec WHERE vec MATCH ? ORDER BY distance LIMIT {max(1, int(k))};"
+
+    # ---- 版本机制（版本制知识库）：版本号 / 当前版本备份 / 字段级历史归档 ----
+
+    def get_kb_version(self) -> int:
+        with self._lock:
+            con = self._conn()
+            try:
+                row = con.execute("SELECT value FROM meta WHERE key='kb_version'").fetchone()
+                return int(row[0]) if row else 0
+            finally:
+                con.close()
+
+    def bump_kb_version(self) -> int:
+        """版本号 +1 并返回新值（单调递增，放弃不消耗）。"""
+        with self._lock:
+            con = self._conn()
+            try:
+                cur = con.execute("SELECT value FROM meta WHERE key='kb_version'")
+                row = cur.fetchone()
+                v = (int(row[0]) if row else 0) + 1
+                con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('kb_version', ?)", (str(v),))
+                con.commit()
+                return v
+            finally:
+                con.close()
+
+    def save_stash(self, data: dict[str, Any]) -> None:
+        """当前版本全量备份落盘（放弃回滚源；pending 期间刷新不丢）。"""
+        with self._lock:
+            con = self._conn()
+            try:
+                self._init(con)
+                con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('prev_stash', ?)",
+                            (json.dumps(data, ensure_ascii=False),))
+                con.commit()
+            finally:
+                con.close()
+
+    def load_stash(self) -> dict[str, Any] | None:
+        with self._lock:
+            con = self._conn()
+            try:
+                row = con.execute("SELECT value FROM meta WHERE key='prev_stash'").fetchone()
+                if not row:
+                    return None
+                return json.loads(row[0])
+            except Exception:
+                return None
+            finally:
+                con.close()
+
+    def clear_stash(self) -> None:
+        with self._lock:
+            con = self._conn()
+            try:
+                con.execute("DELETE FROM meta WHERE key='prev_stash'")
+                con.commit()
+            finally:
+                con.close()
+
+    def archive_fields(self, batch_ts: str, version: int, rows: list[dict[str, Any]]) -> int:
+        """字段级历史归档：rows = [{kind, table, column, payload}]（kind: column|table）。"""
+        if not rows:
+            return 0
+        with self._lock:
+            con = self._conn()
+            try:
+                con.executemany(
+                    "INSERT INTO version_archive (batch_ts, version, kind, table_name, column_name, payload) "
+                    "VALUES (?,?,?,?,?,?)",
+                    [(batch_ts, version, r["kind"], r["table"], r.get("column", ""),
+                      json.dumps(r["payload"], ensure_ascii=False)) for r in rows],
+                )
+                con.commit()
+                return len(rows)
+            finally:
+                con.close()
+
+    def field_history(self, table: str, column: str) -> list[dict[str, Any]]:
+        """某字段的历史版本（倒序）：[{id, batch_ts, version, comment, values, example, status}]。"""
+        with self._lock:
+            con = self._conn()
+            try:
+                rows = con.execute(
+                    "SELECT id, batch_ts, version, payload FROM version_archive "
+                    "WHERE kind='column' AND table_name=? AND column_name=? "
+                    "ORDER BY version DESC, batch_ts DESC",
+                    (table, column),
+                ).fetchall()
+                out = []
+                for r in rows:
+                    p = json.loads(r["payload"])
+                    out.append({
+                        "id": r["id"], "batch_ts": r["batch_ts"], "version": r["version"],
+                        "comment": p.get("comment", ""), "values": p.get("values", ""),
+                        "example": p.get("example", ""), "status": p.get("status", ""),
+                    })
+                return out
+            finally:
+                con.close()
+
+    def table_history(self, table: str) -> list[dict[str, Any]]:
+        """某表注释的历史版本（倒序）：[{id, batch_ts, version, comment, ddl, vector_override}]。"""
+        with self._lock:
+            con = self._conn()
+            try:
+                rows = con.execute(
+                    "SELECT id, batch_ts, version, payload FROM version_archive "
+                    "WHERE kind='table' AND table_name=? "
+                    "ORDER BY version DESC, batch_ts DESC",
+                    (table,),
+                ).fetchall()
+                out = []
+                for r in rows:
+                    p = json.loads(r["payload"])
+                    out.append({
+                        "id": r["id"], "batch_ts": r["batch_ts"], "version": r["version"],
+                        "comment": p.get("comment", ""), "ddl": p.get("ddl", ""),
+                        "vector_override": p.get("vector_override", ""),
+                    })
+                return out
+            finally:
+                con.close()
+
+    def archive_row(self, row_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            con = self._conn()
+            try:
+                row = con.execute(
+                    "SELECT id, kind, table_name, column_name, payload FROM version_archive WHERE id=?",
+                    (int(row_id),),
+                ).fetchone()
+                if not row:
+                    return None
+                return {"kind": row["kind"], "table": row["table_name"],
+                        "column": row["column_name"], "payload": json.loads(row["payload"])}
+            finally:
+                con.close()
+
+    def trim_archive(self, keep_batches: int = 3) -> int:
+        """物理删除早于最近 keep_batches 个批次（batch_ts 粒度）的历史行，返回删除数。"""
+        keep = max(1, int(keep_batches))
+        with self._lock:
+            con = self._conn()
+            try:
+                batches = [r[0] for r in con.execute(
+                    "SELECT DISTINCT batch_ts FROM version_archive ORDER BY batch_ts DESC LIMIT ?",
+                    (keep,),
+                ).fetchall()]
+                if not batches:
+                    return 0
+                marks = ",".join("?" for _ in batches)
+                cur = con.execute(
+                    f"DELETE FROM version_archive WHERE batch_ts NOT IN ({marks})", batches
+                )
+                con.commit()
+                return cur.rowcount
+            finally:
+                con.close()
 
 
 def make_storage(data_dir: Path, conn_id: str, backend: str = "") -> KbStorage:

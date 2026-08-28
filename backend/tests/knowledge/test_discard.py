@@ -30,6 +30,30 @@ def _schema() -> dict:
 
 # ───────────────────────── store 层 ─────────────────────────
 
+async def test_rebuild_then_discard_keeps_confirmed_tags(app_state):
+    """有历史版本（confirmed 标签）→ 重建 → 放弃：旧标签库与表绑定原封不动。
+
+    回归：clear_tags 曾全清标签库（含 confirmed），重建后放弃把历史标签也丢了。
+    """
+    st = app_state
+    conn = "c-rebuild-tags"
+    kb = st.knowledge
+    await kb.build(conn, _schema(), enable_ai_annotation=False)
+    # 上一轮历史：confirmed 标签 + 表绑定
+    assert kb.create_tag(conn, "交易域", "", "#e25050") is True
+    kb.assign_table_tags(conn, "orders", ["交易域"])
+    assert kb.confirm_tag(conn, "交易域") is True
+    # 重建（mock AI 重新划分：新 draft 标签 + 绑定）
+    await kb.build(conn, _schema())
+    assert any(tg["status"] == "draft" for tg in kb.tags(conn)["library"]), "重建应产生新 draft 标签"
+    # 放弃本轮草案 → 旧 confirmed 标签与绑定恢复原样
+    await kb.discard_drafts(conn)
+    tags = kb.tags(conn)
+    assert any(tg["name"] == "交易域" and tg["status"] == "confirmed" for tg in tags["library"])
+    assert "交易域" in tags["tables"].get("orders", [])
+    assert kb.has_confirmed_content(conn) is True
+
+
 async def test_first_round_discard_withdraws_all_drafts(tmp_path):
     """首轮放弃：列/表注释 draft→none、标签移除解绑、LLM 边删除；全库无 confirmed 内容。
 

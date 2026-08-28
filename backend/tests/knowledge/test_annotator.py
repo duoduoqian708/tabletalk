@@ -288,11 +288,11 @@ def test_generate_candidate_pairs_cardinality():
         "tables": [{"name": "order"}, {"name": "customer"},
                    {"name": "profile"}, {"name": "user"}],
         "columns": [
-            {"table": "order", "name": "id", "pk": True},
-            {"table": "order", "name": "customer_id", "pk": False},
-            {"table": "customer", "name": "id", "pk": True},
-            {"table": "profile", "name": "user_id", "pk": True},
-            {"table": "user", "name": "id", "pk": True},
+            {"table": "order", "name": "id", "type": "INT", "pk": True},
+            {"table": "order", "name": "customer_id", "type": "INT", "pk": False},
+            {"table": "customer", "name": "id", "type": "INT", "pk": True},
+            {"table": "profile", "name": "user_id", "type": "INT", "pk": True},
+            {"table": "user", "name": "id", "type": "INT", "pk": True},
         ],
     }
     cands = _generate_candidate_pairs(schema)
@@ -312,13 +312,13 @@ def _graph_schema_v2() -> dict:
         "tables": [{"name": "order"}, {"name": "customer"},
                    {"name": "product"}, {"name": "order_item"}],
         "columns": [
-            {"table": "order", "name": "id", "pk": True},
-            {"table": "order", "name": "customer_id", "pk": False},
-            {"table": "customer", "name": "id", "pk": True},
-            {"table": "product", "name": "id", "pk": True},
-            {"table": "order_item", "name": "id", "pk": True},
-            {"table": "order_item", "name": "order_id", "pk": False},
-            {"table": "order_item", "name": "product_id", "pk": False},
+            {"table": "order", "name": "id", "type": "INT", "pk": True},
+            {"table": "order", "name": "customer_id", "type": "INT", "pk": False},
+            {"table": "customer", "name": "id", "type": "INT", "pk": True},
+            {"table": "product", "name": "id", "type": "INT", "pk": True},
+            {"table": "order_item", "name": "id", "type": "INT", "pk": True},
+            {"table": "order_item", "name": "order_id", "type": "INT", "pk": False},
+            {"table": "order_item", "name": "product_id", "type": "INT", "pk": False},
         ],
         "foreign_keys": [],
     }

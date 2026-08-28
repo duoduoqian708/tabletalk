@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from app.core.timeutil import utcnow_iso
 from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,7 @@ class BuildJob:
         self.conn_id = conn_id
         self.task = task
         self.progress = _new_progress()
-        self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.started_at = utcnow_iso()
         self.cancelled = False
         self.event = asyncio.Event()  # 进度更新通知（SSE 推送用）
 

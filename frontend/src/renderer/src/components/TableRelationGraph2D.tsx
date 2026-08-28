@@ -59,6 +59,13 @@ interface Props {
   mode?: 'edit' | 'display'
   /** 表名 → 颜色覆盖（知识库标签色）；无覆盖时走 colorFor hash */
   colorMap?: Record<string, string>
+  /** 外部高亮边 key（关系预览列表联动）：高亮渲染 + 视图自动平移到边中点 */
+  highlightKey?: string | null
+}
+
+/** 边唯一 key（与内部 edgeGeoms 同源，供外部列表联动定位） */
+export function graphEdgeKey(e: GraphEdge): string {
+  return `${e.from}|${e.from_col ?? ''}|${e.to}|${e.to_col ?? ''}|${e.kind}|${e.status ?? 'confirmed'}`
 }
 
 /* ── 几何常量 ── */
@@ -78,7 +85,7 @@ const UNTAGGED = '\u0000'     // 无标签桶排序键（保证排最后）
  * 领域聚类初始布局：按首标签分组 → 组名排序（无标签恒最后）→ 组块按列网格摆放，
  * 组内竖排一列；同输入同输出（纯确定性，不依赖 DOM/时间）。
  */
-function computeInitialLayout(tables: Trg2dTable[]): Trg2dLayout {
+export function computeInitialLayout(tables: Trg2dTable[]): Trg2dLayout {
   const out: Trg2dLayout = {}
   const groups = new Map<string, string[]>()
   for (const t of [...tables].sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -94,21 +101,26 @@ function computeInitialLayout(tables: Trg2dTable[]): Trg2dLayout {
   })
   if (!keys.length) return out
   const cols = Math.max(1, Math.ceil(Math.sqrt(keys.length)))
-  const cellW = NODE_STEP_X
+  // 组内小网格（每行最多 2 个节点）：避免组内节点垂直堆成"一条线"
+  const INNER_COLS = 2
+  const cellW = NODE_STEP_X * INNER_COLS
   // 每行高度 = 行内最高组块；组块在行内垂直居中
   const blocks = keys.map((k) => ({ key: k, names: groups.get(k)! }))
   for (let r = 0; r * cols < blocks.length; r++) {
     const row = blocks.slice(r * cols, (r + 1) * cols)
-    const rowH = Math.max(...row.map((b) => b.names.length * NODE_STEP_Y))
+    const rowH = Math.max(...row.map((b) => Math.ceil(b.names.length / INNER_COLS) * NODE_STEP_Y))
     let rowTop = 0
     for (let rr = 0; rr < r; rr++) {
-      rowTop += Math.max(...blocks.slice(rr * cols, (rr + 1) * cols).map((b) => b.names.length * NODE_STEP_Y)) + GROUP_PAD * 2
+      rowTop += Math.max(...blocks.slice(rr * cols, (rr + 1) * cols).map((b) => Math.ceil(b.names.length / INNER_COLS) * NODE_STEP_Y)) + GROUP_PAD * 2
     }
     row.forEach((b, c) => {
-      const blockH = b.names.length * NODE_STEP_Y
+      const blockH = Math.ceil(b.names.length / INNER_COLS) * NODE_STEP_Y
       const top = rowTop + GROUP_PAD + (rowH - blockH) / 2
       b.names.forEach((name, i) => {
-        out[name] = { x: c * cellW + GROUP_PAD + NODE_D / 2, y: top + i * NODE_STEP_Y + NODE_D / 2 }
+        out[name] = {
+          x: c * cellW + GROUP_PAD + (i % INNER_COLS) * NODE_STEP_X + NODE_D / 2,
+          y: top + Math.floor(i / INNER_COLS) * NODE_STEP_Y + NODE_D / 2,
+        }
       })
     })
   }
@@ -164,7 +176,7 @@ interface EdgeGeom {
 }
 
 export function TableRelationGraph2D({
-  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, className, mode = 'edit', colorMap,
+  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, className, mode = 'edit', colorMap, highlightKey,
 }: Props): React.JSX.Element {
   const { t } = useI18n()
   const editable = mode === 'edit'
@@ -241,7 +253,7 @@ export function TableRelationGraph2D({
         pts.push({ x: u * u * pa.x + 2 * u * tt * cx + tt * tt * pb.x, y: u * u * pa.y + 2 * u * tt * cy + tt * tt * pb.y })
       }
       out.push({
-        key: `${e.from}|${e.from_col ?? ''}|${e.to}|${e.to_col ?? ''}|${e.kind}|${e.status ?? 'confirmed'}`,
+        key: graphEdgeKey(e),
         edge: e, draft: e.status === 'draft',
         d: `M ${pa.x} ${pa.y} Q ${cx} ${cy} ${pb.x} ${pb.y}`,
         mid, angle, horizontal, labelW: (fc.length + tc.length) * 5.2 + 30, labelFull, pts,
@@ -462,6 +474,19 @@ export function TableRelationGraph2D({
     })
   }, [tables.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── 外部高亮联动：列表点边 → 视图平移到边中点（保持缩放） ── */
+  useEffect(() => {
+    if (!highlightKey || !wrapRef.current) return
+    const g = edgeGeoms.find((x) => x.key === highlightKey)
+    if (!g) return
+    const el = wrapRef.current
+    const v = viewRef.current
+    v.tx = el.clientWidth / 2 - g.mid.x * v.k
+    v.ty = el.clientHeight / 2 - g.mid.y * v.k
+    applyView()
+    bump()
+  }, [highlightKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
   /* ── 连线面板 ── */
   const openPanel = (from: string, to: string, anchorWorld: Trg2dPoint): void => {
     const srcCols = columnsByTable[from] ?? []
@@ -551,17 +576,15 @@ export function TableRelationGraph2D({
         <g ref={(el) => { viewGRef.current = el; if (el) requestAnimationFrame(applyView) }}>
           {/* ── 边层 ── */}
           {edgeGeoms.map((g) => (
-            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${selKey === g.key ? ' is-sel' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
+            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${selKey === g.key ? ' is-sel' : ''}${highlightKey === g.key ? ' is-highlight' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
               <path className="trg2d-edge-hit" d={g.d} />
               <path className="trg2d-edge-line" d={g.d}
                 markerEnd={editable ? `url(#${arrowId})` : undefined} />
-              {/* 深度缩小时隐藏标签防糊（选中边常显） */}
-              {(v.k >= 0.55 || selKey === g.key) && (
+              {/* 深度缩小时隐藏标签防糊（选中/高亮边常显） */}
+              {(v.k >= 0.55 || selKey === g.key || highlightKey === g.key) && (
                 <g transform={g.horizontal
                   ? `translate(${g.mid.x} ${g.mid.y})`
                   : `translate(${g.mid.x} ${g.mid.y}) rotate(${g.angle})`}>
-                  <rect className="trg2d-edge-labelbg"
-                    x={g.horizontal ? 9 : -g.labelW / 2} y={-8.5} width={g.labelW} height={17} rx={4} />
                   {!g.draft && g.edge.cardinality === '1:1' && (
                     <g className="trg2d-edge-ticks">
                       {/* 双短线徽标：垂直于线向、对称分布在标签两侧 */}
@@ -574,7 +597,7 @@ export function TableRelationGraph2D({
                     </g>
                   )}
                   <text className="trg2d-edge-label"
-                    x={g.horizontal ? 16 : 0}
+                    x={g.horizontal ? 9 : 0}
                     textAnchor={g.horizontal ? 'start' : 'middle'}>
                     {`${g.edge.from_col || '*'} → ${g.edge.to_col || '*'}`}
                   </text>

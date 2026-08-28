@@ -44,12 +44,14 @@ class TagNameRequest(BaseModel):
 class TagCreateRequest(BaseModel):
     name: str
     description: str = ""
+    color: str = ""  # 空 → 前端回退哈希色板
 
 
 class TagUpdateRequest(BaseModel):
     name: str
     new_name: str | None = None
     description: str | None = None
+    color: str | None = None  # 空串=清色回退哈希；None=不改
 
 
 class AssignTagsRequest(BaseModel):
@@ -316,7 +318,10 @@ async def sync_kb(conn_id: str) -> dict:
 
 @router.post("/{conn_id}/confirm-all")
 async def confirm_all(conn_id: str) -> dict:
-    """确认闸：一键确认全部草案文档 + draft 标签 + LLM draft 图边 → kb_status=ready（解锁数据源）。"""
+    """确认闸（版本启用）：一键确认全部草案 + 版本启用流程（归档旧版本 → 全量写向量 → 版本+1）。
+
+    请求同步等待：全部向量写入、旧版本归档/清理完成后才返回——前端以等待遮罩感知。
+    """
     _have(conn_id)
     state = get_state()
     n = await state.knowledge.confirm_all(conn_id)
@@ -328,7 +333,8 @@ async def confirm_all(conn_id: str) -> dict:
         tier="read",
         verdict="allow",
         status="confirmed",
-        sql=f"-- kb confirm_all docs={n.get('docs', 0)} tags={n.get('tags', 0)} edges={n.get('edges', 0)}",
+        sql=f"-- kb confirm_all docs={n.get('docs', 0)} tags={n.get('tags', 0)} edges={n.get('edges', 0)}"
+            f" archived={n.get('archived', 0)} version={n.get('version', 0)}",
         source="manual",
     )
     return {**n, "kb_status": "ready"}
@@ -380,7 +386,33 @@ async def overview(conn_id: str) -> dict:
     state.knowledge.ensure_loaded(conn_id)
     await state.knowledge.reembed_if_needed(conn_id)  # 用户更换嵌入模型 → 向量重嵌
     return {**state.knowledge.overview(conn_id), "built": True, "kb_status": cfg.kb_status,
-            "synced_at": state.knowledge.synced_at(conn_id)}
+            "synced_at": state.knowledge.synced_at(conn_id),
+            "version": state.knowledge.current_version(conn_id)}
+
+
+@router.get("/{conn_id}/field-history")
+async def field_history(conn_id: str, table: str, column: str) -> dict:
+    """字段历史版本（版本制：确认时归档，供「版本回溯」复用旧值）。"""
+    _have(conn_id)
+    state = get_state()
+    return {"items": state.knowledge.field_history(conn_id, table, column)}
+
+
+class FieldHistoryApplyRequest(BaseModel):
+    table: str
+    column: str
+    history_id: int
+
+
+@router.post("/{conn_id}/field-history/apply")
+async def apply_field_history(conn_id: str, body: FieldHistoryApplyRequest) -> dict:
+    """用历史版本覆盖当前字段（comment/values/example，状态不变）。"""
+    _have(conn_id)
+    state = get_state()
+    ok = state.knowledge.apply_field_history(conn_id, body.table, body.column, body.history_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="历史记录不存在或字段不匹配")
+    return {"applied": True}
 
 
 @router.get("/{conn_id}/graph")
@@ -598,7 +630,7 @@ async def create_tag(conn_id: str, body: TagCreateRequest) -> dict:
     """人工新建标签（直接 confirmed，立即可路由）。"""
     _have(conn_id)
     state = get_state()
-    ok = state.knowledge.create_tag(conn_id, body.name, body.description)
+    ok = state.knowledge.create_tag(conn_id, body.name, body.description, body.color)
     if not ok:
         raise HTTPException(status_code=409, detail=f"标签 {body.name} 已存在或名称为空")
     return {"created": True}
@@ -611,7 +643,7 @@ async def update_tag(conn_id: str, body: TagUpdateRequest) -> dict:
     state = get_state()
     try:
         ok = state.knowledge.update_tag(conn_id, body.name, new_name=body.new_name,
-                                        description=body.description)
+                                        description=body.description, color=body.color)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     if not ok:
