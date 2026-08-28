@@ -7,7 +7,7 @@ trust=readonly, confirm=none（只出意见，不具放行权）。
 from __future__ import annotations
 
 import json
-import time
+from app.core.timeutil import utcnow_iso
 from typing import TYPE_CHECKING, Any
 
 from app.ai.tools.registry import ToolOutcome, register_tool
@@ -68,7 +68,7 @@ async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, incl
     manifest: dict[str, Any] = {
         "tables": [], "kb_docs": 0, "history_turns": 0,
         "include_data": False, "mode": "ai_review",
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "ts": utcnow_iso(),
         "model": provider_cfg.get("model", ""), "provider": provider_cfg.get("provider", "mock"),
         "source": "egress-review",
     }

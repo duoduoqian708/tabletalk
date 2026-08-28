@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.audit.logger import AuditLogger
+from app.core.timeutil import utc_from_local_midnight
 
 
 def _seed(lg: AuditLogger):
@@ -11,9 +12,9 @@ def _seed(lg: AuditLogger):
 
 
 def test_hour_buckets_today(tmp_path):
-    import time
     lg = AuditLogger(tmp_path); _seed(lg)
-    today_start = time.strftime("%Y-%m-%dT00:00:00")
+    # 存储为 UTC，今日边界必须用本地 00:00 对应的 UTC 时刻（与 API 口径一致）
+    today_start = utc_from_local_midnight()
     buckets = lg.stats_buckets(connection=None, since_ts=today_start, fmt="%Y-%m-%dT%H:00:00")
     total = sum(b["total"] for b in buckets)
     assert total == 3

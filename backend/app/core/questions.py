@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import time
+from app.core.timeutil import utcnow_iso
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -114,7 +115,7 @@ class QuestionStore:
             "sql": s,
             "tables": list(tables or []),
             "visibility": visibility,
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "created_at": utcnow_iso(),
             "hit_count": 0,
         }
         con = get_conn(self._data_dir)

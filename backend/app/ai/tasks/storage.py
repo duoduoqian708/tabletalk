@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from pathlib import Path
 from typing import Any
@@ -57,7 +57,7 @@ class TaskStore:
     def create(self, name: str, cron: str, connection_id: str, sql: str | None = None,
                natural_query: str | None = None, skill: str = "query") -> dict:
         task_id = f"task_{uuid.uuid4().hex[:10]}"
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._conn()
             try:
@@ -96,7 +96,7 @@ class TaskStore:
         updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
         if not updates:
             return self.get(task_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         updates["updated_at"] = now
         set_clause = ", ".join(f"{k}=?" for k in updates)
         params = list(updates.values()) + [task_id]
@@ -121,7 +121,7 @@ class TaskStore:
                 con.close()
 
     def log_run(self, task_id: str) -> int:
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._conn()
             try:
@@ -136,7 +136,7 @@ class TaskStore:
                 con.close()
 
     def finish_run(self, run_id: int, status: str, summary: str | None = None) -> None:
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._conn()
             try:

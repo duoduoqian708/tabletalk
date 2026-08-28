@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { auditEgress, auditWeekly } from '@renderer/api/audit'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 
 export default function ReportDrawer(props: { onClose: () => void }): React.JSX.Element {
@@ -24,7 +25,7 @@ export default function ReportDrawer(props: { onClose: () => void }): React.JSX.
           {Object.entries(weekly?.weekly ?? {}).map(([w, c]) => <span key={w} style={{ marginRight: 8 }}>{w}:{c}</span>)}
         </div>
         <div className="sec-h"><span>{t('audit.anomalyNightBatch')}</span></div>
-        {(weekly?.anomalies ?? []).map((a, i) => <div key={i} className="mono" style={{ fontSize: 11, padding: '2px 0' }}>{a.ts} · {a.sql}</div>)}
+        {(weekly?.anomalies ?? []).map((a, i) => <div key={i} className="mono" style={{ fontSize: 11, padding: '2px 0' }}>{fmtDT(a.ts)} · {a.sql}</div>)}
       </div>
     </div>
   )

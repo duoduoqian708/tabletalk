@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { listAuditPage, type PageQuery } from '@renderer/api/audit'
 import { VerdictBadge } from '../VerdictBadge'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 
 export type Sel = { kind: 'approval'; id: string } | { kind: 'entry'; id: number } | null
@@ -94,7 +95,7 @@ export default function EntryList(props: {
             <span className="au-meta">
               {it.verdict === 'review' ? t('verdict.review') : ''}
               {it.ack === 'unread' && it.verdict !== 'allow' ? ` · ${t('audit.unreadTag')}` : ''}
-              {' '}{it.ts.slice(5, 16)}
+              {' '}{fmtDT(it.ts)}
             </span>
           </div>
         ))}

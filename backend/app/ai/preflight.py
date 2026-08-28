@@ -8,6 +8,7 @@ import asyncio
 import json
 import re
 import time
+from app.core.timeutil import utcnow_iso
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -274,7 +275,7 @@ async def preflight(
         if redactions:
             manifest["redactions"] = redactions
     except Exception:
-        manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "include_data": False, "redactions": redactions, "mode": "standard", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": provider_cfg.get("model",""), "provider": provider_cfg.get("provider","mock")}
+        manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "include_data": False, "redactions": redactions, "mode": "standard", "ts": utcnow_iso(), "model": provider_cfg.get("model",""), "provider": provider_cfg.get("provider","mock")}
 
     # 出网清单审计已由中央记账拦截器（gateway）统一写：LLM 调用一次，egress-intent 一 条
     # （关键词快判路径不调 LLM，故不再产生 egress 行 —— 无出网即无清单）

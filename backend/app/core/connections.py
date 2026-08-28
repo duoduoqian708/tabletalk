@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
-import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -159,7 +159,7 @@ class ConnectionRegistry:
             read_only=bool(data.get("read_only", False)),
             timeout=int(data.get("timeout") or 10),
             credential_ref=data.get("credential_ref"),
-            created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            created_at=utcnow_iso(),
             sensitive=list(data.get("sensitive") or []),
         )
         self._conns[cfg.id] = cfg
@@ -170,7 +170,7 @@ class ConnectionRegistry:
         cfg = self.get(conn_id)
         cfg.kb_status = status
         if status != "building":
-            cfg.kb_updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+            cfg.kb_updated_at = utcnow_iso()
         try:
             self.save()
         except PermissionError:

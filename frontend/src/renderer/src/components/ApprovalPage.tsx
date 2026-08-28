@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getRuntime } from '@renderer/api/client'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 
 interface Approval {
@@ -72,7 +73,7 @@ export function ApprovalPage(): React.JSX.Element {
             <div style={{display:'flex', gap:12, alignItems:'center', width:'100%'}}>
               <span className="mono" style={{minWidth:90, color: a.status==='pending' ? 'var(--amber)' : a.status==='approved' ? 'var(--green)' : 'var(--red)'}}>{a.status}</span>
               <span className="mono" style={{flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}} title={a.sql}>{a.sql.slice(0,80)}</span>
-              <span className="mono" style={{fontSize:11, color:'var(--ink-faint)'}}>{a.requested_by} · {a.requested_at}</span>
+              <span className="mono" style={{fontSize:11, color:'var(--ink-faint)'}}>{a.requested_by} · {fmtDT(a.requested_at)}</span>
               {a.status==='pending' && (
                 <>
                   <button className="mini-btn set" onClick={()=> void act(a.id,'approve')}>{t('approval.approve')}</button>
@@ -82,7 +83,7 @@ export function ApprovalPage(): React.JSX.Element {
             </div>
             {(a.reviewed_by || a.note) && (
               <div className="mono" style={{fontSize:11, color:'var(--ink-dim)', paddingLeft:4}}>
-                → {a.reviewed_by || '—'} · {a.reviewed_at || '—'} {a.note ? `· ${a.note}` : ''} · {t('approval.auditChain', { id: a.id, by: a.reviewed_by || '—' })}
+                → {a.reviewed_by || '—'} · {a.reviewed_at ? fmtDT(a.reviewed_at) : '—'} {a.note ? `· ${a.note}` : ''} · {t('approval.auditChain', { id: a.id, by: a.reviewed_by || '—' })}
               </div>
             )}
           </div>

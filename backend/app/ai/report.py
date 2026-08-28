@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
@@ -260,7 +261,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
     provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"
-    snapshot_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    snapshot_ts = utcnow_iso()
 
     user_text = _last_user_text(_normalize_messages(req.messages))
     # B2: 报告请求的用户文本亦脱敏
@@ -320,7 +321,7 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
             _fallback_mode = state.runtime.get().privacy_mode
         except Exception:
             _fallback_mode = "standard"
-        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": _fallback_mode, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "", "provider": "mock"}
+        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": _fallback_mode, "ts": utcnow_iso(), "model": "", "provider": "mock"}
     # 中央记账 ctx（gateway 拦截器按每次 LLM 调用写；叙述轮带 include_data=True）
     try:
         _rc_reds = _report_text_redactions[:5]

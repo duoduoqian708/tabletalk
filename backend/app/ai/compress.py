@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-import time
+from app.core.timeutil import utcnow_iso
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -140,7 +140,7 @@ async def llm_compress_oldest(
                                       [{"role": "user", "content": joined}], False, cfg, redacted)
         except Exception:
             manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "mode": "standard",
-                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": cfg.get("model", ""), "provider": "llm-compress"}
+                        "ts": utcnow_iso(), "model": cfg.get("model", ""), "provider": "llm-compress"}
         provider = gw.build_provider(cfg)
         resp = await provider.chat([
             {"role": "system", "content": "把下面的历史对话浓缩成一句话（中文，≤80 字），只保留事实性要点，不编造；直接给摘要正文。"},

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso, utcnow_minus_days
 from pathlib import Path
 from typing import Any
 
@@ -88,7 +88,7 @@ class LlmCallLog:
         output_tokens: int = 0,
         elapsed_ms: float | None = None,
     ) -> None:
-        now = ts or time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = ts or utcnow_iso()
         req_str = _truncate_json(request_json)
         resp_str = _truncate_json(response_json)
         with self._lock:
@@ -103,10 +103,7 @@ class LlmCallLog:
                 con.close()
 
     def cleanup(self, keep_days: int = 30) -> int:
-        cutoff = time.strftime(
-            "%Y-%m-%dT%H:%M:%S",
-            time.localtime(time.time() - keep_days * 86400),
-        )
+        cutoff = utcnow_minus_days(keep_days)
         with self._lock:
             con = self._conn()
             try:

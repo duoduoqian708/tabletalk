@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { request } from '@renderer/api/client'
 import { useConnections } from '@renderer/store/connections'
 import { toastMsg } from '@renderer/utils/toast'
+import { fmtDT } from '@renderer/lib/timefmt'
 
 /* ═══════════════════════════════════════════════
    定时任务控制台（重设计）
@@ -274,9 +275,9 @@ export function TasksConsole(): React.JSX.Element {
                     <div className="tk-nq"><span className="tk-nq-ic">🎯</span>{task.natural_query}</div>
                   )}
                   <div className="tk-meta mono">
-                    <span>上次执行 <b className={task.last_run_at ? '' : 'never'}>{task.last_run_at ?? '从未运行'}</b></span>
+                    <span>上次执行 <b className={task.last_run_at ? '' : 'never'}>{task.last_run_at ? fmtDT(task.last_run_at) : '从未运行'}</b></span>
                     <span className="tk-meta-sep">·</span>
-                    <span>创建于 {task.created_at?.replace('T', ' ').slice(0, 16)}</span>
+                    <span>创建于 {fmtDT(task.created_at)}</span>
                   </div>
                   {open && task.sql && (
                     <pre className="tk-sql mono">{task.sql}</pre>

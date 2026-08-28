@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
 import { tags as fetchTags } from '@renderer/api/knowledge'
+import { assignUniqueColors } from '@renderer/utils/tagColors'
+import { tagColorForTable } from '@renderer/lib/colors'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
 import { useSchema } from '@renderer/store/schema'
@@ -26,7 +28,6 @@ import { AuditPage } from './ModulePages'
 import { TasksConsole } from './TasksConsole'
 import { CostDashboard } from './CostDashboard'
 import { SettingsDrawer } from './SettingsDrawer'
-import { AuditBadge } from './AuditBadge'
 import { LoginDialog } from './LoginDialog'
 import { setLoginRuntime } from '@renderer/hooks/useBootstrap'
 interface Props {
@@ -105,6 +106,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const schemaData = useSchema((s) => s.data)
   const view = useUi((s) => s.view)
   const setView = useUi((s) => s.setView)
+  const auditUnread = useAuditSignal((s) => s.unread)
   const mainView = useUi((s) => s.mainView)
   const setMainView = useUi((s) => s.setMainView)
   const { t } = useI18n()
@@ -131,14 +133,27 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   /** 工作台标签过滤：选中的标签名 → 非匹配表变暗 */
   const [dimmedTag, setDimmedTag] = useState<string | null>(null)
   const [tagTableMap, setTagTableMap] = useState<Record<string, string[]>>({})
+  const [tagLib, setTagLib] = useState<{ name: string; color: string }[]>([])
   useEffect(() => {
-    if (!currentId || !dimmedTag) { setTagTableMap({}); return }
+    if (!currentId) { setTagTableMap({}); setTagLib([]); return }
     let alive = true
     void fetchTags(currentId)
-      .then((r) => { if (alive) setTagTableMap(r.tables ?? {}) })
-      .catch(() => { if (alive) setTagTableMap({}) })
+      .then((r) => { if (alive) { setTagTableMap(r.tables ?? {}); setTagLib(r.library ?? []) } })
+      .catch(() => { if (alive) { setTagTableMap({}); setTagLib([]) } })
     return () => { alive = false }
-  }, [currentId, dimmedTag])
+  }, [currentId])
+  /** 节点颜色：标签色驱动（数据色优先，缺省哈希），无标签=基准灰，多标签=混色；与知识库页同源 */
+  const nodeColorMap = useMemo(() => {
+    const base = assignUniqueColors(tagLib.map((x) => x.name))
+    const fromData: Record<string, string> = {}
+    for (const tg of tagLib) if (tg.color) fromData[tg.name] = tg.color
+    const colorByTag = { ...base, ...fromData }
+    const m: Record<string, string> = {}
+    for (const [tbl, names] of Object.entries(tagTableMap)) {
+      m[tbl] = tagColorForTable({ tags: names.map((name) => ({ name })) }, colorByTag)
+    }
+    return m
+  }, [tagLib, tagTableMap])
   const dimmedTables = useMemo(() => {
     if (!dimmedTag) return undefined
     const allTables = new Set(graphNodes.map((n) => n.name))
@@ -246,6 +261,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     return () => useAuditSignal.getState().stop()
   }, [])
 
+  // 切换数据源 → 立即按新数据源重查未读异常
+  useEffect(() => {
+    if (currentId) void useAuditSignal.getState().refresh()
+  }, [currentId])
+
   // 当前展示的表名（顶栏上下文指示）
   const subject = active ? active.title.replace(new RegExp('^' + t('ws.titleAsk').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '').replace(/^schema · /, '') : selectedTable ?? '—'
 
@@ -271,6 +291,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               onClick={() => setView(tab.key)}
             >
               {t(tab.labelKey)}
+              {tab.key === 'audit' && auditUnread > 0 && (
+                <span className="tab-badge" title={t('audit.unreadN', { n: auditUnread })}>
+                  {auditUnread > 99 ? '99+' : auditUnread}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -324,6 +349,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                         <Graph3D
                           tables={graphNodes}
                           foreignKeys={graphEdges}
+                          colorOverride={nodeColorMap}
                           selectedName={nodeSel}
                           mini={!!nodeData}
                           dimmedTables={dimmedTables}
@@ -431,7 +457,6 @@ export function AppLayout({ health }: Props): React.JSX.Element {
             <b>{health?.ai_provider_name ?? '—'}-{health?.ai_model ?? '—'}</b>
           </span>
         </span>
-          <AuditBadge />
       </footer>
 
       <ConnectionModal open={modalOpen} editId={editingConnId} onClose={() => { setModalOpen(false); setEditingConnId(null) }} />

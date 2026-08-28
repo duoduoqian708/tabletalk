@@ -2,6 +2,7 @@
  * 北欧极简：白面板、细边框、蓝强调。报告数据为快照（生成时刻固化）。 */
 import { useState } from 'react'
 import type { ReportView, ReportSectionResult } from '@renderer/store/results'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 
 /* ---------- SVG 图表块：柱 / 折线 / 饼，北欧细线 ---------- */
@@ -207,7 +208,7 @@ export function ReportCard({ report }: { report: ReportView }): React.JSX.Elemen
       <header className="rpt-h">
         <div className="rpt-title">{report.title}</div>
         <div className="rpt-meta mono">
-          {t('report.meta', { ts: report.snapshotTs, n: report.sections.length, m: report.refs.length })}
+          {t('report.meta', { ts: fmtDT(report.snapshotTs), n: report.sections.length, m: report.refs.length })}
           <span className="rpt-meta-tip">{t('report.metaTip')}</span>
         </div>
       </header>

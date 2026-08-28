@@ -1,16 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { tags as fetchTags } from '@renderer/api/knowledge'
 import type { TagInfo } from '@renderer/api/types'
 import { assignUniqueColors, getTagColor } from '@renderer/utils/tagColors'
 import { useI18n } from '@renderer/store/i18n'
 
 const MOCK_TAGS: TagInfo[] = [
-  { name: '销售', description: '订单、营收、销售额相关表', status: 'confirmed' },
-  { name: '退货', description: '退货与退款相关表', status: 'confirmed' },
-  { name: '库存', description: '库存与周转相关表', status: 'confirmed' },
-  { name: '客户', description: '客户信息与价值分析', status: 'confirmed' },
-  { name: '渠道', description: '营销渠道与投放', status: 'confirmed' },
-  { name: '财务', description: '财务与核算', status: 'confirmed' },
+  { name: '销售', description: '订单、营收、销售额相关表', status: 'confirmed', color: '' },
+  { name: '退货', description: '退货与退款相关表', status: 'confirmed', color: '' },
+  { name: '库存', description: '库存与周转相关表', status: 'confirmed', color: '' },
+  { name: '客户', description: '客户信息与价值分析', status: 'confirmed', color: '' },
+  { name: '渠道', description: '营销渠道与投放', status: 'confirmed', color: '' },
+  { name: '财务', description: '财务与核算', status: 'confirmed', color: '' },
 ]
 
 interface Props {
@@ -45,8 +45,13 @@ export function TagBar({ connId, onSelect }: Props): React.JSX.Element {
     onSelect?.(next)
   }
 
-  /* 展示期不撞色：≤20 标签每色唯一，超了循环（20 色板同源） */
-  const colorByTag = assignUniqueColors(tags.map((x) => x.name))
+  /* 后端持久化色优先（引用式），缺省哈希色板不撞色 */
+  const colorByTag = useMemo(() => {
+    const base = assignUniqueColors(tags.map((x) => x.name))
+    const fromData: Record<string, string> = {}
+    for (const t of tags) if (t.color) fromData[t.name] = t.color
+    return { ...base, ...fromData }
+  }, [tags])
 
   return (
     <div className="ws-tags">

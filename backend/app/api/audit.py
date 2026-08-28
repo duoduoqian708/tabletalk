@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import sqlite3
-import time
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+from app.core.timeutil import utc_from_local_midnight
 from app.state import get_state
 
 router = APIRouter(prefix="/api/v1", tags=["audit"])
@@ -79,30 +79,32 @@ async def audit_weekly(
     """周报摘要：按周聚合写操作、Top 表、异常提示。"""
     state = get_state()
     full = state.audit.list(connection=connection, from_ts=from_ts, to_ts=to_ts)
-    # 按周分组（ts 前 10 为 YYYY-MM-DD，取周）
+    # 按周分组（ts 解析为本地时区后取周）
     from collections import Counter, defaultdict
-    import datetime
     weekly: dict[str, int] = defaultdict(int)
     top_tables: Counter = Counter()
     for e in full:
-        ts = e.get("ts", "")[:10]
+        raw = e.get("ts", "")
         try:
-            dt = datetime.datetime.strptime(ts, "%Y-%m-%d")
-            week = dt.strftime("%Y-W%V")
-            weekly[week] += 1
+            dt = _dt.datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            weekly[dt.strftime("%Y-W%V")] += 1
         except Exception:
             weekly["unknown"] += 1
         for t in e.get("tables") or []:
             top_tables[t] += 1
-    # 异常模式：深夜批量 UPDATE（22:00-05:00 且 verdict=review/block 且 tier=dml）
+    # 异常模式：本地深夜批量 UPDATE（22:00-05:00 且 verdict=review/block 且 tier=dml）
     anomalies: list[dict] = []
     for e in full:
-        ts = e.get("ts", "")
+        raw = e.get("ts", "")
         try:
-            hour = int(ts[11:13]) if len(ts) >= 13 else 12
-            if hour >= 22 or hour <= 5:
+            dt = _dt.datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            if dt.hour >= 22 or dt.hour <= 5:
                 if e.get("tier") == "dml" and e.get("verdict") in ("review", "block"):
-                    anomalies.append({"ts": ts, "sql": e.get("sql", "")[:80], "verdict": e.get("verdict")})
+                    anomalies.append({"ts": raw, "sql": e.get("sql", "")[:80], "verdict": e.get("verdict")})
                     if len(anomalies) >= 5:
                         break
         except Exception:
@@ -158,7 +160,7 @@ async def audit_signal(connection: str | None = None) -> dict:
     state = get_state()
     unread = state.audit.unread_exception_count(connection)
     pending = len(state.approvals.list(status="pending"))
-    today_start = time.strftime("%Y-%m-%dT00:00:00")
+    today_start = utc_from_local_midnight()
     rows = state.audit.list(connection=connection, from_ts=today_start)
     blocked = sum(1 for e in rows if e.get("verdict") == "block")
     review = sum(1 for e in rows if e.get("verdict") == "review")
@@ -171,14 +173,13 @@ async def audit_signal(connection: str | None = None) -> dict:
 
 @router.get("/audit/stats")
 async def audit_stats(scope: str = "30d", connection: str | None = None) -> dict:
-    """三档统计：today=小时桶(当日0点起)；7d/30d=天桶。时区=本地。"""
-    now = _dt.datetime.now()
+    """三档统计：today=小时桶(当日0点起)；7d/30d=天桶。口径=本地时区日。"""
     if scope == "today":
-        since = now.strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT%H:00:00"; gran = "hour"
+        since = utc_from_local_midnight(); fmt = "%Y-%m-%dT%H:00:00"; gran = "hour"
     elif scope == "7d":
-        since = (now - _dt.timedelta(days=6)).strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+        since = utc_from_local_midnight(days_ago=6); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
     else:
-        since = (now - _dt.timedelta(days=29)).strftime("%Y-%m-%dT00:00:00"); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+        since = utc_from_local_midnight(days_ago=29); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
     buckets = get_state().audit.stats_buckets(connection, since, fmt)
     return {"scope": scope, "granularity": gran, "buckets": buckets}
 

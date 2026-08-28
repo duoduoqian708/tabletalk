@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso
 from pathlib import Path
 from typing import Any
 
@@ -157,7 +157,7 @@ class AuditLogger:
                         """,
                         (
                             e.get("schema_version", SCHEMA_VERSION),
-                            e.get("ts", time.strftime("%Y-%m-%dT%H:%M:%S")),
+                            e.get("ts", utcnow_iso()),
                             e.get("connection", ""),
                             e.get("origin", ""),
                             e.get("tier", ""),
@@ -216,7 +216,7 @@ class AuditLogger:
         **extra: Any,
     ) -> int:
         first_line = " ".join((sql or "").strip().splitlines()[:1])[:200]
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        ts = utcnow_iso()
         # reasons 兜底
         if reasons is not None:
             if verdict in ("block", "review") and len(reasons) == 0:
@@ -390,7 +390,7 @@ class AuditLogger:
             try:
                 con.execute(
                     "INSERT OR REPLACE INTO audit_ack (audit_id, state, acked_ts) VALUES (?,?,?)",
-                    (int(audit_id), "ack", time.strftime("%Y-%m-%dT%H:%M:%S")),
+                    (int(audit_id), "ack", utcnow_iso()),
                 )
                 con.commit()
             finally:
@@ -426,9 +426,10 @@ class AuditLogger:
                 con.close()
 
     def stats_buckets(self, connection: str | None, since_ts: str, fmt: str) -> list[dict[str, Any]]:
-        """时间桶聚合：fmt 为 SQLite strftime 格式（仅内部常量调用，无注入面）。"""
+        """时间桶聚合：fmt 为 SQLite strftime 格式（仅内部常量调用，无注入面）。
+        桶按本地时区切分（存储为 UTC，datetime(ts,'localtime') 转本地）。"""
         sql = (
-            "SELECT strftime('" + fmt + "', ts) AS bucket, COUNT(*) AS total, "
+            "SELECT strftime('" + fmt + "', datetime(ts, 'localtime')) AS bucket, COUNT(*) AS total, "
             "SUM(CASE WHEN verdict='allow' THEN 1 ELSE 0 END) AS allow, "
             "SUM(CASE WHEN verdict='review' THEN 1 ELSE 0 END) AS review, "
             "SUM(CASE WHEN verdict='block' THEN 1 ELSE 0 END) AS block "

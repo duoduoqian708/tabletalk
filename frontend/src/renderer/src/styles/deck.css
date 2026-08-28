@@ -3678,6 +3678,7 @@ body.ws-resizing { cursor: col-resize; -webkit-user-select: none; user-select: n
 .ws-tags .tag-chip:hover:not(.selected) {
   border-color: color-mix(in srgb, var(--tag-c) 55%, var(--line-strong));
   color: var(--tag-c);
+  box-shadow: none; /* 光环只属于选中态，取消选中后 hover 不残留 */
 }
 .ws-tags .tag-chip.selected {
   border-color: var(--tag-c);

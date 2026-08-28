@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,7 @@ class KnowledgeStore:
 
     def create_doc(self, conn_id: str, table_name: str, content: str) -> dict:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._get_conn(conn_id)
             try:
@@ -75,7 +75,7 @@ class KnowledgeStore:
 
     def update_doc(self, conn_id: str, doc_id: int, content: str) -> dict | None:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._get_conn(conn_id)
             try:
@@ -88,7 +88,7 @@ class KnowledgeStore:
 
     def confirm_doc(self, conn_id: str, doc_id: int) -> dict | None:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._get_conn(conn_id)
             try:
@@ -155,7 +155,7 @@ class KnowledgeStore:
 
     def create_tag(self, conn_id: str, name: str, tables: list[str]) -> dict:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._get_conn(conn_id)
             try:
@@ -171,7 +171,7 @@ class KnowledgeStore:
 
     def confirm_tag(self, conn_id: str, tag_name: str) -> bool:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = self._get_conn(conn_id)
             try:

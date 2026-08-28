@@ -16,6 +16,7 @@ import {
   type ReportSectionResult
 } from '@renderer/api/ai'
 import { toastMsg } from '@renderer/utils/toast'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useChat, generateTitle, relTime, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
@@ -218,7 +219,7 @@ function ManifestView({ manifest }: { manifest: Manifest }): React.JSX.Element {
           <div className="manifest-row"><span>include_data</span><span>{String(manifest.include_data)}</span></div>
           <div className="manifest-row"><span>mode</span><span>{manifest.mode}</span></div>
           <div className="manifest-row"><span>model</span><span>{manifest.model || '—'} ({manifest.provider})</span></div>
-          <div className="manifest-row"><span>ts</span><span>{manifest.ts}</span></div>
+          <div className="manifest-row"><span>ts</span><span>{fmtDT(manifest.ts)}</span></div>
           {manifest.redactions.length > 0 && <div className="manifest-row"><span>redactions</span><span>{manifest.redactions.join(', ')}</span></div>}
         </div>
       )}

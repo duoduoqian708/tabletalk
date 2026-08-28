@@ -65,8 +65,11 @@ export async function auditWeekly(connId?: string): Promise<{ weekly: Record<str
 export interface SignalInfo { unread_exceptions: number; pending_approvals: number; today: { blocked: number; review: number } }
 export interface StatBucket { bucket: string; total: number; allow: number; review: number; block: number }
 
-export async function auditSignal(): Promise<SignalInfo> {
-  return request('/api/v1/audit/signal')
+export async function auditSignal(connection?: string): Promise<SignalInfo> {
+  const p = new URLSearchParams()
+  if (connection) p.set('connection', connection)
+  const qs = p.toString()
+  return request(`/api/v1/audit/signal${qs ? `?${qs}` : ''}`)
 }
 
 export async function auditStats(scope: 'today' | '7d' | '30d', connection?: string): Promise<{ scope: string; granularity: string; buckets: StatBucket[] }> {

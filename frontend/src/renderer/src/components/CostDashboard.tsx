@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { USE_MOCK, mockDaily, getMockSessions, getMockCalls, getMockCallDetail, getMockSummary } from './__mocks__/costMock'
+import { fmtDT } from '@renderer/lib/timefmt'
 
 /* ── types ── */
 interface DailyRow { date: string; calls: number; sessions: number; input_tokens: number; output_tokens: number; total_tokens: number; elapsed_ms_avg: number }
@@ -27,7 +28,12 @@ function periodRange(p: Period): { from_ts: string | null; to_ts: string | null 
 
 const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n)
 const fmtMs = (ms: number | null) => ms == null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`
-const shortTime = (ts: string) => ts.slice(11, 16) || ts.slice(0, 10)
+const shortTime = (ts: string) => {
+  const d = new Date(ts)
+  const today = new Date()
+  const sameDay = !Number.isNaN(d.getTime()) && d.toDateString() === today.toDateString()
+  return sameDay ? fmtDT(ts, 'time') : fmtDT(ts, 'date')
+}
 /** '__none__'/空/null → 系统调用组（无会话的 KB 构建/嵌入等），否则原样显示 */
 const sysLabel = (v: string | null | undefined, max = 10) =>
   v === '__none__' || v === null || v === '' ? '系统调用' : String(v).slice(0, max)

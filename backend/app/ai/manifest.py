@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import time
+from app.core.timeutil import utcnow_iso
 from typing import Any
 
 
@@ -46,7 +47,7 @@ def build_manifest(
         pass
     if mode not in ("strict", "standard", "open"):
         mode = "standard"
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    ts = utcnow_iso()
     model = provider_cfg.get("model") or ""
     provider = provider_cfg.get("provider") or "mock"
     # redactions：B1 为空（B2 填充确定性 token 列表）

@@ -4,6 +4,7 @@ import { listAuditPage, ackAudit } from '@renderer/api/audit'
 import { useConnections } from '@renderer/store/connections'
 import { useAuditSignal } from '@renderer/store/auditSignal'
 import { VerdictBadge } from '../VerdictBadge'
+import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 import type { Sel } from './EntryList'
 
@@ -27,10 +28,9 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
 
   function TodayTimeline({ connName }: { connName: string }): React.JSX.Element {
     const [rows, setRows] = useState<Entry[]>([])
-    // 审计 ts 为本地朴素时间串，"今日"边界必须用本地时钟拼装（toISOString 是 UTC，会偏移时区）
-    const pad = (n: number): string => String(n).padStart(2, '0')
+    // 存储为 UTC，"今日"边界 = 本地今日 00:00 换算成 UTC（toISOString 基于 UTC 时钟）
     const now = new Date()
-    const fromTs = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T00:00:00`
+    const fromTs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 19)
     useEffect(() => {
       let alive = true
       void listAuditPage({ connection: connName || undefined, from_ts: fromTs, limit: 50, cursor: 0 })
@@ -42,7 +42,7 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
         <div className="tl-day"><b>{t('audit.today')}</b><span className="au-meta">{t('audit.nRecords', { n: rows.length })}</span></div>
         {rows.map((r) => (
           <div key={r._id} className="ev-row">
-            <span className="ev-t">{r.ts.slice(11, 16)}</span>
+            <span className="ev-t">{fmtDT(r.ts, 'time')}</span>
             <VerdictBadge v={r.verdict} />
             <span className="mono" style={{ fontSize: 11 }}>{r.sql.slice(0, 56)}</span>
           </div>
@@ -70,7 +70,7 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
     if (!item) return <div className="au-right-pane"><div className="mpage-empty">{t('common.loading')}</div></div>
     return (
       <div className="au-right-pane"><div className="det-body">
-        <div className="det-kv"><span className="k">{t('audit.colVerdict')}</span><VerdictBadge v={item.status === 'pending' ? 'review' : item.status === 'rejected' ? 'block' : 'executed'} /><span className="au-meta mono">{item.requested_at}</span></div>
+        <div className="det-kv"><span className="k">{t('audit.colVerdict')}</span><VerdictBadge v={item.status === 'pending' ? 'review' : item.status === 'rejected' ? 'block' : 'executed'} /><span className="au-meta mono">{fmtDT(item.requested_at)}</span></div>
         <div className="det-sql">{item.sql}</div>
         {item.preview_rows != null && <div className="det-kv"><span className="k">{t('audit.previewRows')}</span><span className="mono">COUNT ≈ {item.preview_rows}</span></div>}
         {err && <div className="review-err">{err}</div>}
@@ -100,7 +100,7 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
     const canAck = entry.verdict !== 'allow' && entry.ack !== 'ack'
     return (
       <div className="au-right-pane"><div className="det-body">
-        <div className="det-kv"><span className="k">{t('audit.colVerdict')}</span><VerdictBadge v={entry.verdict} /><span className="au-meta mono">{entry.ts} · {entry.origin === 'ai' ? 'AI' : t('audit.originManual')}</span></div>
+        <div className="det-kv"><span className="k">{t('audit.colVerdict')}</span><VerdictBadge v={entry.verdict} /><span className="au-meta mono">{fmtDT(entry.ts)} · {entry.origin === 'ai' ? 'AI' : t('audit.originManual')}</span></div>
         <div className="det-sql">{entry.sql}</div>
         {(entry.reasons ?? []).map((r, i) => (
           <div key={i} className="det-kv"><span className="k">{t('audit.triggerRule')}</span><span className="mono">{r.rule_id}</span><span style={{ color: 'var(--ink-dim)' }}>{r.message}</span></div>

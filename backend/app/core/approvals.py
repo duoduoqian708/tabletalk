@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -96,7 +96,7 @@ class ApprovalStore:
                 pass
 
     def create(self, connection_id: str, sql: str, requested_by: str) -> Approval:
-        a = Approval(id=f"ap_{uuid.uuid4().hex[:8]}", connection_id=connection_id, sql=sql, requested_by=requested_by, requested_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        a = Approval(id=f"ap_{uuid.uuid4().hex[:8]}", connection_id=connection_id, sql=sql, requested_by=requested_by, requested_at=utcnow_iso())
         self._items[a.id] = a
         self._save()
         return a
@@ -115,7 +115,7 @@ class ApprovalStore:
             return None
         a.status = "approved"
         a.reviewed_by = reviewer
-        a.reviewed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        a.reviewed_at = utcnow_iso()
         a.note = note
         self._save()
         return a
@@ -126,7 +126,7 @@ class ApprovalStore:
             return None
         a.status = "rejected"
         a.reviewed_by = reviewer
-        a.reviewed_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+        a.reviewed_at = utcnow_iso()
         a.note = note
         self._save()
         return a

@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import time
+from app.core.timeutil import utcnow_iso
 import hmac
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -191,7 +192,7 @@ class AuthStore:
         if role not in ("admin", "member"):
             role = "member"
         import uuid, time as _time
-        u = User(id=f"u_{uuid.uuid4().hex[:8]}", username=username, password_hash=_hash_pwd(password), role=role, created_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        u = User(id=f"u_{uuid.uuid4().hex[:8]}", username=username, password_hash=_hash_pwd(password), role=role, created_at=utcnow_iso())
         self._users[username] = u
         self._save()
         if len(self._users) == 1 and u.role != "admin":

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { listAudit } from '@renderer/api/audit'
 import type { AuditEntry } from '@renderer/api/types'
 import { useI18n } from '@renderer/store/i18n'
+import { fmtDT } from '@renderer/lib/timefmt'
 
 /* ═══════════════════════════════════════════════
    知识库历史记录抽屉（右滑面板）
@@ -68,8 +69,7 @@ const KIND_LABEL: Record<KbActionKind, string> = {
 }
 
 function fmtTime(ts: string): string {
-  // yyyy-mm-ddThh:mm:ss → "MM-DD HH:mm"
-  return ts?.replace('T', ' ').slice(5, 16) ?? '—'
+  return fmtDT(ts)
 }
 
 export function KbHistoryDrawer({ open, onClose, connId, connName }: {

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso, utcnow_minus_days
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +48,7 @@ class CostTracker:
             model: str | None = None, provider: str | None = None,
             input_tokens: int = 0, output_tokens: int = 0,
             elapsed_ms: float | None = None) -> None:
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         total = input_tokens + output_tokens
         # 粗略成本估算（美元）：按 GPT-4o-mini 定价估算，可后续精确化
         cost = (input_tokens * 0.15 + output_tokens * 0.6) / 1_000_000
@@ -96,10 +96,7 @@ class CostTracker:
 
     def cleanup(self, keep_days: int = 30) -> int:
         """删除 keep_days 天前的记录，返回删除行数。"""
-        cutoff = time.strftime(
-            "%Y-%m-%dT%H:%M:%S",
-            time.localtime(time.time() - keep_days * 86400),
-        )
+        cutoff = utcnow_minus_days(keep_days)
         with self._lock:
             con = self._conn()
             try:

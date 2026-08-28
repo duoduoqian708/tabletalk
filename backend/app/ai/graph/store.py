@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-import time
+from app.core.timeutil import utcnow_iso
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,7 @@ class GraphStore:
     def add_edge(self, conn_id: str, source: str, target: str, relation: str = "related",
                  source_col: str | None = None, target_col: str | None = None) -> dict:
         self._ensure_tables(conn_id)
-        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        now = utcnow_iso()
         with self._lock:
             con = sqlite3.connect(self._db_path(conn_id))
             try:
