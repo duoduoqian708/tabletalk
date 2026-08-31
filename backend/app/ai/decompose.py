@@ -1,8 +1,12 @@
-"""E2 意图分解层（设计 §13.2/§13.3）：LLM TaskPlan / 关键词快判 / mock 降级。
+"""E2 意图分解层（设计 §13.2/§13.3）：意图识别 = LLM 产出 TaskPlan。
 
-意图是剖面不是标签：单次 LLM 调用产出 TaskPlan（长度 ≥1，复合请求拆多个独立任务）。
-plan 级辅助字段（tags/followup_tables/skip_retrieval）沿用 preflight 检测逻辑；
-脱敏/清单/审计由调用方（loop.stream）统一走 preflight 管道（本模块不做第二次）。
+2026-09 修订：意图识别不再用关键词匹配（关键词误判多、复合请求无法拆），
+统一由 LLM 产出 TaskPlan（长度 ≥1，复合请求拆多个独立任务；offsetopic→unknown 走拒答）。
+- mock / 严格离线（无 LLM）：确定性降级为单任务 query（不调模型）
+- 脱敏/清单/审计在 preflight 准备（redacted_q/manifest），本模块的 LLM 调用复用——
+  全链路 LLM 出网都用脱敏原文 + 记清单（隐私红线）
+- 未来向量层：语义命中直接复用执行路径（相同语义问题跳过 LLM），关键词层不恢复
+plan 级辅助字段（tags/followup_tables/skip_retrieval）沿用 preflight 检测逻辑。
 """
 from __future__ import annotations
 
@@ -16,53 +20,11 @@ from app.ai.plan import TaskPlan, TaskSpec
 if TYPE_CHECKING:
     from app.state import AppState
 
-# 关键词快判表（高特异性 → 低特异性，query 兜底最后）。
-# 每项：(compiled regex, action, modality)
-KEYWORD_PLAN_SPECS: list[tuple[re.Pattern, str, str]] = [
-    # offtopic：平台外话题 → unknown（general 承接拒答引导）
-    (re.compile(r"你好|谢谢|天气|笑话|你是谁|自我介绍|写诗|讲笑话|闲聊", re.IGNORECASE), "unknown", "answer"),
-    # report：章节化报告/趋势分析（modality 升降级）
-    (re.compile(r"报告|出一份|趋势分析|概览|分析报告|总结报告|dashboard|insights?", re.IGNORECASE), "query", "report"),
-    # knowledge → kb
-    (re.compile(r"知识|注释|注解|图谱|关联图|表关系|标签|domain|knowledge", re.IGNORECASE), "kb", "answer"),
-    # scheduler → schedule
-    (re.compile(r"定时|每天|每周|每月|调度|cron|周期|自动跑|定期", re.IGNORECASE), "schedule", "answer"),
-    # ddl：结构变更（P2-9：与 write 分离，对齐 LLM 路径的 ddl action → 独立 ddl 技能）
-    (re.compile(r"建表|建一张表|加.*列|新增字段|加.*索引|create\s+table|alter\s+table|drop\s+table|create\s+index|索引|加.*索引|删除.*表|删表", re.IGNORECASE), "ddl", "answer"),
-    # write：DML 写操作（保守判定，"看看"不算写）
-    (re.compile(r"删掉|删除|改成|改为|更新.*为|插入|写入|修改.*为|涨价|提价|update|delete\s+from|insert\s+into", re.IGNORECASE), "write", "answer"),
-    # query：兜底数据面
-    (re.compile(r"查|统计|多少|平均|分组|排序|列表|按.*月|查询|select\s|有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全", re.IGNORECASE), "query", "answer"),
-]
-
-# 结构问答/审计类 → skip_retrieval（跳过向量检索管线）
+# 结构问答/审计类 → skip_retrieval（跳过向量检索管线；提示优化，非意图分类）
 _SKIP_RETRIEVAL_RE = re.compile(
     r"有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全",
     re.IGNORECASE,
 )
-
-
-def _keyword_plan(question: str) -> TaskPlan:
-    """关键词快判 → 单任务 TaskPlan（零 LLM，高特异性优先）。"""
-    q = (question or "").strip()
-    if not q:
-        return TaskPlan(tasks=[TaskSpec(action="query", modality="answer")],
-                        degraded=True, raw_question=q)
-    # 特殊反例：问候语 + 查询词 → query（高特异性优先，"你好，查一下订单"不是闲聊）
-    if re.search(r"你好", q, re.IGNORECASE) and re.search(r"查|统计|多少|select|查询", q, re.IGNORECASE):
-        return TaskPlan(tasks=[TaskSpec(action="query", modality="answer")],
-                        degraded=True, raw_question=q)
-    for pat, action, modality in KEYWORD_PLAN_SPECS:
-        if pat.search(q):
-            # 写/DDL 边界反例：含"看看"且无强写词 → 降 query（查 schema 的意图）
-            if action in ("write", "ddl") and "看看" in q and not re.search(
-                    r"删掉|改成|删除|插入|更新|提价|涨价|alter|drop|create",
-                    q, re.IGNORECASE):
-                action = "query"
-            return TaskPlan(tasks=[TaskSpec(action=action, modality=modality)],
-                            degraded=True, raw_question=q)
-    return TaskPlan(tasks=[TaskSpec(action="query", modality="answer")],
-                    degraded=True, raw_question=q)
 
 
 def _parse_llm_plan(text: str, confirmed_tags: list[str]) -> TaskPlan:
@@ -90,18 +52,22 @@ def _parse_llm_plan(text: str, confirmed_tags: list[str]) -> TaskPlan:
 
 async def decompose(state: "AppState", conn_id: str, question: str,
                     confirmed_tags: list[str] | None = None,
-                    history_tail: list[dict] | None = None) -> TaskPlan:
-    """意图分解统一入口：高特异关键词快判 → LLM TaskPlan → mock 降级。
+                    history_tail: list[dict] | None = None,
+                    redacted_q: str | None = None,
+                    manifest: dict[str, Any] | None = None) -> TaskPlan:
+    """意图分解统一入口（2026-09：LLM 唯一意图路径，无关键词层）。
 
-    - 高特异度关键词（write/kb/schedule/report/offtopic）→ 直接单任务（零 LLM）
-    - query 类低特异度 → 非 mock 时放行 LLM 分解（复合请求可达，§13.3）；mock 单任务
-    - plan 级辅助字段：tags（已确认过滤）、followup_tables、skip_retrieval
+    - LLM 产出 TaskPlan（长度 ≥1，复合请求可拆；offtopic → unknown → refusal 拒答）
+    - mock / 严格离线（无 LLM）：确定性单任务 query 降级（零模型调用）
+    - 出网隐私：prompt 用 preflight 脱敏后的 redacted_q；清单/审计随 manifest 走中央记账
+      （loop.stream 已先跑 preflight，此处不重复脱敏/清单）
+    - 未来向量层：语义命中直接复用执行路径（相同语义问题跳过 LLM），不恢复关键词层
     """
     q = (question or "").strip()
     if not q:
         return TaskPlan(degraded=True)
 
-    # 追问轮种子（沿用 preflight 检测）
+    # plan 级辅助字段（沿用 preflight 检测逻辑）
     followup_tables: list[str] = []
     skip_retrieval = bool(_SKIP_RETRIEVAL_RE.search(q)) if q else False
     try:
@@ -120,19 +86,11 @@ async def decompose(state: "AppState", conn_id: str, question: str,
             pass
     _kw_tags = [t for t in confirmed_tags if t.lower() in q.lower()][:3]
 
-    # 高特异度关键词快判：命中即单任务（零 LLM，write/kb/schedule/report/offtopic）
-    kw = _keyword_plan(q)
-    if kw.tasks[0].action != "query" or kw.tasks[0].modality != "answer":
-        kw.tags = _kw_tags
-        kw.followup_tables = followup_tables
-        kw.skip_retrieval = skip_retrieval
-        return kw
-
-    # 判断是否 mock（mock 下 query 类也零 LLM 单任务）
+    # 判断是否 mock / 严格离线（无 LLM：确定性单任务 query，不调模型）
     try:
         from app.ai import gateway as gw
         from app.ai.provider_cfg import resolve_provider_cfg as _resolve
-        provider_cfg = _resolve(state, None)  # P3：resolve 仅 getattr(req,"model_id")，None 即可
+        provider_cfg = _resolve(state, None)
         is_mock = gw.is_effective_mock(provider_cfg)
     except Exception:
         try:
@@ -143,18 +101,25 @@ async def decompose(state: "AppState", conn_id: str, question: str,
             is_mock = True
 
     if is_mock:
-        # F3：query 类在 mock 下单任务（零 LLM 降级）
-        p = TaskPlan(tasks=[TaskSpec(action="query", modality="answer")],
-                     tags=_kw_tags, followup_tables=followup_tables,
-                     skip_retrieval=skip_retrieval, degraded=True, raw_question=q)
-        return p
+        # 无 LLM 可用：确定性降级单任务 query（LLM 路径在真实 provider 下才可达）
+        return TaskPlan(tasks=[TaskSpec(action="query", modality="answer")],
+                        tags=_kw_tags, followup_tables=followup_tables,
+                        skip_retrieval=skip_retrieval, degraded=True, raw_question=q)
 
-    # 真实 LLM 单次调用 → TaskPlan（query 类放行：复合请求可拆，§13.3 语义分解）
-    prompt = _build_prompt(q, confirmed_tags)
+    # 唯一 LLM 意图调用：产出 TaskPlan（复合请求可拆，§13.3 语义分解）
+    prompt = _build_prompt(redacted_q or q, confirmed_tags)
     try:
         from app.ai import gateway as gw
         provider = gw.build_provider(provider_cfg)
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        # 出网隐私：复用 preflight 的清单/审计（manifest/redactions），中央记账统一写
+        _ctx: dict[str, Any] = {}
+        if manifest:
+            _ctx["manifest"] = manifest
+        if manifest is None:
+            _ctx = {"conn_id": conn_id, "connection": conn_id or "__intent__",
+                    "skill": "decompose", "source": "egress", "status": "egress-intent",
+                    "context_meta": {"candidate_tables": [], "kb_docs": 0}}
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None, ctx=_ctx)
         text = (getattr(resp, "content", "") or "").strip()
         p = _parse_llm_plan(text, confirmed_tags)
         p.followup_tables = followup_tables

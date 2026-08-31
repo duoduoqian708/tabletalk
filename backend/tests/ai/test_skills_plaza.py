@@ -15,7 +15,6 @@ from app.ai.skills.registry import (
     validate_skill,
 )
 from app.ai.skills.skill import Skill
-from app.ai.agent.dispatcher import _trigger_match
 
 
 def _custom() -> Skill:
@@ -81,18 +80,6 @@ def test_skill_tool_schemas_filtering():
     assert {t["function"]["name"] for t in ro} == {"get_schema", "run_query", "kb_read", "graph_read"}
     # 未知技能回退全量
     assert len(skill_tool_schemas("nope")) == len(all_names)
-
-
-def test_trigger_routing_matches_enabled_skills():
-    from app.ai.skills import registry as reg
-    reg.load_custom(__import__("tempfile").mkdtemp())
-    register_custom(_custom())
-    assert _trigger_match("帮我做一下订单对账") == "sk_" or _trigger_match("对账一下") is not None
-    assert _trigger_match("今天天气怎么样") is None
-    # 禁用后不再路由
-    sid = next(s.id for s in list_skills() if s.triggers)
-    update_skill(sid, {"enabled": False})
-    assert _trigger_match("对账一下") is None
 
 
 def test_route_effective_disabled_skill_falls_back():

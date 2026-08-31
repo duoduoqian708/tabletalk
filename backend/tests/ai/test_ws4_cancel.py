@@ -31,10 +31,16 @@ class _ScriptedGateway:
 async def _make_pending(app_state, conn_id, monkeypatch, ttl=600) -> str:
     """chat 内触发 run_dml REVIEW，返回 session_id。"""
     from app.ai import gateway as gw
+    import app.ai.decompose as _dec
+    from app.ai.plan import TaskPlan, TaskSpec
 
     fake = _ScriptedGateway([[StreamChunk(tool_calls=[ToolCall(id="c1", name="run_dml",
                                                                 arguments={"sql": _SQL})])]])
     monkeypatch.setattr(gw, "build_provider", lambda cfg: fake)
+    # 2026-09：意图归 LLM（无关键词层）→ 测试直接指定 write 计划，驱动完整写链路
+    async def _write_plan(*a, **k):
+        return TaskPlan(tasks=[TaskSpec(action="write", modality="answer")], degraded=True)
+    monkeypatch.setattr(_dec, "decompose", _write_plan)
     sid = app_state.chats.upsert(None, conn_id, None)
     req = ChatRequest(connection_id=conn_id, session_id=sid, skill_id="write",
                       messages=[{"role": "user", "content": "把 id=1 的商品价格改成 9"}], provider="mock")

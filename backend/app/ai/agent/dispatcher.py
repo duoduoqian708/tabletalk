@@ -1,13 +1,7 @@
-"""意图调度：用户问题 → 从技能注册表选一个技能。
-
-preflight 产出 {intent, tags}，本模块做 intent→skill 映射 + enabled 感知 + 降级。
-保留 dispatch_skill 供旧链路兼容，新链路走 resolve_skill_from_intent。
-"""
+"""意图→技能映射（2026-09：意图意图由 decompose 的 TaskPlan 驱动，本模块只做映射+降级）。"""
 from __future__ import annotations
 
-from app.ai import gateway as gw
-from app.ai.intent import is_report_intent
-from app.ai.skills.registry import get_skill, list_enabled_skills, list_skills
+from app.ai.skills.registry import get_skill, list_enabled_skills
 
 _DEFAULT = "query"
 
@@ -22,18 +16,6 @@ INTENT_TO_SKILL: dict[str, str] = {
 }
 
 FLOOR_SKILLS = {"query", "refusal"}
-
-
-def _trigger_match(q: str) -> str | None:
-    """启用技能的触发词关键词匹配（确定性路由，mock 与真实模型共用）。"""
-    ql = (q or "").lower()
-    for s in list_enabled_skills():
-        if s.id == "query":
-            continue
-        for t in s.triggers:
-            if t and t.lower() in ql:
-                return s.id
-    return None
 
 
 def resolve_skill_from_intent(intent: str) -> tuple[str, bool, str | None]:
@@ -58,37 +40,3 @@ def resolve_skill_from_intent(intent: str) -> tuple[str, bool, str | None]:
     # 被禁用：降级
     msg = "此能力已关闭，可在设置中开启"
     return skill_id, True, msg
-
-
-async def dispatch_skill(state, question: str) -> str:
-    """兼容旧链路：仍支持触发词 + mock/report 回退；新 preflight 链路不走此函数。"""
-    q = (question or "").strip()
-    if not q:
-        return _DEFAULT
-    hit = _trigger_match(q)
-    if hit:
-        return hit
-    rt = state.runtime.get()
-    if gw.is_effective_mock(rt.provider_config()):
-        if is_report_intent(q):
-            return "report"
-        return _DEFAULT
-    skills = [s for s in list_enabled_skills() if s.id != "query"]  # query 是兜底，不参与选择
-    if not skills:
-        return _DEFAULT
-    desc = "\n".join(f"- {s.id}: {s.description}" for s in skills)
-    prompt = (
-        f"用户问题：{question}\n"
-        f"可用技能（除默认查询外）：\n{desc}\n"
-        "返回最匹配的一个技能 id；都不匹配或拿不准返回 query。只返回一个词。"
-    )
-    try:
-        provider = gw.build_provider(rt.provider_config())
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
-        text = (resp.content or "").strip().lower()
-        for s in skills:
-            if s.id in text:
-                return s.id
-    except Exception:  # noqa: BLE001
-        pass
-    return _DEFAULT

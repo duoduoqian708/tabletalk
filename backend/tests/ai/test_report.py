@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from app.ai.intent import is_report_intent
 from app.ai.report import _run_report_query, report_stream
 from app.ai.dto import ChatRequest
 
@@ -21,12 +20,7 @@ async def _collect(state, conn_id, messages, mode="report"):
     return [ev async for ev in report_stream(state, req)]
 
 
-def test_is_report_intent_keywords():
-    assert is_report_intent("出一份 Q3 销售分析报告")
-    assert is_report_intent("给我看下趋势分析")
-    assert is_report_intent("出个 insights dashboard")
-    assert not is_report_intent("查退货率最高的 10 个商品")
-    assert not is_report_intent("")
+
 
 
 async def test_report_clarify_then_plan_with_answer(app_state, conn_id):
@@ -127,17 +121,7 @@ async def test_report_through_api_sse(client, conn_id):
     assert any(m["role"] == "user" for m in detail["messages"])
 
 
-async def test_report_intent_classification_query_mode(app_state, conn_id):
-    """单查询走 query 模式（非报告）——classify_mode 不误判普通查询为 report。"""
-    from app.ai.intent import MODE_QUERY, MODE_REPORT, classify_mode
 
-    qmode = await classify_mode(app_state, "查退货率最高的 10 个商品")
-    assert qmode == MODE_QUERY
-    rmode = await classify_mode(app_state, "出一份 Q3 销售分析报告")
-    assert rmode == MODE_REPORT
-    # 显式 explicit 优先
-    assert await classify_mode(app_state, "随便", explicit=MODE_REPORT) == MODE_REPORT
-    assert await classify_mode(app_state, "出报告", explicit=MODE_QUERY) == MODE_QUERY
 
 
 async def test_audit_filter_by_report_id(client, conn_id):

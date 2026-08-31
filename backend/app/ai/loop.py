@@ -8,12 +8,12 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
-from app.ai.agent.dispatcher import dispatch_skill
 from app.ai.context import assemble_context_full, system_prompt
 from app.ai.context_object import Context
 from app.ai.intent import MODE_QUERY, MODE_REPORT
@@ -81,11 +81,16 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         from app.ai.preflight import preflight as _pf
         pf = await _pf(state, req.connection_id, user_text, history_tail=req._server_history or _normalize_messages(req.messages))
         req._preflight = pf  # type: ignore[attr-defined]  # chat_stream 复用
-        # decompose → TaskPlan（关键词快判 / mock 零 LLM；真实 LLM 单次）
+        # decompose → TaskPlan（2026-09：意图统一由 LLM 产出，无关键词层；
+        # 复用 preflight 的脱敏原文 + 清单，全链路 LLM 出网隐私/记账一致）
         from app.ai.decompose import decompose as _decompose
         plan = await _decompose(state, req.connection_id, user_text,
                                 confirmed_tags=pf.tags or None,
-                                history_tail=req._server_history or _normalize_messages(req.messages))
+                                history_tail=req._server_history or _normalize_messages(req.messages),
+                                redacted_q=pf.redacted_q or user_text,
+                                manifest=pf.manifest)
+        # 意图回填事件/度量（scene_start/stage/intent_mismatch 消费 preflight.intent）
+        pf.intent = plan.tasks[0].action if plan.tasks else "query"
         # preflight 的 plan 级字段优先（追问轮检测更完整）
         if pf.is_followup:
             plan.followup_tables = pf.followup_tables or []
@@ -96,7 +101,17 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         from app.ai.plan import TaskPlan as _TP, TaskSpec as _TS
         plan = _TP(tasks=[_TS(action="query", modality="answer")], degraded=True)
     req.skill_id = route_effective(plan.tasks[0].action, plan.tasks[0].modality)
-    # T2.1 strict 离线拒答：完全离线档下 offtopic/unknown 不调任何模型，本地固定文案
+    # T2.1 strict 离线拒答：完全离线档下 offtopic/unknown 不调任何模型，本地固定文案。
+    # 2026-09：意图识别已无关键词层（LLM 唯一），离线无 LLM 判不出 unknown → 这里用一个
+    # 仅限离线模式的窄拒答护栏兜底（平台外话题兜底，非通用意图识别，不恢复关键词层）。
+    if _strict_offline(state) and _offline_offtopic(user_text):
+        async def _strict_refusal_stream():
+            yield {"type": "turn_start", "connection": req.connection_id}
+            yield {"type": "text", "content": _strict_refusal_text()}
+            yield {"type": "done"}
+        async for ev in _strict_refusal_stream():
+            yield ev
+        return
     if plan.tasks[0].action == "unknown" and _strict_offline(state):
         async def _strict_refusal_stream():
             yield {"type": "turn_start", "connection": req.connection_id}
@@ -274,6 +289,14 @@ def _server_history_for_model(rows: list[dict]) -> list[dict]:
 
 # T2.1 strict 离线拒答：本地固定文案（不调模型、不出网）。中文默认（后端生成的文本与现有 mock/错误文案一致）。
 _STRICT_REFUSAL_ZH = "这不在我的职责范围内。我是一个数据库与平台助手，只处理与当前数据源相关的查询、分析或平台操作。"
+
+
+def _offline_offtopic(q: str) -> bool:
+    """仅离线模式用的平台外话题窄判定（不是意图识别，是离线安全网兜底）。"""
+    try:
+        return bool(re.search(r"你好|谢谢|再见|天气|笑话|你是谁|自我介绍|写诗|闲聊|股票|新闻|游戏", q or "", re.IGNORECASE))
+    except Exception:
+        return False
 
 
 def _strict_offline(state) -> bool:
