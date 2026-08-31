@@ -482,8 +482,28 @@ async def save_graph_layout(conn_id: str, body: GraphLayoutRequest) -> dict:
     return {"saved": saved, "layout": state.knowledge.graph_layout(conn_id)}
 
 
+class GraphPinRequest(BaseModel):
+    from_table: str
+    to_table: str
+    from_col: str | None = None
+    to_col: str | None = None
+
+
 class GraphConfirmRequest(BaseModel):
     from_table: str | None = None   # None = 确认全部
+
+
+@router.post("/{conn_id}/graph/edges/pin")
+async def pin_graph_edge(conn_id: str, body: GraphPinRequest) -> dict:
+    """红边"保留"：给匹配正式边打 pinned 标记（不再判红；重建保留）。"""
+    _have(conn_id)
+    state = get_state()
+    if not state.knowledge.is_built(conn_id):
+        raise HTTPException(status_code=409, detail="知识库未就绪")
+    state.knowledge.ensure_loaded(conn_id)
+    n = state.knowledge.pin_graph_edge(
+        conn_id, body.from_table, body.to_table, body.from_col, body.to_col)
+    return {"pinned": n, "graph": state.knowledge.graph(conn_id)}
 
 
 @router.post("/{conn_id}/graph/confirm")

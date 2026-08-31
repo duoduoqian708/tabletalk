@@ -5795,6 +5795,27 @@ tr.clickable.open { background: var(--accent-dim); }
   box-shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
   pointer-events: none;
   backdrop-filter: blur(4px);
+
+/* 图 diff 三色（2026-09）：重建提案 vs 当前生效 —— 新增绿 / 修改黄 / 删除红 */
+
+/* ── 2026-09：知识库审查交互（提案对比 / 标签两列 / 边 diff 徽标） ── */
+.kb-current-tags { margin-top: 6px; }
+.kb-pending-tags .kb-route-cap, .kb-current-tags .kb-route-cap { margin-top: 4px; }
+.kb-cmp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 480px; }
+.kb-cmp-side { border: 1px solid var(--ink-faint); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.kb-cmp-h { font-size: 11px; letter-spacing: .06em; color: var(--ink-dim); border-bottom: 1px dashed var(--ink-faint); padding-bottom: 4px; }
+.kb-cmp-body { font-size: 13px; line-height: 1.55; min-height: 40px; white-space: pre-wrap; }
+.kb-cmp-meta { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.kb-cmp-side .btn { margin-top: auto; align-self: stretch; }
+.rv-edge-badge { font-style: normal; font-size: 10px; margin-left: 6px; padding: 1px 5px; border-radius: 4px; border: 1px solid; }
+.rv-edge-badge.diff-new { color: var(--green, #3eb777); border-color: var(--green, #3eb777); }
+.rv-edge-badge.diff-mod { color: var(--amber); border-color: var(--amber); }
+.trg2d-edge.diff-new .trg2d-edge-line { stroke: var(--green, #3eb777); opacity: 1; }
+.trg2d-edge.diff-new .trg2d-edge-label { fill: var(--green, #3eb777); }
+.trg2d-edge.diff-modified .trg2d-edge-line { stroke: var(--amber); opacity: 1; }
+.trg2d-edge.diff-modified .trg2d-edge-label { fill: var(--amber); }
+.trg2d-edge.diff-removed .trg2d-edge-line { stroke: var(--danger, #e0575b); opacity: 1; stroke-dasharray: 5 3; }
+.trg2d-edge.diff-removed .trg2d-edge-label { fill: var(--danger); }
 }
 .edge-tip-title { color: var(--ink-bright); font-weight: 600; overflow-wrap: anywhere; word-break: break-all; }
 .edge-tip-content {

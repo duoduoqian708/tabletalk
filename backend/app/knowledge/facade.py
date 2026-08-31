@@ -63,7 +63,6 @@ class KnowledgeBase:
     _graph = property(lambda self: self.graph_store._graph)
     _schema_fingerprint_map = property(lambda self: self.build_service._schema_fingerprint_map)
     _synced_at = property(lambda self: self.build_service._synced_at)
-    _stash = property(lambda self: self.build_service._stash)
     _excluded = property(lambda self: self.graph_store._excluded)
     _llm_graph_edges = property(lambda self: self.graph_store._llm_graph_edges)
     _table_vec = property(lambda self: self.retrieval_service._table_vec)
@@ -178,7 +177,7 @@ class KnowledgeBase:
     # ---------- 公开方法：图相关 ----------
     def graph(self, conn_id: str) -> dict[str, Any]:
         self.ensure_loaded(conn_id)
-        return self.graph_store.graph(conn_id)
+        return self.graph_store.graph(conn_id, self.semantic_store._schema.get(conn_id))
 
     def expand_tables(self, conn_id: str, seeds: set[str], hops: int = 2) -> set[str]:
         return self.graph_store.expand_tables(conn_id, seeds, hops)
@@ -195,6 +194,11 @@ class KnowledgeBase:
 
     def remove_graph_edge(self, conn_id: str, frm: str, to: str, kind: str) -> int:
         return self.graph_store.remove_graph_edge(conn_id, frm, to, kind, self._save_conn)
+
+    def pin_graph_edge(self, conn_id: str, frm: str, to: str, frm_col: str | None = None,
+                       to_col: str | None = None) -> int:
+        """红边保留：给匹配正式边打 pinned 标记（人工决策资产）。"""
+        return self.graph_store.pin_edge(conn_id, frm, to, frm_col, to_col, self._save_conn)
 
     def confirm_graph_edges(self, conn_id: str, from_table: str | None = None) -> int:
         return self.graph_store.confirm_graph_edges(conn_id, from_table, self._save_conn)
@@ -234,8 +238,6 @@ class KnowledgeBase:
     def annotate_drafts(self, conn_id: str, items: list[dict[str, Any]]) -> int:
         return self.semantic_store.annotate_drafts(conn_id, items, self._save_conn)
 
-    def take_supplemented(self, conn_id: str) -> list[str]:
-        return self.semantic_store.take_supplemented(conn_id)
 
     async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
         return await self.semantic_store.confirm(
@@ -245,15 +247,16 @@ class KnowledgeBase:
         )
 
     async def confirm_all(self, conn_id: str) -> dict[str, int]:
-        archived = self.build_service._archive_stash(conn_id, self._storage)
+        # 2026-09 修订：先归档当前生效字段文本（提案提升前的旧值，供字段回溯），再确认
+        archived = self.build_service._archive_current_fields(conn_id, self._storage)
         n_docs = await self.confirm(conn_id)
         n_tags = 0
         for name in list(self.semantic_store._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
         n_edges = self.confirm_graph_edges(conn_id)
+        self.graph_store.clear_diff_base(conn_id)
         await self._embed_tables(conn_id, None)
-        self.build_service._clear_stash(conn_id, self._storage)
         self._storage(conn_id).bump_kb_version()
         self._save_conn(conn_id)
         return {"docs": n_docs, "tags": n_tags, "edges": n_edges, "archived": archived,
@@ -271,7 +274,6 @@ class KnowledgeBase:
         self.retrieval_service._artifact_fingerprint.pop(conn_id, None)
         self._schema_fingerprint_map.pop(conn_id, None)
         self._synced_at.pop(conn_id, None)
-        self._stash.pop(conn_id, None)
         self.concept_store._concepts.pop(conn_id, None)
         self.filter_store._filters.pop(conn_id, None)
         self.fewshot_store._items.pop(conn_id, None)
@@ -289,8 +291,8 @@ class KnowledgeBase:
                    description: str | None = None, color: str | None = None) -> bool:
         return self.semantic_store.update_tag(conn_id, old_name, new_name, description, color, self._save_conn)
 
-    def assign_table_tags(self, conn_id: str, table: str, names: list[str]) -> int:
-        return self.semantic_store.assign_table_tags(conn_id, table, names, self._save_conn)
+    def assign_table_tags(self, conn_id: str, table: str, names: list[str], merge: bool = False) -> int:
+        return self.semantic_store.assign_table_tags(conn_id, table, names, self._save_conn, merge=merge)
 
     def confirm_tag(self, conn_id: str, name: str) -> bool:
         return self.semantic_store.confirm_tag(conn_id, name, self._save_conn)
@@ -371,7 +373,7 @@ class KnowledgeBase:
         return await self.semantic_store.reject_comment(conn_id, table, column, self._save_conn, self._reembed_tables)
 
     async def discard_drafts(self, conn_id: str) -> dict[str, int]:
-        """版本制「放弃」：丢弃本轮草稿，从 stash 恢复当前版本（零回滚逻辑、不重嵌）。"""
+        """「放弃本轮」：清除全部提案（当前生效知识不动，无需回滚）。"""
         return await self.build_service.discard_drafts(self, conn_id)
     def synced_at(self, conn_id: str) -> str:
         return self._synced_at.get(conn_id, "")
@@ -454,9 +456,6 @@ class KnowledgeBase:
         return self.retrieval_service.overview(self, conn_id)
     def current_version(self, conn_id: str) -> int:
         return self.build_service.current_version(conn_id, self._storage)
-
-    def _stash_persisted(self, conn_id: str) -> bool:
-        return self.build_service._stash_persisted(conn_id, self._storage)
 
     def needs_sync(self, conn_id: str, schema: dict[str, Any]) -> bool:
         self.ensure_loaded(conn_id)

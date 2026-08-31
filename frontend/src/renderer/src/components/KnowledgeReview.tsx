@@ -208,6 +208,8 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
   const [colDraft, setColDraft] = useState({ comment: '', values: '', example: '' })
   /* 字段版本回溯：历史版本列表（确认时归档，N=3） */
   const [histOpen, setHistOpen] = useState<{ table: string; column: string } | null>(null)
+  /* 提案对比弹窗：当前生效值 vs 本轮提案 */
+  const [cmpOpen, setCmpOpen] = useState<{ table: string; column: string } | null>(null)
   const [histItems, setHistItems] = useState<FieldHistoryItem[]>([])
   const [histLoading, setHistLoading] = useState(false)
 
@@ -339,10 +341,10 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
         <div className="tdp-kv">
           <span className="tdp-kv-k mono">{t('kb.detailTableComment')}</span>
           <span className="tdp-kv-v">
-            {tbl.comment_status === 'draft' && (
+            {tbl.proposed_comment && (
               <span className="mini-acts">
-                <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name)}>✓</button>
-                <button title={t('kb.rejectTitle')} onClick={() => rejectComment(currentId, tbl.name)}>✕</button>
+                <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name)}>✓</button>
+                <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name)}>✕</button>
               </span>
             )}
             <button className="mini-edit" onClick={beginCmtEdit}>✎ {t('kb.edit')}</button>
@@ -370,6 +372,12 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
         {/* 字段：name/type/pk/fk 只读；comment/values/example 知识字段可编辑 */}
         <div className="tdp-fields-h mono">
           {t('kb.detailColumns')} <span className="tdp-hint">({tbl.columns.length})</span>
+          {(tbl.proposed_comment || tbl.columns.some((c) => c.proposed_comment || c.proposed_values || c.proposed_example)) && (
+            <span className="mini-acts">
+              <button title={t('kb.applyAll')} onClick={() => confirmComment(currentId, tbl.name)}>✓ {t('kb.applyAll')}</button>
+              <button title={t('kb.keepAll')} onClick={() => rejectComment(currentId, tbl.name)}>⟲ {t('kb.keepAll')}</button>
+            </span>
+          )}
         </div>
         <div className="tdp-cols">
           {tbl.columns.map((col) => (
@@ -383,10 +391,11 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
                 {col.is_enum && <span className="ckey enum mono">ENUM</span>}
                 <span className="spacer" />
                 <button className="mini-edit" onClick={() => beginColEdit(col)}>✎</button>
-                {col.status === 'draft' && (
+                {(col.proposed_comment || col.proposed_values || col.proposed_example) && (
                   <span className="mini-acts">
-                    <button title={t('kb.confirmTitle')} onClick={() => confirmComment(currentId, tbl.name, col.name)}>✓</button>
-                    <button title={t('kb.rejectTitle')} onClick={() => rejectComment(currentId, tbl.name, col.name)}>✕</button>
+                    <button title={t('kb.compareTitle')} onClick={() => setCmpOpen({ table: tbl.name, column: col.name })}>⧉</button>
+                    <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name, col.name)}>✓</button>
+                    <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name, col.name)}>✕</button>
                   </span>
                 )}
               </div>
@@ -465,7 +474,43 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
             </div>
           </div>
         </div>
+
       )}
+      {/* 提案对比：当前生效值 vs 本轮提案 */}
+      {cmpOpen && (() => {
+        const ct = overview.tables.find((tt) => tt.name === cmpOpen.table)
+        const col = ct?.columns.find((cc) => cc.name === cmpOpen.column)
+        if (!col) return null
+        return (
+          <div className="kb-dialog-mask" onClick={() => setCmpOpen(null)}>
+            <div className="kb-dialog kb-cmp" onClick={(e) => e.stopPropagation()}>
+              <div className="kb-dialog-title">{t('kb.compare')} · <span className="mono">{cmpOpen.table}.{cmpOpen.column}</span>
+                <span className="tdp-hint"> {t('kb.compareHint')}</span></div>
+              <div className="kb-cmp-grid">
+                <div className="kb-cmp-side">
+                  <div className="kb-cmp-h mono">{t('kb.currentVal')}</div>
+                  <div className="kb-cmp-body">{col.comment || <span className="kb-none">—</span>}</div>
+                  <div className="kb-cmp-meta">
+                    {col.values && <div className="cvals" title={col.values}>{t('kb.colValues')}: {col.values}</div>}
+                    {col.example && <div className="cexample mono">{t('kb.colExample')} {col.example}</div>}
+                  </div>
+                  <button className="btn ghost" onClick={() => { void rejectComment(currentId, cmpOpen.table, cmpOpen.column); setCmpOpen(null) }}>⟲ {t('kb.keepCurrent')}</button>
+                </div>
+                <div className="kb-cmp-side">
+                  <div className="kb-cmp-h mono">{t('kb.proposal')}</div>
+                  <div className="kb-cmp-body">{col.proposed_comment || <span className="kb-none">—</span>}</div>
+                  <div className="kb-cmp-meta">
+                    {col.proposed_values && <div className="cvals" title={col.proposed_values}>{t('kb.colValues')}: {col.proposed_values}</div>}
+                    {col.proposed_example && <div className="cexample mono">{t('kb.colExample')} {col.proposed_example}</div>}
+                  </div>
+                  <button className="btn save" onClick={() => { void confirmComment(currentId, cmpOpen.table, cmpOpen.column); setCmpOpen(null) }}>✓ {t('kb.applyProposal')}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
     </div>
   )
 }
@@ -591,6 +636,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
     ...tg,
     count: (tablesByTag[tg.name] ?? []).length,
   }))
+  const tagCount = Object.fromEntries(tagRows.map((r) => [r.name, r.count]))
   const untaggedCount = overview?.tables.filter((tb) => tb.tags.length === 0).length ?? 0
 
   /* 中间列过滤：本地表名检索 + 选中标签（任一命中）∪ 未分类 + 只看待确认（三级复合，零网络） */
@@ -608,7 +654,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
     }
     if (q) ts = ts.filter((tb) => tb.name.toLowerCase().includes(q))
     if (showDraftOnly) {
-      ts = ts.filter((tb) => tb.comment_status === 'draft' || tb.columns.some((c) => c.status === 'draft'))
+      ts = ts.filter((tb) => tb.proposed_comment || tb.columns.some((c) => c.proposed_comment || c.proposed_values || c.proposed_example))
     }
     return ts
   }, [overview, selTags, showDraftOnly, kq])
@@ -773,7 +819,10 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                     <div className="kb-drafts-list">
                       {(overview.graph.llm_draft_edges ?? []).map((edge, idx) => (
                         <div key={`ge-${idx}-${edge.from_table}-${edge.to_table}`} className={`rv-card rv-graph-edge${edge.status === 'previously_rejected' ? ' previously-rejected' : ''}`}>
-                          <div className="rv-card-kind rv-kind-graph">{t('kb.kindGraph')}</div>
+                          <div className="rv-card-kind rv-kind-graph">{t('kb.kindGraph')}
+                            {edge.diff === 'new' && <em className="rv-edge-badge diff-new">{t('kb.diffNew')}</em>}
+                            {edge.diff === 'modified' && <em className="rv-edge-badge diff-mod">{t('kb.diffModified')}</em>}
+                          </div>
                           <div className="rv-card-main">
                             <div className="rv-card-ctx">
                               <span className="mono">{edge.from_table}</span>
@@ -810,38 +859,9 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                   <span className="tdp-hint">({tagRows.length})</span>
                 </div>
                 <div className="kb-tag-list">
-                  {tagRows.length === 0 && <div className="rv-none mono">{t('kb.noConfirmedTags')}</div>}
-                  {tagRows.map((tg) => {
-                    const on = selTags.has(tg.name)
-                    const color = getTagColor(tg.name, colorByTag)
-                    return (
-                      <div key={tg.name} className={`kb-tag-row${on ? ' on' : ''}`}
-                        style={{ '--tag-c': color } as React.CSSProperties}
-                        onClick={() => toggleTag(tg.name)}>
-                        <span className="kb-tag-chip">
-                          <span className="kb-tag-name" style={{ color: tg.status === 'draft' ? 'var(--amber)' : undefined }}>{tg.name}</span>
-                          <span className="kb-tag-cnt mono">{tg.count}</span>
-                        </span>
-                        <button className="mini-edit" title={t('kb.editTag')}
-                          onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
-                        {tg.status === 'draft' && (
-                          <span className="mini-acts">
-                            <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
-                            <button title={t('kb.rejectTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
-                          </span>
-                        )}
-                        {on && <span className="kb-tag-active mono">✓</span>}
-                      </div>
-                    )
-                  })}
-                  <div className={`kb-tag-row untagged${selTags.has(UNTAGGED) ? ' on' : ''}`} onClick={() => toggleTag(UNTAGGED)}>
-                    <span style={{ width: 9, height: 9, borderRadius: '50%', border: '1.5px dashed var(--ink-faint)', flexShrink: 0 }} />
-                    <span className="kb-tag-name" style={{ color: 'var(--ink-dim)' }}>{t('kb.untagged')}</span>
-                    <span className="kb-tag-cnt mono">{untaggedCount}</span>
-                  </div>
                   {pendingTags.length > 0 && (
                     <div className="kb-pending-tags">
-                      <div className="kb-route-cap mono">{t('kb.pendingGroup')}</div>
+                      <div className="kb-route-cap mono">{t('kb.pendingGroup')} <span className="tdp-hint">({pendingTags.length})</span></div>
                       {pendingTags.map((tg) => (
                         <div key={tg.name} className={`kb-tag-row${selTags.has(tg.name) ? ' on' : ''}`}
                           style={{ '--tag-c': getTagColor(tg.name, colorByTag) } as React.CSSProperties}
@@ -853,11 +873,41 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                             onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
                           <span className="mini-acts">
                             <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
+                            <button title={t('kb.rejectTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
                           </span>
                         </div>
                       ))}
                     </div>
                   )}
+                  <div className="kb-current-tags">
+                    <div className="kb-route-cap mono">{t('kb.currentGroup')} <span className="tdp-hint">({confirmedTags.length})</span></div>
+                    {confirmedTags.length === 0 && <div className="rv-none mono">{t('kb.noConfirmedTags')}</div>}
+                    {confirmedTags.map((tg) => {
+                      const on = selTags.has(tg.name)
+                      const color = getTagColor(tg.name, colorByTag)
+                      return (
+                        <div key={tg.name} className={`kb-tag-row${on ? ' on' : ''}`}
+                          style={{ '--tag-c': color } as React.CSSProperties}
+                          onClick={() => toggleTag(tg.name)}>
+                          <span className="kb-tag-chip">
+                            <span className="kb-tag-name">{tg.name}</span>
+                            <span className="kb-tag-cnt mono">{tagCount[tg.name] ?? 0}</span>
+                          </span>
+                          <button className="mini-edit" title={t('kb.editTag')}
+                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
+                          <span className="mini-acts">
+                            <button title={t('kb.deleteTagTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
+                          </span>
+                          {on && <span className="kb-tag-active mono">✓</span>}
+                        </div>
+                      )
+                    })}
+                    <div className={`kb-tag-row untagged${selTags.has(UNTAGGED) ? ' on' : ''}`} onClick={() => toggleTag(UNTAGGED)}>
+                      <span style={{ width: 9, height: 9, borderRadius: '50%', border: '1.5px dashed var(--ink-faint)', flexShrink: 0 }} />
+                      <span className="kb-tag-name" style={{ color: 'var(--ink-dim)' }}>{t('kb.untagged')}</span>
+                      <span className="kb-tag-cnt mono">{untaggedCount}</span>
+                    </div>
+                  </div>
                   <button className="kb-tag-add-new" onClick={() => setNewTagOpen(true)}>＋ {t('kb.newTag')}</button>
                 </div>
                 {selTags.size > 0 && (

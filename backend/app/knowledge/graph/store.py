@@ -14,7 +14,9 @@ class GraphStore:
         # 图相关状态
         self._graph: dict[str, dict[str, Any]] = {}  # conn -> {edges}
         self._excluded: dict[str, set[str]] = {}  # conn -> 图谱视图中移出的表
-        self._llm_graph_edges: dict[str, list[dict[str, Any]]] = {}  # conn -> LLM 发现的 draft 边
+        self._llm_graph_edges: dict[str, list[dict[str, Any]]] = {}  # conn -> 待确认 draft 边
+        self._diff_base: dict[str, set[tuple]] = {}  # conn -> 本轮重建提案键集合（图 diff 三色基线）
+        self._diff_active: dict[str, bool] = {}  # conn -> diff 是否激活（重建后~确认/放弃止）
 
     # ---------- 图谱构建（2026-08-31 修订：一切边经人工确认才生效） ----------
     @staticmethod
@@ -78,13 +80,20 @@ class GraphStore:
         else:
             keep = list(pending)
         confirmed = self._confirmed_edge_keys(conn_id)
+        confirmed_edges = self._graph.get(conn_id, {}).get("edges", [])
         seen = {self._llm_edge_key(e) for e in keep}
         out = list(keep)
         added = 0
         for e in drafts:
             key = self._llm_edge_key(e)
-            if key in seen or key in confirmed:
+            if key in seen:
                 continue
+            if key in confirmed:
+                # 与已确认边同列对：基数一致 = 无变化丢弃；基数不同 = 保留为"修改"（diff=modified）
+                match = next((ce for ce in confirmed_edges
+                              if self._llm_edge_key(ce) == key), None)
+                if match is not None and (match.get("cardinality") or "n:1") == (e.get("cardinality") or "n:1"):
+                    continue
             seen.add(key)
             out.append(e)
             added += 1
@@ -98,9 +107,12 @@ class GraphStore:
 
     @staticmethod
     def _llm_edge_key(e: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
-        """LLM 边的去重键（边 v2：字段对，方向无关）。"""
-        a = (e.get("from_table", ""), e.get("from_col") or "")
-        b = (e.get("to_table", ""), e.get("to_col") or "")
+        """边的去重/对比键（字段对，方向无关）。
+
+        兼容 draft 格式（from_table/to_table）与正式图格式（from/to）：去重键统一。
+        """
+        a = (e.get("from_table") or e.get("from") or "", e.get("from_col") or "")
+        b = (e.get("to_table") or e.get("to") or "", e.get("to_col") or "")
         x, y = sorted([a, b])
         return (x[0], x[1], y[0], y[1])
 
@@ -207,9 +219,73 @@ class GraphStore:
         return len(to_reject)
 
     # ---------- 图谱查询 ----------
-    def graph(self, conn_id: str) -> dict[str, Any]:
-        g = self._graph.get(conn_id, {"edges": []})
-        return {**g, "llm_draft_edges": self._llm_graph_edges.get(conn_id, [])}
+    # ---------- 图 diff（2026-09：本轮重建 vs 当前生效三色标记） ----------
+    def set_diff_base(self, conn_id: str, drafts: list[dict]) -> None:
+        """重建后建立 diff 基线并激活三色标记：正式图中未被重新提议、端点仍在的边判"删除"（红）。"""
+        self._diff_base[conn_id] = {self._llm_edge_key(d) for d in drafts}
+        self._diff_active[conn_id] = True
+
+    def clear_diff_base(self, conn_id: str) -> None:
+        """确认全部/放弃后清除（审查结束，边全部恢复正常灰态）。"""
+        self._diff_base.pop(conn_id, None)
+        self._diff_active.pop(conn_id, None)
+
+    def pin_edge(self, conn_id: str, frm: str, to: str, frm_col: str | None,
+                 to_col: str | None, save_conn_fn: Any = None) -> int:
+        """红边"保留"：给匹配的正式边打 pinned 标记（不再判红；人工决策资产，跨重建保留）。"""
+        n = 0
+        for e in self._graph.get(conn_id, {}).get("edges", []):
+            if e.get("from") == frm and e.get("to") == to \
+                    and e.get("from_col") == frm_col and e.get("to_col") == to_col:
+                if not e.get("pinned"):
+                    e["pinned"] = True
+                    n += 1
+        if n and save_conn_fn:
+            save_conn_fn(conn_id)
+        return n
+
+    def graph(self, conn_id: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+        """图输出（2026-09 修订）：带三色 diff 标记。
+
+        - 正式边 diff:
+            "removed" = 本轮未重新提案（不在 draft 队列、不在重建基线）、端点表/字段仍
+            存活、且非人工连线/未 pinned——红色（"理论上还应该存在但新版丢了"）
+            None = 正常灰态
+        - draft 边 diff: "new"（绿）| "modified"（黄，与已确认边同列对但基数不同）
+        """
+        edges = self._graph.get(conn_id, {"edges": []}).get("edges", [])
+        drafts = self._llm_graph_edges.get(conn_id, [])
+        base = self._diff_base.get(conn_id, set())
+        diff_active = self._diff_active.get(conn_id, False)
+        draft_keys = {self._llm_edge_key(d) for d in drafts}
+
+        tables = {t["name"] for t in schema.get("tables", [])} if schema else None
+        cols = {(c["table"], c["name"]) for c in schema.get("columns", [])} if schema else None
+
+        def endpoints_alive(e: dict) -> bool:
+            if tables is not None and (e.get("from") not in tables or e.get("to") not in tables):
+                return False
+            if cols is not None and e.get("from_col") and (e.get("from"), e.get("from_col")) not in cols:
+                return False
+            if cols is not None and e.get("to_col") and (e.get("to"), e.get("to_col")) not in cols:
+                return False
+            return True
+
+        def key_of(e: dict) -> tuple:
+            return self._llm_edge_key(e)
+
+        confirmed_keys = {key_of(e) for e in edges}
+        out_edges = []
+        for e in edges:
+            red = (diff_active and not e.get("pinned") and e.get("kind") != "user"
+                   and endpoints_alive(e)
+                   and key_of(e) not in draft_keys and key_of(e) not in base)
+            out_edges.append({**e, "diff": "removed" if red else None})
+        out_drafts = [
+            {**d, "diff": "modified" if key_of(d) in confirmed_keys else "new"}
+            for d in drafts
+        ]
+        return {"edges": out_edges, "llm_draft_edges": out_drafts}
 
     def excluded_tables(self, conn_id: str) -> list[str]:
         """图谱视图中已被移出的表（不影响审查页的表列表）。"""

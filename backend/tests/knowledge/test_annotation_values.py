@@ -39,20 +39,25 @@ def _status_ci(kb, conn_id: str):
 
 
 async def test_build_authorized_writes_values_and_example(app_state):
-    """include_samples=True → 低基数列 values 非空且「；」分隔、example 取首样本；列/表进 draft。"""
+    """include_samples=True -> 低基数列 values 非空且「；」分隔、example 取首样本（进提案）。"""
     st = app_state
     conn = "c-auth"
     stats = await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
 
     tk = st.knowledge._tables[conn]["orders"]
     ci = tk.columns["status"]
-    assert ci.status == "draft" and ci.comment
-    assert ci.values and "；" in ci.values          # 取值对照入库且分号分隔
-    assert all("=" in seg for seg in ci.values.split("；"))
-    assert ci.example == "P"                        # 首个非空样本
-    assert tk.status == "draft" and tk.comment      # 表级注释草案
+    # 2026-09 修订：AI 产出进 proposed_*（当前值不动，待确认提升）
+    assert ci.proposed_comment
+    assert ci.proposed_values and "；" in ci.proposed_values
+    assert all("=" in seg for seg in ci.proposed_values.split("；"))
+    assert ci.proposed_example == "P"                # 首个非空样本
+    assert tk.proposed_comment                       # 表级注释提案
     assert stats["ai_docs_added"] > 0
-    assert tk.ddl                                   # DDL 进 TableKnowledge
+    assert tk.ddl                                     # DDL 进 TableKnowledge
+    # 确认 -> 提案提升为当前
+    assert await st.knowledge.confirm(conn) > 0
+    assert ci.status == "confirmed" and ci.comment
+    assert ci.values and "；" in ci.values and ci.example == "P"
 
 
 async def test_sync_without_samples_preserves_existing_values(app_state):
@@ -60,6 +65,7 @@ async def test_sync_without_samples_preserves_existing_values(app_state):
     st = app_state
     conn = "c-preserve"
     await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
+    await st.knowledge.confirm(conn)  # 提案提升为当前
     ci = _status_ci(st.knowledge, conn)
     assert ci.values and ci.example  # 前置：授权构建已产出 values/example
     prev_values, prev_example = ci.values, ci.example
@@ -80,9 +86,7 @@ async def test_sync_supplements_missing_values_on_confirmed(app_state):
     await st.knowledge.build(conn, _schema(), _samples(), include_samples=True)
     kb = st.knowledge
     ci = kb._tables[conn]["orders"].columns["status"]
-    ci.status = "confirmed"
-    ci.values = ""
-    ci.example = ""
+    await kb.confirm(conn)  # 全部提升为当前（comment/values/example 就位）
     kb._save_conn(conn)
     import copy
     schema2 = copy.deepcopy(_schema())
@@ -102,8 +106,8 @@ async def test_build_unauthorized_empty_values_example(app_state):
     await st.knowledge.build(conn, _schema(), _samples(), include_samples=False)
     tk = st.knowledge._tables[conn]["orders"]
     for ci in tk.columns.values():
-        assert ci.comment                            # 注释仍生成（凭结构）
-        assert ci.values == "" and ci.example == ""  # 无数据授权 → 零实例内容
+        assert ci.proposed_comment                    # 注释仍生成（凭结构）
+        assert ci.proposed_values == "" and ci.proposed_example == ""  # 无数据授权 -> 零实例内容
 
 
 async def test_incremental_reannotation_respects_gate(app_state):
@@ -121,7 +125,7 @@ async def test_incremental_reannotation_respects_gate(app_state):
             conn, schema2, samples2, include_samples=authorized,
         )
         assert res["changed"]
-        assert ("F" in _status_ci(st.knowledge, conn).values) is authorized
+        assert ("F" in _status_ci(st.knowledge, conn).proposed_values) is authorized
 
 
 async def test_sync_full_rebuild_fallback_respects_gate(app_state):
@@ -129,7 +133,7 @@ async def test_sync_full_rebuild_fallback_respects_gate(app_state):
     st = app_state
     for conn, authorized in (("sync-off", False), ("sync-on", True)):
         await st.knowledge.sync(conn, _schema(), _samples(), include_samples=authorized)
-        assert (_status_ci(st.knowledge, conn).values != "") is authorized
+        assert (_status_ci(st.knowledge, conn).proposed_values != "") is authorized
 
 
 async def test_sync_resolves_none_from_runtime_setting(app_state):
@@ -137,7 +141,7 @@ async def test_sync_resolves_none_from_runtime_setting(app_state):
     st = app_state
     st.runtime.update({"kb_ai_annotation_samples": True})
     await st.knowledge.sync("sync-runtime", _schema(), _samples())
-    assert _status_ci(st.knowledge, "sync-runtime").values != ""
+    assert _status_ci(st.knowledge, "sync-runtime").proposed_values != ""
 
 
 # ---------- 真实解析路径（非 mock）：values 透传 + example 后端规范化 ----------
@@ -200,7 +204,7 @@ async def test_build_unauthorized_extracts_explicit_enum(app_state):
     conn = "c-enum"
     await st.knowledge.build(conn, schema, {}, include_samples=False)
     ci = st.knowledge._tables[conn]["orders"].columns["status"]
-    assert ci.values == "P=P（业务含义待确认）；S=S（业务含义待确认）；R=R（业务含义待确认）"
+    assert ci.proposed_values == "P=P（业务含义待确认）；S=S（业务含义待确认）；R=R（业务含义待确认）"
     assert ci.example == ""
 
 

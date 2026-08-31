@@ -79,13 +79,10 @@ async def test_first_round_discard_withdraws_all_drafts(tmp_path):
     # 草案全撤：pending 清零
     assert kb.pending_counts("c1") == {"draft_docs": 0, "draft_tags": 0, "llm_graph_draft": 0}
     tk = kb._tables["c1"]["orders"]
-    assert tk.status == "none"
-    assert tk.columns["status"].status == "none"
-    # 文本保留不清空
-    assert tk.comment == "订单主表草案"
-    assert tk.columns["status"].comment == "订单状态草案"
-    assert tk.columns["status"].values == "P=待付款"
-    assert tk.columns["status"].example == "P"
+    # 2026-09 修订：草案在提案区（proposed_*），放弃后连同提案一起清空（当前无内容）
+    assert not tk.has_proposal
+    assert not tk.columns["status"].has_proposal
+    assert tk.comment == "" and tk.columns["status"].comment == ""
     # 标签移除并解绑（对齐 reject_tag）
     tags = kb.tags("c1")
     assert not any(tg["name"] == "交易域" for tg in tags["library"])
@@ -169,8 +166,9 @@ async def test_discard_api_ready_when_history_exists(client, conn_id):
 
     await _build_and_wait(client, conn_id)
     ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
-    tbl = next(t for t in ov["tables"] if any(c["status"] == "draft" for c in t["columns"]))
-    col = next(c for c in tbl["columns"] if c["status"] == "draft")
+    # 2026-09 修订：待确认内容是提案（proposed_*），不再写进 comment/status=draft
+    tbl = next(t for t in ov["tables"] if any(c.get("proposed_comment") for c in t["columns"]))
+    col = next(c for c in tbl["columns"] if c.get("proposed_comment"))
     r = await client.post(f"/api/v1/knowledge/{conn_id}/confirm",
                           json={"table": tbl["name"], "column": col["name"]})
     assert r.json()["confirmed"] >= 1
@@ -182,5 +180,5 @@ async def test_discard_api_ready_when_history_exists(client, conn_id):
     ov2 = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
     t2 = next(t for t in ov2["tables"] if t["name"] == tbl["name"])
     c2 = next(c for c in t2["columns"] if c["name"] == col["name"])
-    assert c2["status"] == "confirmed" and c2["comment"] == col["comment"]
-    assert all(cc["status"] != "draft" for t in ov2["tables"] for cc in t["columns"])
+    assert c2["status"] == "confirmed" and c2["comment"] == col["proposed_comment"]
+    assert all(not c3.get("proposed_comment") for t in ov2["tables"] for c3 in t["columns"])

@@ -42,7 +42,45 @@ class ColumnInfo:
     comment: str = ""      # 业务含义（AI 生成 → 人工确认）
     values: str = ""       # 取值对照 "P=待付款；S=已发货；R=已退货"
     example: str = ""      # 示例值（首个非空样本，截断 60 字符）
-    status: str = "none"   # none | draft | confirmed（comment+values 整体确认）
+    status: str = "none"   # 当前内容状态：none | confirmed（comment+values 整体）
+
+    # ---- 2026-09 修订：当前生效版 + 本轮提案并行 ----
+    # proposed_* 是本轮 AI 提案（重建产生，与当前值并存）：
+    # 确认 = 提案提升为当前（proposal -> comment, status=confirmed）；
+    # 保持当前/拒绝 = 清除提案，当前值不动。审查页对比按钮读两组字段。
+    proposed_comment: str = ""   # 本轮提案（空 = AI 无提案）
+    proposed_values: str = ""
+    proposed_example: str = ""
+
+    @property
+    def has_proposal(self) -> bool:
+        return bool(self.proposed_comment or self.proposed_values or self.proposed_example)
+
+    def apply_proposal(self) -> bool:
+        """提案提升为当前（空提案项保留当前值）。返回是否有变化。"""
+        changed = False
+        if self.proposed_comment:
+            self.comment = self.proposed_comment
+            changed = True
+        if self.proposed_values:
+            self.values = self.proposed_values
+            changed = True
+        if self.proposed_example:
+            self.example = self.proposed_example
+            changed = True
+        self.proposed_comment = ""
+        self.proposed_values = ""
+        self.proposed_example = ""
+        return changed
+
+    def clear_proposal(self) -> bool:
+        """保持当前：清除提案。返回是否有变化。"""
+        if self.has_proposal:
+            self.proposed_comment = ""
+            self.proposed_values = ""
+            self.proposed_example = ""
+            return True
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -66,6 +104,24 @@ class TableKnowledge:
     excluded: bool = False
     layout: dict[str, Any] = field(default_factory=dict)  # 2D 图布局坐标（透传存储，渲染在 T4）
     vector_override: str = ""  # 人工覆盖的向量化片段文本；空 = 用构建合成文本
+    proposed_comment: str = ""  # 本轮 AI 提案（表级，与当前 comment 并存）
+
+    @property
+    def has_proposal(self) -> bool:
+        return bool(self.proposed_comment)
+
+    def apply_proposal(self) -> bool:
+        if self.proposed_comment:
+            self.comment = self.proposed_comment
+            self.proposed_comment = ""
+            return True
+        return False
+
+    def clear_proposal(self) -> bool:
+        if self.proposed_comment:
+            self.proposed_comment = ""
+            return True
+        return False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -79,6 +135,7 @@ class TableKnowledge:
             "excluded": self.excluded,
             "layout": self.layout,
             "vector_override": self.vector_override,
+            "proposed_comment": self.proposed_comment,
         }
 
     @classmethod

@@ -66,20 +66,21 @@ async def test_target_table_still_ranks_first(tmp_path):
 
 
 async def test_ai_draft_then_confirm_new_model(tmp_path):
-    """AI 草案落库到 ColumnInfo/TableKnowledge（v2），确认后 status=confirmed。"""
+    """AI 提案进 proposed_*（当前值不动），确认后提升为当前。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), enable_ai_annotation=False)  # 本例测手动草案机制，关掉 AI 阶段保证确定性
     n = kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "订单状态草稿"}])
     assert n == 1
     tk = kb._tables["c1"]["orders"]
     ci = tk.columns["status"]
-    assert ci.comment == "订单状态草稿" and ci.status == "draft"
-    # 确认单列
+    # 2026-09 修订：提案在 proposed_*，当前 comment/status 不动
+    assert ci.proposed_comment == "订单状态草稿" and ci.status == "none"
+    # 确认单列 -> 提案提升
     assert await kb.confirm("c1", "orders", "status") == 1
-    assert ci.status == "confirmed"
-    # 再注释不覆盖已确认内容
+    assert ci.status == "confirmed" and ci.comment == "订单状态草稿"
+    # 再注释写新提案，不覆盖已确认当前值
     kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "覆盖尝试"}])
-    assert ci.comment == "订单状态草稿"
+    assert ci.comment == "订单状态草稿" and ci.proposed_comment == "覆盖尝试"
 
 
 async def test_table_level_annotation_and_confirm_all(tmp_path):
@@ -470,21 +471,47 @@ async def test_confirm_all_includes_graph_edges(tmp_path):
     assert all(e.get("reason") in ("测试边A", "测试边B") for e in llm_edges)
 
 
-async def test_reject_reverts_chunk_rich_text(tmp_path):
-    """撤下已确认内容 → chunk 富知识出文回结构壳，向量重算（撤下入口同样走即时重嵌）。"""
+async def test_proposal_not_in_vector_until_confirmed(tmp_path):
+    """2026-09 修订：提案不入合成文本/向量（确认后才提升），拒绝=清提案。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), enable_ai_annotation=False)
     kb.annotate_drafts("c1", [{
         "table": "orders", "column": "status",
         "comment": "订单状态", "values": "P=待付款", "example": "P",
     }])
-    await kb.confirm("c1", "orders", "status")
+    # 提案未确认 -> 不入向量（合成文本只用当前生效值）
     rich = kb._vector_store("c1")._chunks["tbl-orders"]
-    assert "可选值：P=待付款" in rich.text and "订单状态" in rich.text
+    assert "待付款" not in rich.text and "订单状态" not in rich.text
     rich_vec = list(rich.vector)
 
+    # 拒绝提案（保持当前）-> 返回 1，提案清除
     assert await kb.reject_comment("c1", "orders", "status") == 1
-
     after = kb._vector_store("c1")._chunks["tbl-orders"]
-    assert "订单状态" not in after.text and "待付款" not in after.text and "可选值" not in after.text
-    assert after.vector != rich_vec  # 文本回退 → 确定性向量变化
+    assert "待付款" not in after.text
+    assert after.vector == rich_vec  # 提案从不入向量 -> 向量无变化
+
+async def test_proposal_not_in_vector_until_confirmed(tmp_path):
+    """2026-09 修订：提案不入合成文本/向量（确认后才提升）；拒绝=清提案、当前不动。"""
+    kb = KnowledgeBase(tmp_path)
+    await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb.annotate_drafts("c1", [{
+        "table": "orders", "column": "status",
+        "comment": "订单状态", "values": "P=待付款", "example": "P",
+    }])
+    # 提案未确认 -> 合成文本（向量源）只用当前生效值
+    text_before = kb._synthesize_table_text("c1", kb._tables["c1"]["orders"])
+    assert "待付款" not in text_before and "订单状态" not in text_before
+
+    # 拒绝提案（保持当前）-> 返回 1，提案清除
+    assert await kb.reject_comment("c1", "orders", "status") == 1
+    ci = kb._tables["c1"]["orders"].columns["status"]
+    assert not ci.has_proposal and ci.comment == ""
+
+    # 确认 -> 提案提升进当前（此后才有取值知识/入向量）
+    kb.annotate_drafts("c1", [{
+        "table": "orders", "column": "status",
+        "comment": "订单状态", "values": "P=待付款", "example": "P",
+    }])
+    assert await kb.confirm("c1", "orders", "status") == 1
+    assert ci.comment == "订单状态" and ci.values == "P=待付款"
+

@@ -21,7 +21,6 @@ class SemanticStore:
         self._table_tags: dict[str, dict[str, list[str]]] = {}  # conn -> table -> [tag名]
         self._samples: dict[str, dict[str, dict[str, list[Any]]]] = {}  # conn -> table -> column -> [values]
         self._schema: dict[str, dict[str, Any]] = {}  # conn -> 表/列/外键快照
-        self._supplemented: dict[str, set[str]] = {}  # conn -> 本次注释补充了取值知识的表
         self._user: dict[str, list[KnowledgeDoc]] = {}  # conn -> 用户手写文档
 
     # ---------- 自动抽取 ----------
@@ -153,8 +152,9 @@ class SemanticStore:
 
     def _table_payload(self, conn_id: str, tk: Any, synced_at: str = "") -> dict[str, Any]:
         """表级 chunk payload（spec §4）：结构化信息（渲染在 T4，此处仅存储透传）。"""
-        draft_count = (1 if tk.status == "draft" else 0) + sum(
-            1 for ci in tk.columns.values() if ci.status == "draft"
+        # 2026-09 修订：待确认数 = 本轮提案数（当前生效内容不计入）
+        draft_count = (1 if tk.has_proposal else 0) + sum(
+            1 for ci in tk.columns.values() if ci.has_proposal
         )
         return {
             "ddl": tk.ddl,
@@ -166,13 +166,11 @@ class SemanticStore:
 
     # ---------- AI 草案落库 + 人工确认（v2：写 TableKnowledge/ColumnInfo） ----------
     def annotate_drafts(self, conn_id: str, items: list[dict[str, Any]], save_conn_fn: Any = None) -> int:
-        """AI 注释草案入库（status=draft），待人工确认。
+        """AI 注释提案入库（2026-09 修订：写 proposed_*，当前生效值不动）。
 
         items: [{table, column|None, comment, values?, example?}]。
-        - 列项 → ColumnInfo(comment/values/example)；表级 → TableKnowledge.comment；
-        - 已确认（confirmed）内容不被草案覆盖：comment 保留原样，但**缺失的
-          values/example 会被补充**（带样本重建时 AI 新知识进得来）；
-        - 补充的表记入 _supplemented，由调用方取走重嵌（合成文本已变化）；
+        - 列项 -> ColumnInfo.proposed_*；表级 -> TableKnowledge.proposed_comment；
+        - 当前 comment/status 完全不受影响（对比按钮/保持当前的基础）；
         - 表/列不在库中（敏感过滤/已删除）忽略。
         """
         tabs = self._tables.get(conn_id, {})
@@ -190,49 +188,30 @@ class SemanticStore:
                 ci = tk.columns.get(column)
                 if ci is None:
                     continue
+                ci.proposed_comment = comment
                 new_values = str(it.get("values") or "").strip()
                 new_example = str(it.get("example") or "").strip()[:60]
-                if ci.status == "confirmed":
-                    # 已确认：不覆盖注释/状态；缺失的取值知识补充（样本授权重建时）
-                    if new_values and not ci.values:
-                        ci.values = new_values
-                        self._supplemented.setdefault(conn_id, set()).add(table)
-                    if new_example and not ci.example:
-                        ci.example = new_example
-                        self._supplemented.setdefault(conn_id, set()).add(table)
-                    continue
-                ci.comment = comment
-                # values/example 只在 AI 有新产出时更新；无样本构建不返回 →
-                # 保留已有取值知识，防止"未勾选确认的重建"清空历史成果
+                # 只在有产出时覆盖提案；无产出保留空（apply 时空项不动当前值）
                 if new_values:
-                    ci.values = new_values
+                    ci.proposed_values = new_values
                 if new_example:
-                    ci.example = new_example
-                ci.status = "draft"
+                    ci.proposed_example = new_example
             else:
-                if tk.status == "confirmed":
-                    continue  # 已确认内容不被草案覆盖
-                tk.comment = comment
-                tk.status = "draft"
+                tk.proposed_comment = comment
+                new_values = str(it.get("values") or "").strip()
+                if new_values:
+                    tk_proposed_values = new_values  # noqa: F841 - 表级暂无 values 字段，保留扩展位
             applied += 1
-        if applied or self._supplemented.get(conn_id):
-            if save_conn_fn:
-                save_conn_fn(conn_id)
+        if applied and save_conn_fn:
+            save_conn_fn(conn_id)
         return applied
-
-    def take_supplemented(self, conn_id: str) -> list[str]:
-        """取走本次注释中补充了取值知识的表（合成文本已变 → 调用方重嵌）。"""
-        return list(self._supplemented.pop(conn_id, set()))
 
     async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None,
                       save_conn_fn: Any = None, reembed_fn: Any = None) -> int:
-        """人工确认草案 → 权威（v2：状态机 none/draft → confirmed）。
+        """确认（2026-09 修订：有提案 -> 提案提升为当前；无提案 -> 当前定稿）。
 
-        column 指定 → 单列（仅 draft 计数）；只给 table → 该表注释及其全部列；
-        都不给 → 全库。表级 none（无 AI 注释的空内容表）同样定稿但不计数——
-        确认闸后全库无残留草案。
-        确认改变合成文本（注释/取值/示例入文）→ 收集受影响表一次性重嵌，
-        避免向量停留纯结构文本。
+        column 指定 -> 单列；只给 table -> 该表及其全部列；都不给 -> 全库。
+        提案提升改变合成文本 -> 收集受影响表一次性重嵌。
         """
         tabs = self._tables.get(conn_id, {})
         targets = [tabs[table]] if table and table in tabs else (
@@ -244,21 +223,41 @@ class SemanticStore:
             changed = False
             if column:
                 ci = tk.columns.get(column)
-                if ci and ci.status == "draft":
-                    ci.status = "confirmed"
+                if ci is None:
+                    continue
+                if ci.has_proposal:
+                    ci.apply_proposal()
                     n += 1
+                    changed = True
+                if ci.status == "draft":
+                    n += 1  # 遗留 draft 状态迁移（旧数据）
+                    changed = True
+                if ci.status != "confirmed":
+                    ci.status = "confirmed"
                     changed = True
                 if changed:
                     affected.append(tk.name)
                 continue
-            if tk.status == "draft":
+            if tk.has_proposal:
+                tk.apply_proposal()
                 n += 1
                 changed = True
-            tk.status = "confirmed"  # none=空内容直接定稿；draft=草案确认
+            elif tk.status == "draft":
+                n += 1  # 遗留 draft 状态迁移
+                changed = True
+            if tk.status != "confirmed":
+                tk.status = "confirmed"
+                changed = True
             for ci in tk.columns.values():
-                if ci.status == "draft":
-                    ci.status = "confirmed"
+                if ci.has_proposal:
+                    ci.apply_proposal()
                     n += 1
+                    changed = True
+                elif ci.status == "draft":
+                    n += 1  # 遗留 draft 状态迁移
+                    changed = True
+                if ci.status != "confirmed":
+                    ci.status = "confirmed"
                     changed = True
             if changed:
                 affected.append(tk.name)
@@ -271,7 +270,7 @@ class SemanticStore:
     def clear(self, conn_id: str) -> None:
         """取消构建/失败后清理半成品内存（不落盘）。"""
         for d in (self._user, self._samples, self._tags,
-                  self._table_tags, self._tables, self._schema, self._supplemented):
+                  self._table_tags, self._tables, self._schema):
             d.pop(conn_id, None)
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
@@ -338,13 +337,25 @@ class SemanticStore:
         return True
 
     def assign_table_tags(self, conn_id: str, table: str, names: list[str],
-                          save_conn_fn: Any = None) -> int:
-        """把标签绑定到表（去重保序）；库中不存在的标签自动补为 draft（否则 overview 不可见、无法确认）。"""
-        keep = [n for n in dict.fromkeys(names) if n]
+                          save_conn_fn: Any = None, merge: bool = False) -> int:
+        """把标签绑定到表（去重保序）；库中不存在的标签自动补为 draft。
+
+        merge=True（2026-09：AI 重建提案用）：与既有绑定**并集**（已确认标签的
+        绑定保留，新的提案标签追加）——重建不冲掉当前生效的标签绑定。
+        merge=False（用户手动调整）：整体替换。
+        """
+        proposed = [n for n in dict.fromkeys(names) if n]
         lib = self._tags.setdefault(conn_id, {})
-        for n in keep:
+        for n in proposed:
             if n not in lib:
                 lib[n] = {"description": "", "status": "draft"}
+        current = self._table_tags.get(conn_id, {}).get(table, [])
+        if merge:
+            # 保留既有绑定中仍在库的标签（已确认 + 历史 draft），追加新提案
+            old_ok = [n for n in current if n in lib]
+            keep = old_ok + [n for n in proposed if n not in old_ok]
+        else:
+            keep = proposed
         self._table_tags.setdefault(conn_id, {})[table] = keep
         if save_conn_fn:
             save_conn_fn(conn_id)
@@ -395,9 +406,9 @@ class SemanticStore:
         """待确认数（确认闸 UI 用）：draft 注释（表+列）+ draft 标签。"""
         n_comments = 0
         for tk in self._tables.get(conn_id, {}).values():
-            if tk.status == "draft":
+            if tk.has_proposal:
                 n_comments += 1
-            n_comments += sum(1 for ci in tk.columns.values() if ci.status == "draft")
+            n_comments += sum(1 for ci in tk.columns.values() if ci.has_proposal)
         return {
             "draft_docs": n_comments,
             "draft_tags": sum(1 for v in self._tags.get(conn_id, {}).values() if v.get("status") == "draft"),
@@ -567,7 +578,8 @@ class SemanticStore:
             if tk.comment != table_comment:
                 changed = True
             tk.comment = table_comment
-            # 人工写入 = 权威，覆盖 AI draft / none 状态
+            # 人工写入 = 权威（覆盖提案 -> 清提案防"编辑后还挂一个旧提案"）
+            tk.clear_proposal()
             tk.status = "confirmed" if table_comment else "none"
 
         if column_comments:
@@ -576,6 +588,7 @@ class SemanticStore:
                 ci = tk.columns.get(name)
                 if ci is None:
                     raise KeyError(f"{table}.{name}")
+                ci.clear_proposal()
                 for field in ("comment", "values", "example"):
                     if edit.get(field) is not None and getattr(ci, field) != edit[field]:
                         setattr(ci, field, edit[field])
@@ -602,14 +615,15 @@ class SemanticStore:
 
     async def reject(self, conn_id: str, table: str, column: str | None = None,
                      save_conn_fn: Any = None, reembed_fn: Any = None) -> int:
-        """拒绝草案注释（v2：按表/列撤下；旧 doc_id 版本随草稿文档退役）。"""
+        """拒绝草案 = 保持当前（委托 reject_comment：清提案不动当前值）。"""
         return await self.reject_comment(conn_id, table, column, save_conn_fn, reembed_fn)
 
     async def reject_comment(self, conn_id: str, table: str, column: str | None = None,
                              save_conn_fn: Any = None, reembed_fn: Any = None) -> int:
-        """拒绝草案注释（审查页逐列 ✕）：AI 内容整条撤下回 none。
+        """保持当前（2026-09 修订：清除提案，当前生效值不动）。
 
-        撤下同样改变合成文本（confirmed 注释/取值出文，draft_count 变化）→ 该表即时重嵌。
+        column 指定 -> 单列清提案；不给 column -> 全表清提案（含全部列的提案）。
+        提案不入合成文本 -> 清除无需重嵌。
         """
         tk = self._tables.get(conn_id, {}).get(table)
         if tk is None:
@@ -617,19 +631,14 @@ class SemanticStore:
         n = 0
         if column:
             ci = tk.columns.get(column)
-            if ci and ci.status != "none":
-                ci.comment = ""
-                ci.values = ""
-                ci.example = ""
-                ci.status = "none"
+            if ci and ci.clear_proposal():
                 n += 1
-        elif tk.status != "none" or tk.comment:
-            tk.comment = ""
-            tk.status = "none"
-            n += 1
-        if n:
-            if save_conn_fn:
-                save_conn_fn(conn_id)
-            if reembed_fn:
-                await reembed_fn(conn_id, [table])
+        else:
+            if tk.clear_proposal():
+                n += 1
+            for ci in tk.columns.values():
+                if ci.clear_proposal():
+                    n += 1
+        if n and save_conn_fn:
+            save_conn_fn(conn_id)
         return n

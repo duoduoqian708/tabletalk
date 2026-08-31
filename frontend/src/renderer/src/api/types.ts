@@ -184,6 +184,10 @@ export interface KbColumnView {
   /** 示例值（首个非空样本，截断 60 字符） */
   example: string
   status: KbItemStatus
+  /** 2026-09：本轮 AI 提案（与当前生效值并行；确认=提升 / 保持当前=清除） */
+  proposed_comment?: string
+  proposed_values?: string
+  proposed_example?: string
 }
 
 /** 表级知识块（一表一块）：字段行挂在其下 */
@@ -197,6 +201,8 @@ export interface KbTableView {
   tags: { name: string; status: string }[]
   excluded: boolean
   ddl: string
+  /** 2026-09：本轮表级提案（对比/取新/保持当前） */
+  proposed_comment?: string
   columns: KbColumnView[]
   /** 向量化片段（可读表描述）：人工覆盖优先，否则构建合成文本 */
   vector_text: string
@@ -216,6 +222,8 @@ export interface GraphEdge {
   weight?: number | null
   /** draft=LLM 未确认边（宿主合并 llm_draft_edges 时标记）；缺省视为 confirmed */
   status?: 'draft' | 'confirmed'
+  /** 图 diff（2026-09）：removed=本轮未重新提案的已确认边（红） */
+  diff?: 'new' | 'modified' | 'removed' | null
 }
 
 export interface GraphDraftEdge {
@@ -226,6 +234,8 @@ export interface GraphDraftEdge {
   reason: string
   source: string
   status?: 'previously_rejected'
+  /** 图 diff（2026-09）：new=绿（新增）/ modified=黄（修改） */
+  diff?: 'new' | 'modified'
 }
 
 /** 2D 图布局坐标（表名 → 画布中心点；overview 回读 / 拖拽写回） */

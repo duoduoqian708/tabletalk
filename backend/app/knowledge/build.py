@@ -23,7 +23,6 @@ class BuildService:
         # 构建相关状态
         self._schema_fingerprint_map: dict[str, str] = {}  # conn -> 结构指纹
         self._synced_at: dict[str, str] = {}  # conn -> 最近增量同步时间
-        self._stash: dict[str, dict[str, Any]] = {}  # conn -> 当前版本全量备份
         self._auto: dict[str, list[Any]] = {}  # conn -> 自动抽取文档
 
     def _embedder(self) -> Any:
@@ -155,138 +154,42 @@ class BuildService:
         except Exception:
             return 0
 
-    def _stash_snapshot(self, conn_id: str, tables: dict[str, Any] = None,
-                        tags: dict[str, Any] = None, table_tags: dict[str, Any] = None,
-                        llm_graph_edges: dict[str, Any] = None,
-                        table_vec: dict[str, Any] = None,
-                        samples: dict[str, Any] = None,
-                        schema: dict[str, Any] = None,
-                        excluded: dict[str, Any] = None,
-                        graph: dict[str, Any] = None,
-                        synced_at: dict[str, Any] = None) -> dict[str, Any] | None:
-        """深拷贝当前版本全量（含向量）——放弃回滚源。无内容返回 None。"""
-        if not (tables or {}).get(conn_id) and not (tags or {}).get(conn_id) \
-                and not (llm_graph_edges or {}).get(conn_id):
-            return None
-        import copy
-        return {
-            "tables": {n: tk.to_dict() for n, tk in (tables or {}).get(conn_id, {}).items()},
-            "tags": copy.deepcopy((tags or {}).get(conn_id, {})),
-            "table_tags": copy.deepcopy((table_tags or {}).get(conn_id, {})),
-            "llm_graph_edges": copy.deepcopy((llm_graph_edges or {}).get(conn_id, [])),
-            "table_vec": copy.deepcopy((table_vec or {}).get(conn_id, {})),
-            "samples": copy.deepcopy((samples or {}).get(conn_id, {})),
-            "schema": copy.deepcopy((schema or {}).get(conn_id, {})),
-            "excluded": list((excluded or {}).get(conn_id, set())),
-            "graph": copy.deepcopy((graph or {}).get(conn_id, {})),
-            "synced_at": (synced_at or {}).get(conn_id, ""),
-        }
+    def _archive_current_fields(self, conn_id: str, storage_fn: Any = None) -> int:
+        """确认启用前：归档当前生效字段文本（提案提升前的旧值，供字段回溯）。
 
-    def _stash_persisted(self, conn_id: str, storage_fn: Any = None) -> bool:
-        if not storage_fn:
-            return False
+        取代旧的 stash 归档（2026-09 修订：当前知识不再让位，提升前直接读当前值）。
+        """
+        from app.state import get_state as _gst  # noqa: PLC0415 - 延迟导入取 tables
+
         try:
-            return storage_fn(conn_id).load_stash() is not None
+            tables = _gst().knowledge.semantic_store._tables.get(conn_id, {})
         except Exception:
-            return False
-
-    def _restore_stash(self, conn_id: str, tables: dict[str, Any] = None,
-                       tags: dict[str, Any] = None, table_tags: dict[str, Any] = None,
-                       llm_graph_edges: dict[str, Any] = None,
-                       table_vec: dict[str, Any] = None,
-                       samples: dict[str, Any] = None,
-                       schema: dict[str, Any] = None,
-                       excluded: dict[str, Any] = None,
-                       graph: dict[str, Any] = None,
-                       synced_at: dict[str, Any] = None,
-                       stash: dict[str, Any] = None,
-                       storage_fn: Any = None,
-                       rebuild_vstore_fn: Any = None) -> bool:
-        """从 stash（内存优先，落盘兜底）恢复当前版本；返回是否成功。"""
-        if stash is None:
-            stash = self._stash.get(conn_id)
-        if stash is None and storage_fn:
-            try:
-                stash = storage_fn(conn_id).load_stash()
-            except Exception:
-                stash = None
-        if not stash:
-            return False
-        from app.knowledge.store import TableKnowledge  # noqa: PLC0415
-        if tables is not None:
-            tables[conn_id] = {
-                n: TableKnowledge.from_dict(v) for n, v in stash["tables"].items()
-            }
-        if tags is not None:
-            tags[conn_id] = stash["tags"]
-        if table_tags is not None:
-            table_tags[conn_id] = stash["table_tags"]
-        if llm_graph_edges is not None:
-            llm_graph_edges[conn_id] = stash["llm_graph_edges"]
-        if table_vec is not None:
-            table_vec[conn_id] = stash["table_vec"]
-        if samples is not None:
-            samples[conn_id] = stash["samples"]
-        if schema is not None:
-            schema[conn_id] = stash["schema"]
-        if excluded is not None:
-            excluded[conn_id] = set(stash.get("excluded", []))
-        if graph is not None:
-            graph[conn_id] = stash["graph"]
-        if synced_at is not None:
-            synced_at[conn_id] = stash.get("synced_at", "")
-        if rebuild_vstore_fn:
-            rebuild_vstore_fn(conn_id)
-        return True
-
-    def _clear_stash(self, conn_id: str, storage_fn: Any = None) -> None:
-        self._stash.pop(conn_id, None)
-        if storage_fn:
-            try:
-                storage_fn(conn_id).clear_stash()
-            except Exception:
-                pass
-
-    def _persist_stash(self, conn_id: str, storage_fn: Any = None) -> None:
-        """构建完成落盘草稿时，同步把 stash（当前版本）落盘——pending 期间刷新不丢回滚源。"""
-        stash = self._stash.get(conn_id)
-        if not stash:
-            return
-        if storage_fn:
-            try:
-                storage_fn(conn_id).save_stash(stash)
-            except Exception as e:
-                logger.warning("[kb.store] conn=%s stash 落盘失败：%s", conn_id, e)
-
-    def _archive_stash(self, conn_id: str, storage_fn: Any = None) -> int:
-        """确认启用：stash（当前版本）字段文本归档进 version_archive，N=3 物理裁剪。"""
-        stash = self._stash.get(conn_id)
-        if stash is None and storage_fn:
-            try:
-                stash = storage_fn(conn_id).load_stash()
-            except Exception:
-                stash = None
-        if not stash:
+            tables = {}
+        if not tables:
             return 0
         if not storage_fn:
             return 0
         storage = storage_fn(conn_id)
         ver = storage.get_kb_version()
         rows: list[dict[str, Any]] = []
-        for name, tk in stash["tables"].items():
-            rows.append({
-                "kind": "table", "table": name, "column": "",
-                "payload": {
-                    "comment": tk.get("comment", ""), "status": tk.get("status", ""),
-                    "ddl": tk.get("ddl", ""), "vector_override": tk.get("vector_override", ""),
-                },
-            })
-            for cname, ci in (tk.get("columns") or {}).items():
+        for name, tk in tables.items():
+            has_content = bool(tk.comment or tk.vector_override)  # ddl 是结构，非用户内容，不触发归档
+            if has_content:
+                rows.append({
+                    "kind": "table", "table": name, "column": "",
+                    "payload": {
+                        "comment": tk.comment, "status": tk.status,
+                        "ddl": tk.ddl, "vector_override": tk.vector_override,
+                    },
+                })
+            for cname, ci in tk.columns.items():
+                if not (ci.comment or ci.values or ci.example):
+                    continue  # 空字段不入档（首轮确认 archived=0）
                 rows.append({
                     "kind": "column", "table": name, "column": cname,
                     "payload": {
-                        "comment": ci.get("comment", ""), "values": ci.get("values", ""),
-                        "example": ci.get("example", ""), "status": ci.get("status", ""),
+                        "comment": ci.comment, "values": ci.values,
+                        "example": ci.example, "status": ci.status,
                     },
                 })
         if not rows:
@@ -480,36 +383,21 @@ class BuildService:
 
 
     async def discard_drafts(self, facade, conn_id: str) -> dict[str, int]:
-        """版本制「放弃」：丢弃本轮草稿，从 stash 恢复当前版本（零回滚逻辑、不重嵌）。"""
-        if facade._stash.get(conn_id) is not None or facade.build_service._stash_persisted(conn_id, facade._storage):
-            facade.build_service._restore_stash(
-                conn_id,
-                tables=facade.semantic_store._tables,
-                tags=facade.semantic_store._tags,
-                table_tags=facade.semantic_store._table_tags,
-                llm_graph_edges=facade.graph_store._llm_graph_edges,
-                table_vec=facade.retrieval_service._table_vec,
-                samples=facade.semantic_store._samples,
-                schema=facade.semantic_store._schema,
-                excluded=facade.graph_store._excluded,
-                graph=facade.graph_store._graph,
-                synced_at=facade._synced_at,
-                storage_fn=facade._storage,
-                rebuild_vstore_fn=facade._rebuild_vstore,
-            )
-            facade.build_service._clear_stash(conn_id, facade._storage)
-            facade._save_conn(conn_id)
-            return {"columns": 0, "tables": 0, "tags": 0, "edges": 0}
+        """「放弃本轮」（2026-09 修订：当前生效知识从不在位让路，放弃 = 清提案，无需回滚）。
+
+        - 字段/表：清除全部 proposed_*（当前 comment/values/example 原样保留）；
+        - 标签：draft 标签移除并解绑（confirmed 标签是当前生效，保留）；
+        - 图边：draft 队列清空（正式图已确认边不受影响）。
+        提案不入合成文本/向量 -> 无需重嵌。
+        """
         tabs = facade.semantic_store._tables.get(conn_id, {})
         n_cols = 0
         n_tables = 0
         for tk in tabs.values():
-            if tk.status == "draft":
-                tk.status = "none"
+            if tk.clear_proposal():
                 n_tables += 1
             for ci in tk.columns.values():
-                if ci.status == "draft":
-                    ci.status = "none"
+                if ci.clear_proposal():
                     n_cols += 1
         # draft 标签移除并解绑
         lib = facade.semantic_store._tags.get(conn_id, {})
@@ -520,16 +408,15 @@ class BuildService:
             for t, names in facade.semantic_store._table_tags.get(conn_id, {}).items():
                 if draft_names & set(names):
                     facade.semantic_store._table_tags[conn_id][t] = [n for n in names if n not in draft_names]
-        # LLM draft 边删除（重建时 LLM 重新提案，不记墓碑）
+        # draft 边清空（无墓碑，重建时各来源重新提案）
         pending = facade.graph_store._llm_graph_edges.get(conn_id, [])
         n_edges = len(pending)
         if pending:
             facade.graph_store._llm_graph_edges[conn_id] = []
+        facade.graph_store.clear_diff_base(conn_id)
         if n_cols or n_tables or draft_names or n_edges:
-            facade._rebuild_vstore(conn_id)
             facade._save_conn(conn_id)
         return {"columns": n_cols, "tables": n_tables, "tags": len(draft_names), "edges": n_edges}
-
 
     async def build(
         self, facade,
@@ -558,25 +445,20 @@ class BuildService:
             logger.info("[kb.build] conn=%s 耗时[%s] %.1fs（累计 t+%.1fs）",
                         conn_id, label, el, now - _t0)
 
-        facade._stash[conn_id] = facade.build_service._stash_snapshot(
-            conn_id,
-            tables=facade.semantic_store._tables,
-            tags=facade.semantic_store._tags,
-            table_tags=facade.semantic_store._table_tags,
-            llm_graph_edges=facade.graph_store._llm_graph_edges,
-            table_vec=facade.retrieval_service._table_vec,
-            samples=facade.semantic_store._samples,
-            schema=facade.semantic_store._schema,
-            excluded=facade.graph_store._excluded,
-            graph=facade.graph_store._graph,
-            synced_at=facade._synced_at,
-        )
-        facade.semantic_store._tables[conn_id] = {}
-        facade.semantic_store._tags.pop(conn_id, None)
-        facade.semantic_store._table_tags.pop(conn_id, None)
-        facade.graph_store._llm_graph_edges.pop(conn_id, None)
-        facade.retrieval_service._table_vec.pop(conn_id, None)
-        facade.semantic_store._samples.pop(conn_id, None)
+        # 2026-09 修订：全量重构保留当前生效知识（注释/标签/绑定/向量/已确认边），
+        # 只做 schema 对齐（删表删列）+ 清空上轮提案队列后重新提案。
+        old_schema = facade.semantic_store._schema.get(conn_id, {})
+        old_tables = {t["name"] for t in old_schema.get("tables", [])}
+        new_tables = {t["name"] for t in schema.get("tables", [])}
+        removed_tables = old_tables - new_tables
+        facade.graph_store._llm_graph_edges.pop(conn_id, None)  # 提案队列重置（正式图不动）
+        tv = facade.retrieval_service._table_vec.get(conn_id, {})
+        for t in removed_tables:
+            tv.pop(t, None)
+        # 已删表的标签绑定清理（孤儿标签后续由增量清理逻辑/标签管理处理）
+        tt = facade.semantic_store._table_tags.get(conn_id, {})
+        for t in removed_tables:
+            tt.pop(t, None)
         if on_progress:
             on_progress("发现结构", 5, None)
         schema = dict(schema)
@@ -653,7 +535,7 @@ class BuildService:
             graph_error: str | None = None
             filters_error: str | None = None
             ai_tags_added = 0
-            facade.clear_tags(conn_id)
+            # 2026-09 修订：标签不清（当前标签继续生效），annotate_domain 只提新标签
 
             from app.knowledge.annotator import annotate_domain, annotate_graph
 
@@ -729,6 +611,8 @@ class BuildService:
             conn_id,
             [{**e, "kind": "llm"} for e in _llm_edges],
         )
+        # 图 diff 基线：本轮提案键集合（确认全部/放弃时清除）
+        facade.graph_store.set_diff_base(conn_id, facade.graph_store.llm_graph_edges(conn_id))
         logger.info("[kb.build] conn=%s draft 边：确定性 %d 条 + LLM 提案 %d 条（待人工确认）",
                     conn_id, n_det, n_llm)
         _seg("构图")
@@ -742,7 +626,6 @@ class BuildService:
         facade.build_service.ingest_filter_candidates(facade, conn_id, schema)
         facade._rebuild_vstore(conn_id)
         facade._save_conn(conn_id)
-        facade.build_service._persist_stash(conn_id, facade._storage)
         _seg("落盘")
         facade.build_service._log_embedding_usage(conn_id, "build", facade._emb)
         logger.info(

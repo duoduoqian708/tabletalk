@@ -223,7 +223,7 @@ async def test_annotate_knowledge_truncates_samples_before_send(app_state):
         samples={"orders": {"status": [long_val]}},
     )
     assert res["added"] > 0
-    body = st.knowledge._tables["c-anno"]["orders"].columns["status"].comment
+    body = st.knowledge._tables["c-anno"]["orders"].columns["status"].proposed_comment
     assert long_val[:60] in body   # 截断值进入草案（= 发送内容）
     assert long_val not in body    # 原始长句不出网/不入库
 

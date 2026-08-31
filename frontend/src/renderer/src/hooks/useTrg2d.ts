@@ -26,7 +26,7 @@ export function trgEdges(ov: KnowledgeOverview): GraphEdge[] {
   const drafts: GraphEdge[] = (ov.graph.llm_draft_edges ?? []).map((d) => ({
     from: d.from_table, from_col: d.from_col,
     to: d.to_table, to_col: d.to_col,
-    kind: 'llm', status: 'draft', reason: d.reason,
+    kind: 'llm', status: 'draft', reason: d.reason, diff: d.diff,
   }))
   return [...(ov.graph.edges ?? []), ...drafts]
 }

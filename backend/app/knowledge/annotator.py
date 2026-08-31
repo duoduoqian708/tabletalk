@@ -489,12 +489,8 @@ async def annotate_tables(
     if not items_all and table_names:
         logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
     added = state.knowledge.annotate_drafts(conn_id, items_all)
-    # 已确认列补充了取值知识（合成文本变化）→ 重嵌受影响表，避免向量停留旧文本
-    supp = getattr(state.knowledge, "take_supplemented", lambda cid: [])(conn_id)
-    if supp:
-        await state.knowledge._reembed_tables(conn_id, supp)
-    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s 补充重嵌=%s（总耗时 %.1fs）",
-                conn_id, len(items_all), added, len(supp), time.monotonic() - _t0ai)
+    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s（总耗时 %.1fs）",
+                conn_id, len(items_all), added, time.monotonic() - _t0ai)
     return added
 
 
@@ -829,12 +825,12 @@ def _knowledge_descs(
         for t in schema.get("tables", []):
             name = t["name"]
             tk = tabs.get(name)
-            # 表级：库注释 > AI 注释（draft/confirmed）
+            # 表级：库注释 > 当前 AI 注释 > 本轮提案（2026-09：提案即待确认内容，画像阶段消费）
             tdesc = t.get("comment", "") or (
-                tk.comment if tk is not None and tk.status in ("draft", "confirmed") else ""
-            )
+                tk.comment if tk is not None and tk.status == "confirmed" else ""
+            ) or (tk.proposed_comment if tk is not None else "")
             table_desc[name] = tdesc
-            # 列级：库注释 > AI 注释
+            # 列级：库注释 > 当前 AI 注释 > 本轮提案
             cdesc: dict[str, str] = {}
             for c in schema.get("columns", []):
                 if c["table"] != name:
@@ -842,8 +838,9 @@ def _knowledge_descs(
                 cname = c["name"]
                 dbc = c.get("comment", "")
                 ci = tk.columns.get(cname) if tk is not None else None
-                ai = (ci.comment if ci is not None and ci.status in ("draft", "confirmed") else "")
-                cdesc[cname] = dbc or ai
+                ai = (ci.comment if ci is not None and ci.status == "confirmed" else "")
+                prop = (ci.proposed_comment or "") if ci is not None else ""
+                cdesc[cname] = dbc or ai or prop
             col_desc[name] = cdesc
     except Exception:  # noqa: BLE001 - 读知识库失败不影响画像构造
         pass
@@ -1152,7 +1149,7 @@ async def annotate_domain(
             for t in d["tables"]:
                 table_tags.setdefault(t, []).append(d["name"])
         for t, tags in table_tags.items():
-            state.knowledge.assign_table_tags(conn_id, t, tags)
+            state.knowledge.assign_table_tags(conn_id, t, tags, merge=True)
         return added
 
     if gw.is_effective_mock(_tag_cfg):
@@ -1321,7 +1318,7 @@ async def _annotate_domain_incremental(
     tag_props = [{"name": n, "description": f"{n} 领域"} for n in new_tags]
     state.knowledge.upsert_tags(conn_id, tag_props)
     for ln in links:
-        state.knowledge.assign_table_tags(conn_id, ln["table"], ln["tags"])
+        state.knowledge.assign_table_tags(conn_id, ln["table"], ln["tags"], merge=True)
 
     logger.info("[kb.tags] conn=%s 增量吸收完成：tables=%s existing=%s new=%s",
                 conn_id, len(targets), len(confirmed), len(new_tags))

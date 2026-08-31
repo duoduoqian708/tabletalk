@@ -596,7 +596,7 @@ class SqliteStorage:
                 conn.execute("DELETE FROM concepts")
                 conn.execute("DELETE FROM table_filters")
                 conn.execute("DELETE FROM fewshot")
-                conn.execute("DELETE FROM meta WHERE key NOT IN ('kb_version', 'prev_stash')")  # 版本机制 key 由专属方法管理，不随快照重建
+                conn.execute("DELETE FROM meta WHERE key NOT IN ('kb_version')")  # 版本机制 key 由专属方法管理，不随快照重建
                 for d in snap.auto + snap.user:
                     conn.execute(
                         "INSERT INTO docs (id, kind, title, body, table_name, column_name, status, source, tags, conn_id, updated_at, archived) "
@@ -710,40 +710,6 @@ SELECT DISTINCT name FROM reach ORDER BY name;"""
                 con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('kb_version', ?)", (str(v),))
                 con.commit()
                 return v
-            finally:
-                con.close()
-
-    def save_stash(self, data: dict[str, Any]) -> None:
-        """当前版本全量备份落盘（放弃回滚源；pending 期间刷新不丢）。"""
-        with self._lock:
-            con = self._conn()
-            try:
-                self._init(con)
-                con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('prev_stash', ?)",
-                            (json.dumps(data, ensure_ascii=False),))
-                con.commit()
-            finally:
-                con.close()
-
-    def load_stash(self) -> dict[str, Any] | None:
-        with self._lock:
-            con = self._conn()
-            try:
-                row = con.execute("SELECT value FROM meta WHERE key='prev_stash'").fetchone()
-                if not row:
-                    return None
-                return json.loads(row[0])
-            except Exception:
-                return None
-            finally:
-                con.close()
-
-    def clear_stash(self) -> None:
-        with self._lock:
-            con = self._conn()
-            try:
-                con.execute("DELETE FROM meta WHERE key='prev_stash'")
-                con.commit()
             finally:
                 con.close()
 

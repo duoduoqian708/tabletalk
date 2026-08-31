@@ -166,6 +166,7 @@ interface EdgeGeom {
   key: string
   edge: GraphEdge
   draft: boolean
+  diff?: 'new' | 'modified' | 'removed' | null
   d: string
   mid: Trg2dPoint
   angle: number
@@ -256,7 +257,7 @@ export function TableRelationGraph2D({
       }
       out.push({
         key: graphEdgeKey(e),
-        edge: e, draft: e.status === 'draft',
+        edge: e, draft: e.status === 'draft', diff: e.diff,
         d: `M ${pa.x} ${pa.y} Q ${cx} ${cy} ${pb.x} ${pb.y}`,
         mid, angle, horizontal, labelW: (fc.length + tc.length) * 5.2 + 30, labelFull, pts,
       })
@@ -581,7 +582,7 @@ export function TableRelationGraph2D({
         <g ref={(el) => { viewGRef.current = el; if (el) requestAnimationFrame(applyView) }}>
           {/* ── 边层 ── */}
           {edgeGeoms.map((g) => (
-            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${selKey === g.key ? ' is-sel' : ''}${highlightKey === g.key ? ' is-highlight' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
+            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${g.diff ? ` diff-${g.diff}` : ''}${selKey === g.key ? ' is-sel' : ''}${highlightKey === g.key ? ' is-highlight' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
               <path className="trg2d-edge-hit" d={g.d} />
               <path className="trg2d-edge-line" d={g.d}
                 markerEnd={editable ? `url(#${arrowId})` : undefined} />

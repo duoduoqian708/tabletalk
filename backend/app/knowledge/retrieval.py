@@ -189,9 +189,13 @@ class RetrievalService:
             blob = (synthesize_text_fn(conn_id, tk) if synthesize_text_fn else "").lower()
             if name.lower() in ql:
                 score += 0.6
-            for tok in re.findall(r"[\u4e00-\u9fff]{2,}", ql):
-                if tok in blob:
-                    score += 0.35
+            # 中文词面：重叠二元组（"哪些订单申请了退款" -> 哪些/些订/订单/.../退款）
+            for i in range(len(ql) - 1):
+                a, b = ql[i], ql[i + 1]
+                if "\u4e00" <= a <= "\u9fff" and "\u4e00" <= b <= "\u9fff":
+                    if a + b in blob:
+                        score += 0.35
+                        break  # 一表得一次加权即可（防全命中刷分）
             for tok in re.findall(r"[a-z_]{3,}", ql):
                 if tok in blob:
                     score += 0.2
@@ -263,11 +267,11 @@ class RetrievalService:
         draft_count = 0
         tables_out: list[dict[str, Any]] = []
         for tk in facade.semantic_store._tables.get(conn_id, {}).values():
-            if tk.status == "draft":
+            if tk.has_proposal:
                 draft_count += 1
             cols = []
             for ci in tk.columns.values():
-                if ci.status == "draft":
+                if ci.has_proposal:
                     draft_count += 1
                 cols.append({
                     "name": ci.name, "type": ci.type,
@@ -275,9 +279,13 @@ class RetrievalService:
                     "db_comment": ci.db_comment,
                     "comment": ci.comment,
                     "values": ci.values,
-                    "is_enum": bool(ci.values),
+                    "is_enum": bool(ci.values or ci.proposed_values),
                     "example": ci.example,
                     "status": ci.status,
+                    # 2026-09 修订：本轮提案（与当前生效值并行，供审查页对比）
+                    "proposed_comment": ci.proposed_comment,
+                    "proposed_values": ci.proposed_values,
+                    "proposed_example": ci.proposed_example,
                 })
             tables_out.append({
                 "name": tk.name,
@@ -286,6 +294,7 @@ class RetrievalService:
                 "column_count": tk.column_count,
                 "comment": tk.comment,
                 "comment_status": tk.status,
+                "proposed_comment": tk.proposed_comment,  # 本轮提案（表级）
                 "tags": table_tags(tk.name),
                 "excluded": tk.name in excluded,
                 "ddl": tk.ddl,

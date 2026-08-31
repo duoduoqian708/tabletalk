@@ -363,16 +363,17 @@ async def test_knowledge_tags_flow(client, conn_id):
     assert d.json()["rejected"] is True
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate", json={"include_samples": False})
     assert r.json()["items"] > 0  # items 可能为0（build 已创建全部 draft），重点是后续状态检查
-    # 草案状态 = draft（v2：草案在 TableKnowledge/ColumnInfo，不再有 ai_draft 文档）
+    # 2026-09 修订：草案 = 提案（proposed_*），当前 status 不受影响
     ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
-    drafts = [c for t in ov["tables"] for c in t["columns"] if c["status"] == "draft"]
-    assert drafts
-    # 确认全部 → 变 confirmed
+    proposals = [c for t in ov["tables"] for c in t["columns"] if c.get("proposed_comment")]
+    assert proposals
+    # 确认全部 -> 提案提升为当前（confirmed）
     c = await client.post(f"/api/v1/knowledge/{conn_id}/confirm", json={})
     assert c.json()["confirmed"] >= 1
     ov2 = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
     confirmed_cols = [c for t in ov2["tables"] for c in t["columns"]]
     assert all(c["status"] == "confirmed" for c in confirmed_cols)
+    assert all(not c.get("proposed_comment") for c in confirmed_cols)
 
 
 async def test_sql_format(client):
