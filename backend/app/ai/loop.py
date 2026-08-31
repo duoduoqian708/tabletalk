@@ -529,7 +529,14 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
             except Exception:
                 pass
             yield {"type": "think", "text": f"调用 {tc.name}"}
-            yield {"type": "subtask_progress", "id": _sub_id, "tool": tc.name, "delta": f"执行 {tc.name} ..."}
+            _args_preview = ""
+            try:
+                import json as _json
+                _args_preview = _json.dumps(tc.arguments or {}, ensure_ascii=False)[:200]
+            except Exception:
+                pass
+            yield {"type": "subtask_progress", "id": _sub_id, "tool": tc.name,
+                   "delta": (f"调用 {tc.name}" + (f"：{_args_preview}" if _args_preview else " ..."))}
             _sess_tok = _set_active_session(req.session_id)
             try:
                 outcome = await execute_tool(state, tc.name, tc.arguments, conn_id, include_data=req.include_data)
