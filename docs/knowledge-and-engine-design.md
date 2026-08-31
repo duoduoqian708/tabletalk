@@ -601,6 +601,43 @@ Context = {
 - 报表类 → 最后 LLM 汇总成文
 - 复杂度集中在第 2 步 ReAct 循环；第 1 步（拆解）和第 3 步（整理）尽量轻、尽量确定
 
+## 19.5 追问/续流统一入口（continuation gate，2026-09 草案）
+
+**问题**：用户对 AI 一个回合的"反应"目前是三种拼凑的链路——追问建议走全新问题流程、
+报告澄清用 clarify 系统消息硬塞续流、SQL 补充选项走独立 /ai/sql-option；外加遗漏的
+DML 确认（"预览影响行数，点确认执行"）也是同一类"用户对回合的反应"。四个入口协议不一，
+上下文拼法各异，属临时拼凑。
+
+**方案：不做"一个 skill"，做"一个续流入口 + 四种 type"**（引擎执行层不动，收敛的是入口与上下文契约）。
+
+```
+用户回应对 AI 回合（点击卡片/按钮/输入）
+   → POST /ai/continuation  { type, payload, session_id, ... }
+        new_question  → 完整意图流程（decompose → plan → execute_plan）【上下文延续】
+        clarify_report→ resume 当前报告流（报告任务未结束，补澄清后继续）
+        sql_option    → 轻量改写 SQL 并重跑（不进意图分解/检索）
+        confirm_write → DML 确认执行（preview 已给过，token 闭环后执行）
+   → 统一带会话上下文，统一审计/清单
+```
+
+**两条硬约束**：
+
+1. **new_question 必须走完整意图分解，不能退化成"追问 skill"**——追问点出的可能是
+   schedule/write 等任意意图（如"把这统计改成每周自动跑"），塞进固定追问 skill 会丢意图分解。
+   所以 type 的分流在**入口层**（HTTP 路由/协议），不是引擎的 skill 层。
+2. **new 与 continuation 必须可区分**：new_question 是新上下文（喂给 decompose/计划），
+   clarify_report / sql_option / confirm_write 是续旧上下文（喂给进行中的任务/查询）——
+   误标会让新问题错误地续到旧任务上。协议层用 type 字段守这个边界。
+
+**当前四条的既有落点**（设计挂实现，改造是对齐而非推倒）：
+- ① new_question → `POST /ai/chat`（已存在，语义即是全新流程）
+- ② clarify_report → `POST /ai/chat` + clarify 系统消息重传续流（ai.py `clarify` 事件）
+- ③ sql_option → `POST /ai/sql-option`（独立轻量调用，suggest/options 回显）
+- ④ confirm_write → DML 确认执行（confirm_token + pending 闭环）
+
+**落地顺序**：设计定稿 → 后端新增 continuation 入口（type 路由，保守保留既有端点反代）→
+**前端仍随整体大改**（一个可点反应片组件，四种 type 的统一渲染）。
+
 ---
 
 # 第三部分 · 决策记录与待决事项
@@ -622,6 +659,7 @@ Context = {
 | D11 | 构建流程 | 确定性结构层（无 LLM）与 AI 语义层（LLM→draft）分离，图不靠 AI 造；一切边经人工确认才生效（2026-08-31） |
 | D12 | 边模型 | 列对列表（复合键）+ 守卫边（多态）+ 自环 + confidence/provenance；构建来源三类（FK/命名/LLM），值重叠与判别器检测删除（2026-08-31） |
 | D13 | 表级过滤器 | 定义在 L2、消费在 context 提示（引擎不改写 SQL、不强制注入；引擎只管校验拦截/安全审计/执行）；软删除表级、租户连接级默认+表级豁免 |
+| D15 | 追问/续流 | 统一 continuation gate（§19.5）：四种 type 分流；new_question 走完整意图分解，其余续旧上下文；协议层守 new/continuation 边界（2026-09 草案） |
 | D14 | 会话变量 | 运行时变量（租户/用户/时间）用占位符，执行层替换，不进知识库 |
 
 ## 21. 待决事项（后续逐项细化）
