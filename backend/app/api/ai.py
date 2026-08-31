@@ -610,3 +610,85 @@ async def set_session_title(session_id: str, body: dict) -> dict:
 async def ai_selection(body: dict) -> dict:
     kind = body.get("kind", "explain")
     return {"text": _SELECTION_REPLIES.get(kind, "分析完成。"), "kind": kind}
+
+
+@router.post("/ai/sql-option")
+async def ai_sql_option(body: dict) -> dict:
+    """S3-2：SQL 可选追加项轻量调用——用户点选项 → LLM 基于当前 SQL 直接改写。
+
+    不走检索/分解管线（一次轻量调用）：输入 = 当前完整 SQL + 选项 label/hint
+    + 该表已确认的过滤规则（纯取数）+ 方言 → 返回改写后的完整 SQL。
+    服务端只拼 prompt 与解析，SQL 文本完全由 LLM 产出（引擎不改写）。
+    """
+    from app.ai import gateway as gw
+    from app.ai.provider_cfg import resolve_provider_cfg as _resolve_cfg
+    from app.config import get_env
+    from app.state import get_state
+    from app.safety.gate import sqlglot_dialect_for
+
+    state = get_state()
+    conn_id = str(body.get("connection_id") or "")
+    sql = str(body.get("sql") or "").strip()
+    option = body.get("option") or {}
+    label = str(option.get("label") or "").strip()
+    hint = str(option.get("hint") or "").strip()
+    if not conn_id or not sql or not label:
+        raise HTTPException(status_code=422, detail="需要 connection_id / sql / option.label")
+    try:
+        cfg = state.connections.get(conn_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="connection not found")
+    dialect = sqlglot_dialect_for(cfg.dialect)
+
+    # 该表已确认的过滤规则（知识库纯取数，无检索管线）
+    rules_txt = ""
+    try:
+        state.knowledge.ensure_loaded(conn_id)
+        tables: set[str] = set()
+        try:
+            tables = set(state.knowledge.semantic_store._tables.get(conn_id, {}).keys())
+        except Exception:
+            tables = set()
+        if not tables:
+            import sqlglot
+            try:
+                expr = sqlglot.parse_one(sql)
+                tables = {t.name for t in expr.find_all(sqlglot.exp.Table) if t.name}
+            except Exception:
+                tables = set()
+        fs = state.knowledge.filter_store.get_filters(conn_id, tables)
+        if fs:
+            rules_txt = "\n".join(f"- {t}: {' AND '.join(preds)}" for t, preds in fs.items())
+    except Exception:
+        rules_txt = ""
+
+    prompt = (
+        f"你是 SQL 改写助手。请对用户提供的 SQL 仅做一项修改：{label}\n"
+        + (f"背景提示：{hint}\n" if hint else "")
+        + (f"该表知识库记录的一般过滤规则（参考，用户可纠正）：\n{rules_txt}\n" if rules_txt else "")
+        + f"""要求：
+1. 仅做请求的该项修改；SQL 其余部分逐字保留（包括换行/大小写风格），不要顺手优化别处
+2. 如需引用运行时值，用会话变量占位符（如 :current_tenant），不要写具体值
+3. 如果 SQL 已经满足该项（无需修改），原样返回
+4. 只输出改写后的完整 SQL 文本，不要任何解释或标记
+用户 SQL（方言 {dialect}）：
+{sql}"""
+    )
+
+    req = type("_SqlOptReq", (), {"model_id": body.get("model_id")})()
+    pc = _resolve_cfg(state, req)
+    if gw.is_effective_mock(pc):
+        # mock 演示：不改写（真实模型才能理解改写意图）
+        return {"sql": sql, "note": "当前为 mock 模式，无法改写 SQL；请在系统设置配置真实模型。"}
+    try:
+        provider = gw.build_provider(pc)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None, ctx={
+            "conn_id": conn_id, "connection": cfg.name, "skill": "sql-option",
+            "source": "egress", "status": "egress", "include_data": False,
+        })
+        new_sql = (resp.content or "").strip()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM 改写失败：{e}")
+    if not new_sql:
+        new_sql = sql
+    return {"sql": new_sql}

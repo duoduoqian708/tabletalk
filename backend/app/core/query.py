@@ -35,25 +35,6 @@ def _apply_page(sql: str, sqlglot_dialect: str, limit: int | None, offset: int |
         return sql
 
 
-def _auto_cap(sql: str, sqlglot_dialect: str, cap: int) -> str:
-    """无 LIMIT 的单条 SELECT 自动注入 LIMIT cap+1：把数据库工作量截断在行数上限内。
-
-    只截断传输是不够的——驱动会先全量拉回内存。这里在 SQL 层截断 DB 工作量；
-    多取 1 行用于判断 truncated。用户显式写了 LIMIT 或调用方给了分页参数则不动。
-    """
-    try:
-        parsed = sqlglot.parse(sql, read=sqlglot_dialect)
-        if len(parsed) != 1 or not isinstance(parsed[0], exp.Select):
-            return sql
-        node = parsed[0]
-        if node.args.get("limit") is not None:
-            return sql
-        node.set("limit", exp.Limit(expression=exp.Literal.number(cap + 1)))
-        return node.sql(dialect=sqlglot_dialect)
-    except Exception:
-        return sql
-
-
 # JS 安全整数上界：超过此值的数字经 JSON 传给浏览器会丢精度（float64 尾数截断）
 JS_SAFE_INT_MAX = 9007199254740991
 
@@ -87,9 +68,11 @@ def serialize_value(v: Any) -> Any:
         return v.isoformat()
     if isinstance(v, bytes):
         return f"<blob {len(v)}B>"
-    if isinstance(v, (list, dict)):
-        return str(v)
-    return str(v)
+    s = str(v)
+    # T5 §4#3：超长 TEXT/JSON 值截断到 60 字符（采样/展示防爆）
+    if len(s) > 60:
+        return s[:60] + "..."
+    return s
 
 
 def _type_of(v: Any) -> str:
@@ -137,9 +120,8 @@ async def execute(
     cfg = state.connections.get(conn_id)
     dialect = _sqlglot_dialect(cfg.dialect)
     paged_sql = _apply_page(sql, dialect, limit, offset)
-    # 调用方没给分页参数时，在 SQL 层截断 DB 工作量（不只截断传输）
-    if limit is None and offset is None:
-        paged_sql = _auto_cap(paged_sql, dialect, max_rows)
+    # S1：执行层不再自动注入 LIMIT（引擎不深入改写 SQL）——LIMIT 纪律在提示词，
+    # 由 LLM 织入；此处仅按调用方显式分页参数处理（_apply_page）
 
     t0 = time.monotonic()
     task = asyncio.current_task()

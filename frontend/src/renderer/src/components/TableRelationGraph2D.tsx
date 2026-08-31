@@ -61,6 +61,8 @@ interface Props {
   colorMap?: Record<string, string>
   /** 外部高亮边 key（关系预览列表联动）：高亮渲染 + 视图自动平移到边中点 */
   highlightKey?: string | null
+  /** 节点单击（无拖拽）回调：宿主用于联动选中表 */
+  onTableClick?: (name: string) => void
 }
 
 /** 边唯一 key（与内部 edgeGeoms 同源，供外部列表联动定位） */
@@ -176,7 +178,7 @@ interface EdgeGeom {
 }
 
 export function TableRelationGraph2D({
-  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, className, mode = 'edit', colorMap, highlightKey,
+  tables, edges, columnsByTable, onAddEdge, onDeleteEdge, onConfirmEdge, onLayoutChange, layout, className, mode = 'edit', colorMap, highlightKey, onTableClick,
 }: Props): React.JSX.Element {
   const { t } = useI18n()
   const editable = mode === 'edit'
@@ -410,6 +412,9 @@ export function TableRelationGraph2D({
         const snapshot: Trg2dLayout = {}
         for (const tb of tables) snapshot[tb.name] = dragPos[tb.name] ?? overrides[tb.name] ?? layout?.[tb.name] ?? initialLayout[tb.name] ?? { x: 60, y: 60 }
         onLayoutChange(snapshot)
+      } else {
+        // 无位移 = 单击节点：联动宿主选中
+        onTableClick?.(g.name)
       }
     } else if (g.type === 'link') {
       const lk = link

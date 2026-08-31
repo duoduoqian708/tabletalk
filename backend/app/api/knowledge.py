@@ -41,6 +41,10 @@ class TagNameRequest(BaseModel):
     name: str
 
 
+class TableNameRequest(BaseModel):
+    table: str
+
+
 class TagCreateRequest(BaseModel):
     name: str
     description: str = ""
@@ -444,7 +448,7 @@ async def add_graph_edge(conn_id: str, body: GraphEdgeRequest) -> dict:
 
 @router.delete("/{conn_id}/graph/edges")
 async def remove_graph_edge(conn_id: str, body: GraphEdgeDelete) -> dict:
-    """删除一条图谱边。删除结构/取值派生边时记入 tombstone，重建不复活。"""
+    """删除一条图谱边（当前版本生效；确定性来源的边在下次重建时会重新生成）。"""
     _have(conn_id)
     state = get_state()
     if not state.knowledge.is_built(conn_id):
@@ -499,7 +503,7 @@ async def confirm_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = 
 
 @router.post("/{conn_id}/graph/reject")
 async def reject_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = None) -> dict:
-    """拒绝 LLM 发现的 draft 边（从 draft 列表移除）。"""
+    """拒绝待确认 draft 边（从 draft 列表移除；重建时 LLM 会重新提案）。"""
     _have(conn_id)
     state = get_state()
     if not state.knowledge.is_built(conn_id):
@@ -674,3 +678,69 @@ async def route(conn_id: str, body: AssignTagsRequest) -> dict:
     _have(conn_id)
     state = get_state()
     return state.knowledge.route_tables(conn_id, body.tags, hops=2)
+
+
+@router.get("/{conn_id}/concepts")
+async def concepts(conn_id: str) -> dict:
+    """概念字典条目列表（draft 待确认 + confirmed）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    return {"concepts": [c.to_dict() for c in state.knowledge.concept_store.list(conn_id)]}
+
+
+@router.post("/{conn_id}/concepts/confirm")
+async def confirm_concept(conn_id: str, body: TagNameRequest) -> dict:
+    """人工确认概念条目（draft → confirmed，kb_read 按列查概念对确认项生效）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    ok = state.knowledge.concept_store.confirm(conn_id, body.name)
+    if ok:
+        state.knowledge._save_conn(conn_id)
+    return {"confirmed": ok}
+
+
+@router.post("/{conn_id}/concepts/reject")
+async def reject_concept(conn_id: str, body: TagNameRequest) -> dict:
+    """拒绝概念条目（移除）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    ok = state.knowledge.concept_store.reject(conn_id, body.name)
+    if ok:
+        state.knowledge._save_conn(conn_id)
+    return {"rejected": ok}
+
+
+@router.get("/{conn_id}/filters")
+async def filters(conn_id: str) -> dict:
+    """表级过滤器列表（draft 待确认 + confirmed）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    return {"filters": [f.to_dict() for f in state.knowledge.filter_store.dump_objects(conn_id)]}
+
+
+@router.post("/{conn_id}/filters/confirm")
+async def confirm_filter(conn_id: str, body: TableNameRequest) -> dict:
+    """人工确认表级过滤器（draft → confirmed，查询注入对确认项生效）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    ok = state.knowledge.filter_store.confirm(conn_id, body.table)
+    if ok:
+        state.knowledge._save_conn(conn_id)
+    return {"confirmed": ok}
+
+
+@router.post("/{conn_id}/filters/reject")
+async def reject_filter(conn_id: str, body: TableNameRequest) -> dict:
+    """拒绝表级过滤器（移除，不再注入）。"""
+    _have(conn_id)
+    state = get_state()
+    state.knowledge.ensure_loaded(conn_id)
+    ok = state.knowledge.filter_store.reject(conn_id, body.table)
+    if ok:
+        state.knowledge._save_conn(conn_id)
+    return {"rejected": ok}

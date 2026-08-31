@@ -404,6 +404,8 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, session
   const { t } = useI18n()
   const [draft, setDraft] = useState(card.sql)
   const [formatting, setFormatting] = useState(false)
+  // S3：可选追加项改写中（轻量 LLM 调用）
+  const [optionBusy, setOptionBusy] = useState<string | null>(null)
   // 闸门判定落地瞬间 → 一次性护盾闪光
   const [flash, setFlash] = useState(false)
   const wasPending = useRef(pending)
@@ -458,6 +460,26 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, session
   })()
   // C6 保存为常用问题
   const [saved, setSaved] = useState(false)
+  // S3：点选项 → 轻量改写接口 → 替换当前 SQL（用户确认后执行）
+  async function applyOption(opt: { id?: string; label: string; hint?: string }): Promise<void> {
+    if (!connectionId || optionBusy) return
+    const rt = getRuntime()
+    if (!rt?.token) return
+    setOptionBusy(opt.id ?? opt.label)
+    try {
+      const r = await fetch(`/api/v1/ai/sql-option`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token },
+        body: JSON.stringify({ connection_id: connectionId, sql: draft, option: opt }),
+      })
+      const j = await r.json().catch(() => null)
+      if (r.ok && j?.sql) setDraft(j.sql)
+    } catch {
+      /* 改写失败静默：SQL 不变 */
+    } finally {
+      setOptionBusy(null)
+    }
+  }
   const handleSave = async (): Promise<void> => {
     if (!connectionId) return
     const rt = getRuntime()
@@ -523,6 +545,20 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, session
                 // 触发星图定位：通过全局事件或直接操作？简化：派发自定义事件
                 window.dispatchEvent(new CustomEvent('tabletalk:locate', { detail: { table: tbl } }))
               }}>{tbl}</button>
+            ))}
+          </span>
+        </div>
+      )}
+      {/* S3：可选追加项（LLM 建议，用户点一下 → 轻量改写当前 SQL） */}
+      {card.options && card.options.length > 0 && !card.executed && !blocked && (
+        <div className="option-row">
+          <span className="trace-label mono">{t('aiRail.sqlOptions')}</span>
+          <span className="trace-chips">
+            {card.options.map((opt) => (
+              <button key={opt.id ?? opt.label} className={`option-chip mono${optionBusy === (opt.id ?? opt.label) ? ' busy' : ''}`}
+                disabled={!!optionBusy} onClick={() => void applyOption(opt)}>
+                {optionBusy === (opt.id ?? opt.label) ? '…' : `+ ${opt.label}`}
+              </button>
             ))}
           </span>
         </div>

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core import query as core_query
+from app.knowledge.filters import prepare_query_sql
 from app.safety import gate as safety_gate
 from app.safety.blast import build_blast
 from app.safety.models import Origin, Verdict
@@ -102,7 +103,10 @@ async def run_query(req: QueryRequest) -> dict:
             "message": "该数据源知识库未构建，请先构建并确认启用",
         })
     origin = Origin.AI if req.origin == "ai" else Origin.MANUAL
-    assessment = safety_gate.assess_sql(req.sql, dialect, origin)
+    # R6/T8：会话变量替换 + 表级过滤器注入（闸门/执行/审计一律用加工后的真实执行 SQL；
+    # confirm-token 校验与 suggest_safe 保持原始 req.sql——token 存的是原文哈希）
+    exec_sql = prepare_query_sql(state, req.connection_id, req.sql)
+    assessment = safety_gate.assess_sql(exec_sql, dialect, origin)
     # A2 策略即配置：表级/模式级覆盖（热更新，无需重启）
     try:
         policy = state.runtime.get().policy
@@ -157,7 +161,7 @@ async def run_query(req: QueryRequest) -> dict:
                 thr = int(pol_thr) if pol_thr is not None else int(state.runtime.get().gate_review_threshold)
             except Exception:
                 thr = 100000
-            est = await _estimate_cost(state, req.connection_id, req.sql, dialect)
+            est = await _estimate_cost(state, req.connection_id, exec_sql, dialect)
             estimated_rows_for_audit = est
             if est is not None and est > thr:
                 reason = {
@@ -184,7 +188,7 @@ async def run_query(req: QueryRequest) -> dict:
             "objects": assessment.tables,
         }]
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="block", status="只读连接拦截", sql=req.sql, elapsed_ms=elapsed,
+                        verdict="block", status="只读连接拦截", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=ro_reasons, tables=assessment.tables)
         return {
             "verdict": "block", "tier": assessment.tier.value,
@@ -195,11 +199,11 @@ async def run_query(req: QueryRequest) -> dict:
         }
 
     if assessment.verdict == Verdict.ALLOW:
-        res = await core_query.execute(state, req.connection_id, req.sql, req.limit, req.offset)
+        res = await core_query.execute(state, req.connection_id, exec_sql, req.limit, req.offset)
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         total = None
         if req.count_total:
-            total = await core_query.count_total(state, req.connection_id, req.sql)
+            total = await core_query.count_total(state, req.connection_id, exec_sql)
         # A5 审计补充成本字段
         _audit_extra = {}
         if estimated_rows_for_audit is not None:
@@ -207,15 +211,20 @@ async def run_query(req: QueryRequest) -> dict:
         if cost_degraded_reason:
             _audit_extra["cost_degraded"] = cost_degraded_reason
         state.audit.log(connection=cfg.name, origin=origin.value, tier="read", verdict="allow",
-                        status="放行", sql=req.sql, elapsed_ms=elapsed,
+                        status="放行", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=[], tables=assessment.tables, **_audit_extra)
+        # R7/T10：手动查询成功也回灌（仅边加权，无 few-shot）；内部已静默降级
+        try:
+            state.knowledge.record_query_success(req.connection_id, exec_sql, None)
+        except Exception:
+            pass
         return {**res, "verdict": "allow", "tier": "read", "reason": "", "reasons": [], "total": total,
                 "suggestions": [], **({"estimated_rows": estimated_rows_for_audit} if estimated_rows_for_audit is not None else {})}
 
     if assessment.verdict == Verdict.BLOCK:
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="block", status="拦截", sql=req.sql, elapsed_ms=elapsed,
+                        verdict="block", status="拦截", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=assessment.reasons, tables=assessment.tables)
         return {
             "verdict": "block", "tier": assessment.tier.value,
@@ -229,7 +238,7 @@ async def run_query(req: QueryRequest) -> dict:
     if not req.confirm and not req.confirm_token:
         preview = None
         if assessment.tier.value == "dml":
-            preview = await safety_gate.preview_rows(state, req.connection_id, req.sql, dialect)
+            preview = await safety_gate.preview_rows(state, req.connection_id, exec_sql, dialect)
         blast = build_blast(state, req.connection_id, assessment.tables, preview)
         # A4 回滚剧本（A4 修复：备份 SQL 同样过闸，避免死代码）
         rollback = None
@@ -263,7 +272,7 @@ async def run_query(req: QueryRequest) -> dict:
             except Exception:
                 pass
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="review", status="需确认", sql=req.sql, elapsed_ms=elapsed,
+                        verdict="review", status="需确认", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=assessment.reasons, tables=assessment.tables, **_review_extra)
         _ret = {
             "verdict": "review", "tier": assessment.tier.value,
@@ -280,7 +289,7 @@ async def run_query(req: QueryRequest) -> dict:
             _ret["rollback_ref"] = _review_extra.get("rollback_ref")
         return _ret
 
-    reassess = safety_gate.assess_sql(req.sql, dialect, origin)
+    reassess = safety_gate.assess_sql(exec_sql, dialect, origin)
     if reassess.verdict == Verdict.BLOCK:
         return {
             "verdict": "block", "tier": reassess.tier.value,
@@ -298,11 +307,11 @@ async def run_query(req: QueryRequest) -> dict:
         if not ok:
             raise HTTPException(status_code=409, detail={"code": "confirm_rejected", "message": why})
         _confirm_meta = get_pending(state.chats, req.session_id or "") or {}
-    res = await core_query.execute(state, req.connection_id, req.sql, req.limit, req.offset)
+    res = await core_query.execute(state, req.connection_id, exec_sql, req.limit, req.offset)
     elapsed = round((time.monotonic() - t0) * 1000, 1)
     status = "已确认执行" if assessment.tier.value == "dml" else "已执行"
     state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                    verdict=assessment.verdict.value, status=status, sql=req.sql, elapsed_ms=elapsed,
+                    verdict=assessment.verdict.value, status=status, sql=exec_sql, elapsed_ms=elapsed,
                     reasons=assessment.reasons, tables=assessment.tables,
                     **({"confirm_token": req.confirm_token,
                         "turn_id": _confirm_meta.get("turn_id")} if req.confirm_token else {}))

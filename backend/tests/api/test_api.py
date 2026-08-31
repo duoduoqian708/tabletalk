@@ -319,6 +319,8 @@ async def test_knowledge_build_retrieve_annotate(client, conn_id):
 
 async def test_knowledge_graph_and_overview(client, conn_id):
     await _build_and_wait(client, conn_id)
+    # 2026-08-31 修订：边默认 draft，确认后才进正式图
+    await client.post(f"/api/v1/knowledge/{conn_id}/confirm-all")
     # 图谱：FK 边存在
     g = await client.get(f"/api/v1/knowledge/{conn_id}/graph")
     assert g.json()["built"] is True

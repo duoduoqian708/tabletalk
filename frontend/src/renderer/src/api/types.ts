@@ -210,7 +210,7 @@ export interface GraphEdge {
   from_col?: string | null
   to: string
   to_col?: string | null
-  kind: 'fk' | 'overlap' | 'user' | 'llm'
+  kind: 'fk' | 'overlap' | 'user' | 'llm' | 'naming' | 'value_overlap' | 'query_log'
   cardinality?: 'n:1' | '1:1'
   reason?: string
   weight?: number | null

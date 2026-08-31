@@ -219,6 +219,8 @@ def skill_tool_schemas(skill_id: str | None) -> list[dict]:
     s = get_skill(skill_id)
     if s is None:
         return list(TOOL_SCHEMAS)
+    if not s.enabled:
+        return []  # P1-1：禁用技能零工具（铁律 3·禁止靠缺席）
     names = set(s.tools)
     if not names:
         return []

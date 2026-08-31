@@ -71,14 +71,12 @@ async def test_pool_for_reads_runtime_pool_size(monkeypatch):
     assert pool.max_size == 9
 
 
-def test_auto_cap_injects_limit_cap_plus_one():
-    from app.core.query import _auto_cap
-
-    out = _auto_cap("SELECT * FROM t", "sqlite", 1000)
-    assert "LIMIT 1001" in out.upper()
-    # 已有 LIMIT 不覆盖
-    out2 = _auto_cap("SELECT * FROM t LIMIT 5", "sqlite", 1000)
-    assert "LIMIT 5" in out2.upper()
+def test_no_auto_cap_execution_layer():
+    """S1：执行层不再自动注入 LIMIT（_auto_cap 已移除，LIMIT 纪律在提示词由 LLM 织入）。"""
+    import importlib
+    from app.core import query as core_query
+    importlib.reload(core_query)
+    assert not hasattr(core_query, "_auto_cap")
 
 
 async def test_execute_uses_runtime_query_max_rows(app_state, conn_id):

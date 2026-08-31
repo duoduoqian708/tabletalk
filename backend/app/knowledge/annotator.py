@@ -1021,6 +1021,13 @@ def _domain_partition_prompt(
         "2. 每张表至少归入 1 个领域；可挂多个（复合实体同时属于多个域）。\n"
         "3. 领域名简短、语义清晰、互不重叠；领域内表业务高度相关。\n"
         "4. 每个领域给一句话「依据」（为什么这些表同属一域）。\n"
+        "【命名规范】\n"
+        "- 领域名采用「业务对象 + 职责」结构，2~6 个汉字；\n"
+        "  示例：用户管理、订单数据、商品服务、支付结算、日志审计、系统配置\n"
+        "- 禁止使用：纯英文/缩写（如 CRUD、ETL）、纯技术术语（如 API 网关、中间件）、\n"
+        "  过于抽象的词（如「其他」「辅助」「通用」「基础数据」）\n"
+        "- description 描述该域包含的核心业务实体和职责，一句话，15~30 字；\n"
+        "  示例：「管理注册用户信息、认证凭证与权限角色」\n"
         "【输出】\n"
         "返回 JSON 数组，元素形如 "
         '{"name":"领域名","description":"一句话描述","tables":["表1","表2"],"reason":"依据"}。\n'
@@ -1044,6 +1051,10 @@ def _domain_selfcheck_prompt(
         "3. 语义重叠：两域边界不清 → 理清边界或合并。\n"
         "4. 命名：域名简短、语义清晰、互不重叠。\n"
         f"5. 领域数量保持约 {lo}~{hi} 个（可小幅浮动）。\n"
+        "【命名审查】\n"
+        "- 检查每个域名是否符合「业务对象 + 职责」结构（如：用户管理、订单数据）；\n"
+        "- 将纯英文/缩写/技术术语/过于抽象的域名替换为中文业务名称；\n"
+        "- description 是否清晰说明了该域的实体和职责，15~30 字为宜。\n"
         "【输出】\n"
         "若初版已合理，返回 {\"unchanged\": true}；\n"
         "若有改进，返回完整修正后的领域 JSON 数组（格式、字段同第一轮）。\n"
@@ -1072,6 +1083,10 @@ def _incremental_tag_absorb_prompt(
         "1. 只能为新增表指定归属；不得改动既有领域已有的成员表。\n"
         "2. 一张新增表可归多个领域；每项给出一句「依据」。\n"
         "3. 领域名复用既有领域名；确实无法归入时才提议新名。\n"
+        "【命名规范】\n"
+        "- 新域名采用「业务对象 + 职责」结构，2~6 个汉字；\n"
+        "  示例：用户管理、订单数据、商品服务、支付结算\n"
+        "- 禁止使用：纯英文/缩写、技术术语、过于抽象的词（如「其他」「通用」）\n"
         "【输出】\n"
         "返回 JSON 数组，元素形如 "
         '{"table":"表名","tags":["领域名","可选新域名"],"reason":"依据"}。\n'
@@ -1321,105 +1336,31 @@ async def _annotate_domain_incremental(
 # ---------- LLM 图谱识别（两轮：全局扫描 + 候选验证） ----------
 
 
-# 引用列后缀：业务系统引用列的常见命名模式（可扩展）
-_REF_SUFFIXES = ("_id", "_code", "_no", "_num", "_key", "_ref")
-
-
-def _table_name_variants(base: str) -> set[str]:
-    """表名单复数变体：category_id → {category, categories}；addresses_id → {addresses, address}。"""
-    out = {base}
-    if base.endswith("ies"):
-        out.add(base[:-3] + "y")      # categories → category
-    elif base.endswith("es"):
-        out.add(base[:-2])            # addresses → address
-    elif base.endswith("y"):
-        out.add(base[:-1] + "ies")    # category → categories
-    elif base.endswith("s"):
-        out.add(base[:-1])            # status → statu（粗糙单数化，匹配不到则无害）
-    out.add(base + "s")
-    out.add(base + "es")
-    return out
-
-
-def _type_family(t: str | None) -> str | None:
-    """类型族：INT 族 / 文本族；未知返回 None（保守：不参与候选）。"""
-    u = (t or "").upper()
-    if u.startswith(("INT", "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT", "NUMERIC", "DECIMAL")):
-        return "int"
-    if u.startswith(("CHAR", "VARCHAR", "TEXT", "NCHAR", "NVARCHAR", "STRING")):
-        return "text"
-    return None
+# 命名推断唯一实现迁至 T4 建边管线（graph.builder），此处 re-export 保持调用方/测试兼容
+from app.knowledge.graph.builder import (  # noqa: E402
+    _REF_SUFFIXES,
+    _table_name_variants,
+    _type_family,
+)
 
 
 def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
-    """程序启发式：根据引用列名（_id/_code/_no/_num/_key/_ref 后缀）+ 类型族，生成关联候选。
+    """程序启发式：引用列名（_id/_code/... 后缀）+ 类型族生成关联候选。
 
-    策略：A 表某引用列名（去掉引用后缀）≈ B 表名（含单复数变体），且引用列与
-    B 表目标列（主键优先，其次 id/code）类型族一致。
-    边 v2：from 恒为持有引用列的表（多侧）；列兼主键 → 1:1，否则 n:1。
-    产出仅供第 2 步 LLM 裁决（可修正/拒绝），不直接上线。
+    委托 T4 建边管线的命名推断（graph.builder.build_naming_edges，去 LLM 化后
+    的单一实现）。产出仅供第 2 步 LLM 裁决（可修正/拒绝），不直接上线。
     """
-    candidates: list[dict[str, str]] = []
-    tables = schema.get("tables", [])
-    columns = schema.get("columns", [])
-    cols_by_table: dict[str, list[dict]] = {}
-    for c in columns:
-        cols_by_table.setdefault(c["table"], []).append(c)
-    table_names = {t["name"] for t in tables}
-    # 通用名（不做匹配锚点）
-    generic_names = {"id", "uuid", "guid", "status", "type", "name", "code",
-                     "created_at", "updated_at", "deleted_at", "created_by", "updated_by"}
-    seen_pairs: set[tuple[str, str, str, str]] = set()
+    from app.knowledge.graph.builder import build_naming_edges
 
-    for t in tables:
-        tname = t["name"]
-        for c in cols_by_table.get(tname, []):
-            cname = c["name"].lower()
-            if cname in generic_names:
-                continue
-            base = cname
-            matched_sfx = False
-            for sfx in _REF_SUFFIXES:
-                if cname.endswith(sfx):
-                    base = cname[:-len(sfx)]
-                    matched_sfx = True
-                    break
-            if not matched_sfx or not base or base in generic_names:
-                continue
-            if base == tname.lower():
-                continue  # 自环
-            # 目标表：单复数变体匹配
-            variants = _table_name_variants(base)
-            to_table = next((n for n in table_names if n.lower() in variants), None)
-            if to_table is None or to_table == tname:
-                continue
-            # 目标列：主键优先、其次 id/code，且与引用列类型族一致（不同族不配对）
-            fam = _type_family(c.get("type", ""))
-            if fam is None:
-                continue
-            ref_col: str | None = None
-            for cc in sorted(
-                cols_by_table.get(to_table, []),
-                key=lambda x: (0 if x.get("pk") else 1, 0 if x["name"].lower() in ("id", "code") else 1),
-            ):
-                if _type_family(cc.get("type", "")) == fam:
-                    ref_col = cc["name"]
-                    break
-            if ref_col is None:
-                continue
-            cardinality = "1:1" if c.get("pk") else "n:1"
-            key = (tname, to_table, c["name"], ref_col)
-            if key in seen_pairs:
-                continue
-            seen_pairs.add(key)
-            candidates.append({
-                "from_table": tname, "from_col": c["name"],
-                "to_table": to_table, "to_col": ref_col,
-                "cardinality": cardinality,
-                "reason": f"列名匹配：{tname}.{c['name']} → {to_table}.{ref_col}",
-            })
-
-    return candidates
+    return [
+        {
+            "from_table": e.source_table, "from_col": e.cols[0][0],
+            "to_table": e.target_table, "to_col": e.cols[0][1],
+            "cardinality": e.cardinality,
+            "reason": e.reason,
+        }
+        for e in build_naming_edges(schema)
+    ]
 
 
 def _parse_graph_edges(text: str, schema: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1478,6 +1419,7 @@ def _parse_graph_edges(text: str, schema: dict[str, Any] | None = None) -> list[
             "reason": str(it.get("reason") or ""),
             "confidence": str(it.get("confidence") or ""),
             "status": str(it.get("status") or ""),
+            "guard": str(it.get("guard") or "").strip() or None,  # S2-4：守卫谓词（多态关联）
         })
     return out
 
@@ -1553,10 +1495,13 @@ async def annotate_graph(
         "4. 基数：n:1（多对一）或 1:1（外键兼主键）；from_col 是 from_table 主键时只能 1:1；"
         "不确定默认 n:1。\n"
         "5. 每条边给 confidence（high/medium/low）与一句 reason 依据。\n"
+        "6. 多态关联（S2-4）：若关联只在特定条件下成立（如 X.type=1 时 code 指向表1），"
+        "在 guard 字段写明条件（如 \"X.type = 1\"）；普通关联 guard 省略。\n"
         "【输出】\n"
         "返回 JSON 数组，元素形如 "
         '{"from_table":"A","from_col":"a_id","to_table":"B","to_col":"id",'
-        '"cardinality":"n:1","confidence":"high/medium/low","reason":"依据"}。\n'
+        '"cardinality":"n:1","confidence":"high/medium/low","reason":"依据",'
+        '"guard":"可选条件"}。\n'
         "只返回 JSON，不要多余文字。"
     )
     global_resp = await _chat_with_beat(
@@ -1812,3 +1757,319 @@ async def _annotate_graph_incremental(
     logger.info("[kb.graph] conn=%s 增量局部补边完成：subgraph=%s 目标边=%s",
                 conn_id, len(sub_tables), len(edges))
     return edges
+
+
+# ---------------------------------------------------------------------------
+# S2-1：表级过滤器 AI 语义确认（启发式只做预标记，AI 裁决为权威知识）
+# ---------------------------------------------------------------------------
+
+_FILTER_VERDICTS = ("tenant", "soft_delete", "exempt", "none")
+
+
+def _filters_candidates_prompt(schema: dict[str, Any], candidates: list[dict[str, Any]],
+                               samples: dict[str, dict[str, list[Any]]]) -> str:
+    """AI 过滤器裁决提示词（柔和措辞：很可能/大概率/一般，供 LLM 生成 SQL 时参考，
+    不是强制规则——用户明确说明特殊情况时以用户为准）。"""
+    lines = [
+        "你是数据库语义分析师。以下是数据库的全部表与列（类型 + 启发式预标记 + 部分采样值）。",
+        "请判断哪些表【很可能】存在以下语义，供后续生成 SQL 时参考（非强制规则，用户可纠正）：",
+        "- soft_delete：表内行是否有效/已删除的标记列（is_deleted/deleted_at 这类语义，值多为 0/1/NULL）",
+        "- tenant：按租户/组织/门店隔离的列（tenant_id/org_id 这类语义，值多为 ID）",
+        "- exempt：字典表/系统表，一般不需要上述过滤",
+        "判断原则：列名只是相似但语义不确定时，宁标记 none 或 low 置信，不要猜测。",
+        "",
+        "表与列：",
+    ]
+    for t in schema.get("tables", []):
+        name = t["name"]
+        lines.append(f"- {name}")
+        for c in schema.get("columns", []):
+            if c["table"] != name:
+                continue
+            mark = ""
+            for cand in candidates:
+                if cand["table"] == name and cand["column"] == c["name"]:
+                    mark = f"  [预标记:{cand['hint']}]"
+                    break
+            vals = (samples.get(name) or {}).get(c["name"]) or []
+            sample_txt = f"  样例: {vals[:5]}" if vals else ""
+            lines.append(f"    {c['name']} ({c.get('type','')}){mark}{sample_txt}")
+    lines.append("")
+    lines.append('输出 JSON：{"filters": [{"table": "表名", "verdict": "tenant|soft_delete|exempt|none", '
+                 '"column": "列名", "predicate": "tenant_id = :current_tenant 或 col = 0 或 col IS NULL", '
+                 '"confidence": "high|medium|low", "reason": "一句话依据"}]}')
+    lines.append("要求：每表最多 tenant 与 soft_delete 各一条；exempt/none 不需 column/predicate；"
+                 "predicate 中的运行时值一律用占位符（如 :current_tenant），LLM 生成 SQL 时引用占位符，执行层填充真实值。")
+    return "\n".join(lines)
+
+
+def _normalize_filter_verdicts(text: str, table_names: list[str]) -> list[dict[str, Any]]:
+    """LLM 裁决 JSON → 规范化列表（非法/缺字段丢弃）。"""
+    out: list[dict[str, Any]] = []
+    try:
+        data = json.loads(text)
+    except Exception:
+        return out
+    for it in data.get("filters") or []:
+        if not isinstance(it, dict):
+            continue
+        t = str(it.get("table") or "")
+        vd = str(it.get("verdict") or "")
+        if t not in table_names or vd not in _FILTER_VERDICTS:
+            continue
+        if vd in ("tenant", "soft_delete"):
+            col = str(it.get("column") or "")
+            pred = str(it.get("predicate") or "")
+            conf = str(it.get("confidence") or "low")
+            if not col or not pred:
+                continue
+            if conf not in ("high", "medium", "low"):
+                conf = "low"
+            out.append({"table": t, "verdict": vd, "column": col,
+                        "predicate": pred, "confidence": conf,
+                        "reason": str(it.get("reason") or "")[:120]})
+        else:
+            out.append({"table": t, "verdict": vd,
+                        "confidence": str(it.get("confidence") or "low"),
+                        "reason": str(it.get("reason") or "")[:120]})
+    return out
+
+
+def _mock_filter_verdicts(schema: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """mock 裁决：启发式预标记直接转裁决（演示/离线路径，确定性）。"""
+    out: list[dict[str, Any]] = []
+    for cand in candidates:
+        if cand["hint"] == "soft_delete":
+            out.append({"table": cand["table"], "verdict": "soft_delete",
+                        "column": cand["column"], "predicate": cand["predicate"],
+                        "confidence": "high", "reason": "启发式命中软删除列（mock）"})
+        elif cand["hint"] == "tenant":
+            out.append({"table": cand["table"], "verdict": "tenant",
+                        "column": cand["column"], "predicate": cand["predicate"],
+                        "confidence": "medium", "reason": "启发式命中租户列（mock）"})
+    return out
+
+
+def _soft_delete_values_ok(samples: dict[str, dict[str, list[Any]]],
+                           table: str, column: str) -> bool:
+    """值域校验：采样值全在 {0,1,None} 才算软删除（防误判普通列）。"""
+    vals = (samples.get(table) or {}).get(column)
+    if not vals:
+        return False  # 无采样 → 不自动确认（保守）
+    for v in vals:
+        if v is None:
+            continue
+        try:
+            if int(v) not in (0, 1):
+                return False
+        except Exception:
+            return False
+    return True
+
+
+async def annotate_filters(
+    state: "AppState",
+    conn_id: str,
+    schema: dict[str, Any],
+    on_progress: Any | None = None,
+) -> dict[str, Any]:
+    """表级过滤器 AI 语义确认（S2-1）：逐表裁决租户/软删除/豁免。
+
+    - 启发式检测（detect_candidates）只作预标记提示，AI 看全部表/列自行裁决（特例适配）
+    - soft_delete（值域 0/1/NULL + high 置信）→ 自动 confirmed（低风险）
+    - tenant / exempt → draft（ai_suggested）→ 人工确认（误判代价高）
+    - 失败静默：异常不影响构建（filter 是参考知识，非构建关键路径）
+    """
+    from app.knowledge.filters import FilterStore
+
+    kb = state.knowledge
+    store: FilterStore = kb.filter_store
+    table_names = [t["name"] for t in schema.get("tables", [])]
+    if not table_names:
+        return {"filtered": 0, "auto_confirmed": 0, "draft": 0}
+    samples = kb.semantic_store._samples.get(conn_id, {})
+    candidates = kb.build_service._detect_filter_candidates(schema)
+
+    rt = state.runtime.get()
+    cfg = _kb_reason_provider_cfg(rt, reasoning=False)
+    if gw.is_effective_mock(cfg):
+        verdicts = _mock_filter_verdicts(schema, candidates)
+    else:
+        try:
+            provider = gw.build_provider(cfg)
+            prompt = _filters_candidates_prompt(schema, candidates, samples)
+            resp = await _chat_with_beat(
+                provider,
+                [{"role": "user", "content": prompt}],
+                None,
+                ctx={"conn_id": conn_id, "connection": conn_id, "skill": "kb-filters",
+                     "source": "kb_build", "status": "egress-filters",
+                     "context_meta": {"candidate_tables": table_names}},
+                on_progress=on_progress, stage="filters", phase="filters",
+                step="adjudicate", step_index=1, step_total=1, percent=0,
+            )
+            text = resp.content if hasattr(resp, "content") else str(resp)
+            verdicts = _normalize_filter_verdicts(text or "", table_names)
+        except Exception as e:
+            logger.warning("[kb.filters] conn=%s AI 裁决异常，回退启发式预标记：%s", conn_id, e)
+            verdicts = _mock_filter_verdicts(schema, candidates)
+
+    # FilterStore 一表一条：先按表聚合（软删+租户 AND 合并；存在 tenant 则整表 draft，
+    # 只有 soft_delete 且值域/置信通过才自动 confirmed）
+    by_table: dict[str, dict[str, Any]] = {}
+    for v in verdicts:
+        t = v["table"]
+        vd = v["verdict"]
+        if vd == "exempt":
+            by_table.setdefault(t, {"preds": [], "auto": True, "exempt": True})
+            continue
+        entry = by_table.setdefault(t, {"preds": [], "auto": True, "exempt": False})
+        entry["preds"].append(v["predicate"])
+        if vd == "tenant":
+            entry["auto"] = False
+        elif vd == "soft_delete":
+            if not (v.get("confidence") == "high"
+                    and _soft_delete_values_ok(samples, t, v.get("column", ""))):
+                entry["auto"] = False
+    auto_confirmed = 0
+    draft = 0
+    for t, entry in by_table.items():
+        if entry.get("exempt"):
+            store.add(conn_id, t, "", scope="exempt", status="draft")
+            draft += 1
+            continue
+        pred = " AND ".join(entry["preds"])
+        if not pred:
+            continue
+        status = "confirmed" if entry["auto"] else "draft"
+        store.add(conn_id, t, pred, scope="table", status=status)
+        if entry["auto"]:
+            auto_confirmed += 1
+        else:
+            draft += 1
+    if verdicts:
+        logger.info("[kb.filters] conn=%s AI 裁决 %d 条：auto_confirmed=%s draft=%s",
+                    conn_id, len(verdicts), auto_confirmed, draft)
+    return {"filtered": len(verdicts), "auto_confirmed": auto_confirmed, "draft": draft}
+
+
+# ---------------------------------------------------------------------------
+# S2-2：静态业务常量 AI 识别（kind=constant 生产者，设计 §5/§8.2）
+# ---------------------------------------------------------------------------
+
+def _constants_prompt(tables_desc: str) -> str:
+    return (
+        "你是数据库语义分析师。以下是数据库各表/列的中文注释与采样取值。\n"
+        "请识别其中【很可能】属于『静态业务常量』的项——不随时间变化的业务参数\n"
+        "（税率、折扣率、审批阈值、库存警戒线、积分倍率、最大/最小限额等），\n"
+        "供后续生成 SQL 时直接引用其值（如税率 0.13、阈值 10000）。\n"
+        "注意：\n"
+        "- 只识别明确为常量语义的项；普通业务列（订单金额、用户ID等）不算；不确定的宁可不列\n"
+        "- 运行时变量（当前用户/租户/时间）不是常量，不要识别\n"
+        "输出 JSON：{\"constants\": [{\"name\": \"tax_rate\", \"value\": \"0.13\", "
+        "\"unit\": \"%或空\", \"source_table\": \"system_config\", "
+        "\"source_column\": \"value\", \"reason\": \"一句话依据\"}]}\n"
+        "name 用英文小写下划线命名（LLM 引用名），value 保留原文，最多 10 条。\n"
+        "以下是表/列注释与取值：\n"
+        + tables_desc
+    )
+
+
+def _tables_desc_for_constants(schema: dict[str, Any],
+                               tables: dict[str, Any]) -> str:
+    """表/列注释 + 采样值 → 紧凑描述（供常量识别）。"""
+    lines: list[str] = []
+    for t in schema.get("tables", []):
+        tname = t["name"]
+        tk = tables.get(tname)
+        tcomment = (tk.comment or "").strip() if tk else ""
+        lines.append(f"- {tname}：{tcomment or '（无注释）'}")
+        for c in schema.get("columns", []):
+            if c["table"] != tname:
+                continue
+            ccomment = ""
+            if tk and c["name"] in tk.columns:
+                ci = tk.columns[c["name"]]
+                ccomment = (ci.comment or "").strip()
+                if ci.values:
+                    ccomment += f" 取值: {ci.values[:80]}"
+            if ccomment:
+                lines.append(f"    {c['name']}：{ccomment}")
+    return "\n".join(lines)
+
+
+def _normalize_constants(text: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    try:
+        data = json.loads(text)
+    except Exception:
+        return out
+    for it in data.get("constants") or []:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()
+        value = str(it.get("value") or "").strip()
+        if not name or not value:
+            continue
+        out.append({
+            "name": name, "value": value,
+            "unit": str(it.get("unit") or "").strip(),
+            "source_table": str(it.get("source_table") or "").strip(),
+            "source_column": str(it.get("source_column") or "").strip(),
+            "reason": str(it.get("reason") or "")[:120],
+        })
+    return out
+
+
+async def annotate_constants(
+    state: "AppState",
+    conn_id: str,
+    schema: dict[str, Any],
+    on_progress: Any | None = None,
+) -> int:
+    """静态业务常量识别（S2-2）：LLM 从表/列注释 + 取值识别常量 → kind=constant 候选。
+
+    - 产出 Concept(kind=constant, status=draft, source=ai) → 人工确认后注入 context
+    - mock / 识别失败 → 0（常量是增强知识，非构建关键路径）
+    """
+    from app.knowledge.semantic.concepts import Concept
+
+    kb = state.knowledge
+    tables = kb.semantic_store._tables.get(conn_id, {})
+    desc = _tables_desc_for_constants(schema, tables)
+    if not desc:
+        return 0
+    rt = state.runtime.get()
+    cfg = _kb_reason_provider_cfg(rt, reasoning=False)
+    if gw.is_effective_mock(cfg):
+        return 0
+    try:
+        provider = gw.build_provider(cfg)
+        resp = await _chat_with_beat(
+            provider,
+            [{"role": "user", "content": _constants_prompt(desc)}],
+            None,
+            ctx={"conn_id": conn_id, "connection": conn_id, "skill": "kb-constants",
+                 "source": "kb_build", "status": "egress-constants",
+                 "context_meta": {"candidate_tables": [t["name"] for t in schema.get("tables", [])]}},
+            on_progress=on_progress, stage="constants", phase="constants",
+            step="identify", step_index=1, step_total=1, percent=0,
+        )
+        text = resp.content if hasattr(resp, "content") else str(resp)
+        items = _normalize_constants(text or "")
+    except Exception as e:
+        logger.warning("[kb.constants] conn=%s 常量识别异常，跳过：%s", conn_id, e)
+        return 0
+    n = 0
+    for it in items:
+        c = Concept(
+            name=it["name"],
+            canonical_enum=[{"code": it["value"], "label": it["unit"] or ""}],
+            members=[{"table": it["source_table"], "column": it["source_column"]}],
+            status="draft", kind="constant", source="ai",
+        )
+        if kb.concept_store.upsert(conn_id, c, schema):
+            n += 1
+    if n:
+        logger.info("[kb.constants] conn=%s 常量候选 %d 条（draft，待人工确认）", conn_id, n)
+    return n

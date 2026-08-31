@@ -834,6 +834,7 @@ export const zhCN = {
     clickToExpand: '点击展开 SQL',
     showQueryPrefix: '显示查询 · ',
     refTables: '引用表',
+    sqlOptions: '可选优化',
     locateInGraph: '跳至星图定位',
     sentToApproval: '已转审批',
     toApprovalFail: '转审批失败（仅团队模式）',

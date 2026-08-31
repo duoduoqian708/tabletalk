@@ -11,7 +11,7 @@ export interface EditorGraphNode {
 export interface EditorGraphEdge {
   from: string
   to: string
-  kind: 'fk' | 'overlap' | 'user' | 'llm'
+  kind: 'fk' | 'overlap' | 'user' | 'llm' | 'naming' | 'value_overlap' | 'query_log'
   from_col?: string | null
   to_col?: string | null
 }

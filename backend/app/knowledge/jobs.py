@@ -255,6 +255,46 @@ class SyncLoop:
             self._task.cancel()
         self._task = None
 
+    async def _sample_distinct(self, state: Any, conn_id: str, table: str, column: str,
+                               limit: int = 100) -> list[Any]:
+        """轻量单列 DISTINCT 采样（防漂移用，不跑全表 sample）。"""
+        from app.core.query import serialize_value
+
+        async def _work(adapter, conn):
+            quote = adapter.quote_ident
+            raw = await adapter.execute(
+                conn, f"SELECT DISTINCT {quote(column)} FROM {quote(table)} LIMIT {int(limit)}"
+            )
+            return [serialize_value(r[0]) for r in raw.rows or [] if r]
+
+        return await state.pools.run(conn_id, _work)
+
+    async def _check_concept_drift(self, state: Any, conn_id: str,
+                                   schema: dict[str, Any]) -> dict[str, list[str]]:
+        """T7 防漂移接线：confirmed 概念成员列 DISTINCT 采样 → 返回 {概念名: [新值]}。
+
+        铁律：新值仅提示待人工确认（不自动写 canonical_enum）；采样/比对失败静默跳过。
+        """
+        cols_ok = {(c.get("table", ""), c.get("name", "")) for c in schema.get("columns", [])}
+        out: dict[str, list[str]] = {}
+        for c in state.knowledge.concept_store.list(conn_id):
+            if c.status != "confirmed":
+                continue
+            for m in c.members:
+                t, col = m.get("table", ""), m.get("column", "")
+                if (t, col) not in cols_ok:
+                    continue
+                try:
+                    sampled = await self._sample_distinct(state, conn_id, t, col)
+                except Exception as e:  # pragma: no cover - 采样失败静默
+                    logger.debug("[kb.sync] conn=%s 防漂移采样失败 %s.%s：%s", conn_id, t, col, e)
+                    continue
+                new_vals = state.knowledge.concept_store.detect_drift(conn_id, t, col, sampled)
+                if new_vals:
+                    out.setdefault(c.name, [])
+                    out[c.name] = sorted(set(out[c.name]) | set(new_vals))
+        return out
+
     async def tick(self) -> None:
         from app.state import get_state  # noqa: PLC0415 - 延迟导入避免循环
 
@@ -271,6 +311,25 @@ class SyncLoop:
                 continue
             try:
                 schema = await get_schema(state, c.id)
+                # T10：审计日志挖掘 → query_log 边（脱离 needs_sync 短路：
+                # 结构无变化也应定时挖掘；幂等——按列对去重，重复 tick 不重复加）
+                try:
+                    rows = state.audit.list(connection=c.name) or []
+                    rows = [r for r in rows
+                            if r.get("verdict") == "allow"
+                            and (r.get("sql") or "").strip()
+                            and not (r.get("sql") or "").strip().startswith("--")]
+                    state.knowledge.apply_query_log_edges(c.id, rows)
+                except Exception as e:
+                    logger.warning("[kb.sync] conn=%s 日志挖掘失败：%s", c.id, e)
+                # T7：概念防漂移（定时采样比对；新值提示待确认，不自动写）
+                try:
+                    drift = await self._check_concept_drift(state, c.id, schema)
+                    for name, new_vals in drift.items():
+                        logger.info("[kb.sync] conn=%s 概念 %s 漂移新值 %s（待确认）",
+                                    c.id, name, new_vals)
+                except Exception as e:
+                    logger.warning("[kb.sync] conn=%s 防漂移检查失败：%s", c.id, e)
                 if not state.knowledge.needs_sync(c.id, schema):
                     logger.debug("[kb.sync] conn=%s 结构无变化，跳过", c.id)
                     continue

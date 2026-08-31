@@ -1848,6 +1848,31 @@ body.resizing {
   color: var(--ink-faint);
 }
 
+/* S3：可选追加项（LLM 建议 chips，点一下轻量改写 SQL） */
+.sql .option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.sql .option-row .trace-label { flex: none; }
+.sql .option-chip {
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.sql .option-chip:hover { border-style: solid; border-color: var(--ink); }
+.sql .option-chip:disabled { opacity: 0.5; cursor: default; }
+
 .sql .c-h .st { margin-left: auto; font-size: 11px; }
 
 .fst {

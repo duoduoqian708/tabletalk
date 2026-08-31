@@ -54,6 +54,7 @@ class FKRef:
     column: str
     ref_table: str
     ref_column: str
+    constraint_id: int | None = None  # 同一复合 FK 的多列对共享；None=未知（不合并）
 
 
 class DialectAdapter(ABC):

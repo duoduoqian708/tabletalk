@@ -326,7 +326,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false }
     }
 
-    const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current, uzoom: uzoomRef.current, D, W, H })
+    const rotate = (p: [number, number, number]) => project(p, { yaw: yawRef.current, pitch: pitchRef.current, zoom: zoomRef.current * uzoomRef.current, D, W, H })
 
     // 邻居集合缓存：选中期间每帧都要点亮相邻节点，重建 Set + 遍历全部 FK 的代价不必要
     let hlCache: { focus: number; fkLen: number; n: number; set: Set<number> } | null = null

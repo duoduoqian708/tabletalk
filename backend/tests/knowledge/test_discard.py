@@ -1,6 +1,6 @@
 """放弃（discard）语义测试：撤下本轮全部草案、保留历史已确认内容、状态流转与审计留痕。
 
-- store 层：draft→none（文本保留便于下次重建对照）、draft 标签移除解绑、LLM 边删除+墓碑；
+- store 层：draft->none（文本保留便于下次重建对照）、draft 标签移除解绑、LLM 边删除；
 - API 层：kb_status 流转（无 confirmed→none / 有 confirmed→ready）
   + 审计 origin=kb_build / status=discarded / source=manual。
 """
@@ -90,13 +90,8 @@ async def test_first_round_discard_withdraws_all_drafts(tmp_path):
     tags = kb.tags("c1")
     assert not any(tg["name"] == "交易域" for tg in tags["library"])
     assert all("交易域" not in names for names in tags["tables"].values())
-    # LLM 边撤下 + 墓碑记录
+    # LLM 边撤下（无墓碑，重建时 LLM 重新提案）
     assert kb.llm_graph_edges("c1") == []
-    keys = {KnowledgeBase._llm_edge_key(t) for t in kb._llm_edge_tombstones.get("c1", [])}
-    assert KnowledgeBase._llm_edge_key({
-        "from_table": "orders", "from_col": "customer_id",
-        "to_table": "customers", "to_col": "id",
-    }) in keys
     # 首轮无历史 → 无 confirmed 内容（API 层据此置 kb_status=none）
     assert kb.has_confirmed_content("c1") is False
 
@@ -105,6 +100,7 @@ async def test_discard_keeps_confirmed_history(tmp_path):
     """有历史确认时放弃：confirmed 原样保留，剩余草案撤下，判定存在 confirmed 内容。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), enable_ai_annotation=False)
+    kb.confirm_graph_edges("c1")
     kb.annotate_drafts("c1", [
         {"table": "orders", "column": "status", "comment": "订单状态草案"},
         {"table": "customers", "column": "name", "comment": "客户姓名草案"},
@@ -120,8 +116,8 @@ async def test_discard_keeps_confirmed_history(tmp_path):
     assert kb.has_confirmed_content("c1") is True
 
 
-async def test_discard_tombstones_llm_edges_no_revival_on_rebuild(tmp_path):
-    """墓碑生效：放弃的 LLM 边在重建后被标记 previously_rejected，不复活为活跃草案。"""
+async def test_discard_llm_edges_reproposed_on_rebuild(tmp_path):
+    """放弃后重建：LLM 边重新提案为活跃草案（无墓碑，不标记 previously_rejected）。"""
     kb = KnowledgeBase(tmp_path)
     schema = _schema()
     await kb.build("c1", schema)  # mock AI：FK 推导出确定性 llm draft 边
@@ -132,11 +128,11 @@ async def test_discard_tombstones_llm_edges_no_revival_on_rebuild(tmp_path):
     assert counts["edges"] == len(first_edges)
     assert kb.llm_graph_edges("c1") == []
 
-    await kb.build("c1", schema)  # 同 schema 重建 → mock 再次产出同一批边
+    await kb.build("c1", schema)  # 同 schema 重建：mock 再次产出同一批边
     edges = kb.llm_graph_edges("c1")
     assert edges, "重建应再次发现关系"
-    assert all(e.get("status") == "previously_rejected" for e in edges), \
-        "墓碑中的边不得复活为活跃草案"
+    assert all(e.get("status") != "previously_rejected" for e in edges), \
+        "重建后的边都是活跃草案"
 
 
 # ───────────────────────── API 层 ─────────────────────────

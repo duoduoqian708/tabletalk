@@ -109,14 +109,16 @@ class MySQLAdapter(DialectAdapter):
 
     async def list_foreign_keys(self, conn: Any) -> list[FKRef]:
         sql = """
-            SELECT kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, kcu.REFERENCED_COLUMN_NAME
+            SELECT kcu.TABLE_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME,
+                   kcu.REFERENCED_COLUMN_NAME, kcu.CONSTRAINT_NAME
             FROM information_schema.KEY_COLUMN_USAGE kcu
             WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         """
         async with conn.cursor() as cur:
             await cur.execute(sql)
             rows = await cur.fetchall()
-        return [FKRef(table=r[0], column=r[1], ref_table=r[2], ref_column=r[3]) for r in rows]
+        return [FKRef(table=r[0], column=r[1], ref_table=r[2],
+                      ref_column=r[3], constraint_id=r[4]) for r in rows]
 
     async def count_rows(self, conn: Any, table: str) -> int:
         async with conn.cursor() as cur:

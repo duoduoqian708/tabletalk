@@ -197,6 +197,29 @@ async def _run_report_query(
     """
     cfg = state.connections.get(conn_id)
     dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
+    # R6/T8：会话变量替换 + 表级过滤器注入（闸门/审计用真实执行 SQL）
+    try:
+        from app.knowledge.filters import prepare_query_sql
+        sql = prepare_query_sql(state, conn_id, sql)
+    except Exception:
+        pass
+    # R1/P2-11：图校验（与 run_query 同一校验器）——report 子查询 JOIN 也必须命中知识库图
+    try:
+        from app.ai.tools.sql import plausibility_check
+        _ok, _miss, _ = plausibility_check(state, conn_id, sql)
+        if not _ok:
+            _desc = "、".join(f"{ft}.{fc} = {tt}.{tc}" for ft, fc, tt, tc in _miss)
+            _reason = f"JOIN 条件 {_desc} 不在知识库图内（幻觉 join）"
+            try:
+                state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier="read",
+                                verdict="block", status="报告查询拦截（图校验）", sql=sql,
+                                report_id=report_id, source="report", tables=None)
+            except Exception:
+                pass
+            return {"ok": False, "result_id": result_id, "sql": sql,
+                    "reason": _reason, "plausibility": _miss}
+    except Exception:
+        pass  # 校验器异常不阻塞报告（与 run_query 一致）
     assessment = safety_gate.assess_sql(sql, dialect, Origin.AI)
     # 报告只读：闸门非 ALLOW 直接转 block 记录（工具集本就只读，理论不会出现写）
     if assessment.verdict != Verdict.ALLOW:

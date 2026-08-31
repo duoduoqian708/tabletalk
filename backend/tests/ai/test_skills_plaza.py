@@ -78,7 +78,7 @@ def test_skill_tool_schemas_filtering():
     all_names = {t["function"]["name"] for t in skill_tool_schemas(None)}
     assert "run_dml" in all_names
     ro = skill_tool_schemas("report")
-    assert {t["function"]["name"] for t in ro} == {"get_schema", "run_query"}
+    assert {t["function"]["name"] for t in ro} == {"get_schema", "run_query", "kb_read", "graph_read"}
     # 未知技能回退全量
     assert len(skill_tool_schemas("nope")) == len(all_names)
 
@@ -93,3 +93,26 @@ def test_trigger_routing_matches_enabled_skills():
     sid = next(s.id for s in list_skills() if s.triggers)
     update_skill(sid, {"enabled": False})
     assert _trigger_match("对账一下") is None
+
+
+def test_route_effective_disabled_skill_falls_back():
+    """P1-1：技能禁用后 route_effective 落到 general 兜底（地板 query 不受影响）。"""
+    from app.ai.skills.route import route_effective
+    prev = get_skill("write").enabled
+    update_skill("write", {"enabled": False})
+    try:
+        assert route_effective("write") == "general"
+        assert route_effective("query", "answer") == "query"  # 地板不受影响
+        assert route_effective("write", "answer") == "general"
+    finally:
+        update_skill("write", {"enabled": prev})
+
+
+def test_skill_tool_schemas_disabled_returns_empty():
+    """P1-1：禁用技能的工具契约收窄为零（禁止靠缺席，模型拿不到任何动词）。"""
+    prev = get_skill("write").enabled
+    update_skill("write", {"enabled": False})
+    try:
+        assert skill_tool_schemas("write") == []
+    finally:
+        update_skill("write", {"enabled": prev})

@@ -1,4 +1,4 @@
-"""知识库增量同步测试：指纹/diff/增量构建/墓碑/archived/幂等。"""
+"""知识库增量同步测试：指纹/diff/增量构建/删边复活/archived/幂等。"""
 from __future__ import annotations
 
 from app.knowledge.store import KnowledgeBase
@@ -135,27 +135,25 @@ async def test_incremental_remove_table_archives(tmp_path):
     assert not any(d.table == "customers" for d in hits)
 
 
-async def test_tombstone_survives_rebuild(tmp_path):
-    """FK 边墓碑化后，全量重建不复活。"""
+async def test_deleted_edge_revives_on_rebuild(tmp_path):
+    """删除已确认的确定性来源边后，全量重建会重新提案（现代理确认后可见）。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
-    # 找到一条 FK 边并墓碑化
+    kb.confirm_graph_edges("c1")
     fk_edges = [e for e in kb.graph("c1")["edges"] if e["kind"] == "fk"]
     assert fk_edges, "需要存在 FK 边"
     e = fk_edges[0]
-    kb._edge_tombstones.setdefault("c1", []).append(
-        {"from": e["from"], "from_col": e["from_col"], "to": e["to"], "to_col": e["to_col"]}
-    )
-    kb._save_conn("c1")
-    # 全量重建 → 墓碑边不复活
+
+    # 删除已确认边 -> 从正式图移除
+    assert kb.remove_graph_edge("c1", e["from"], e["to"], e["kind"]) == 1
+    assert not any(x["kind"] == "fk" and (x["from"], x["to"]) == (e["from"], e["to"])
+                   for x in kb.graph("c1")["edges"])
+
+    # 全量重建：确定性来源重新提案该边到 draft（无墓碑，重建不带历史记忆）
     kb2 = KnowledgeBase(tmp_path)
     await kb2.build("c1", _schema(), _samples())
-    edges2 = kb2.graph("c1")["edges"]
-    assert not any(
-        (x["from"], x["from_col"], x["to"], x["to_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"])
-        or (x["to"], x["to_col"], x["from"], x["from_col"]) == (e["from"], e["from_col"], e["to"], e["to_col"])
-        for x in edges2
-    )
+    assert any(d["kind"] == "fk" and d["from_table"] == e["from"] and d["to_table"] == e["to"]
+               for d in kb2.llm_graph_edges("c1"))
 
 
 async def test_sync_no_change_zero_side_effect(tmp_path):

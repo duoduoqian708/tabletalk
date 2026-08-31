@@ -19,13 +19,18 @@ def test_refusal_skill_has_zero_tools():
 
 
 def test_query_skill_tools():
-    """设计文档 §4/§6：query 地板常开，工具集 = run_query, get_schema, query_audit, ai_review。"""
-    assert _names("query") == {"run_query", "get_schema", "query_audit", "ai_review"}
+    """设计文档 §4/§6 + P2-12：query 地板常开，含知识只读面（kb_read/graph_read）。"""
+    assert _names("query") == {"run_query", "get_schema", "query_audit", "ai_review", "kb_read", "graph_read"}
 
 
 def test_write_skill_tools():
-    """设计文档 §4/§6：write = run_dml, draft_ddl, run_query, get_schema, ai_review。"""
-    assert _names("write") == {"run_dml", "draft_ddl", "run_query", "get_schema", "ai_review"}
+    """设计文档 §4/§6 + F4：write = run_dml, run_query, get_schema, ai_review（ddl 独立技能）。"""
+    assert _names("write") == {"run_dml", "run_query", "get_schema", "ai_review"}
+
+
+def test_ddl_skill_tools():
+    """F4/§15.3：ddl = draft_ddl, get_schema, run_query（无 run_dml，墙1 隔离）。"""
+    assert _names("ddl") == {"draft_ddl", "get_schema", "run_query"}
 
 
 def test_knowledge_skill_tools():
@@ -41,7 +46,7 @@ def test_scheduler_skill_tools():
 def test_query_report_present_tools():
     """设计文档 §4/§6：query（地板常开）只读；report 同样只读。"""
     assert "run_dml" not in _names("query") and "draft_ddl" not in _names("query")
-    assert _names("report") == {"run_query", "get_schema"}
+    assert _names("report") == {"run_query", "get_schema", "kb_read", "graph_read"}
 
 
 @pytest.mark.asyncio

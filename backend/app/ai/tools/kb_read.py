@@ -15,9 +15,11 @@ if TYPE_CHECKING:
 
 async def _kb_read(state: "AppState", args: dict[str, Any], conn_id: str, include_data: bool = False) -> ToolOutcome:
     store = state.knowledge
+    store.ensure_loaded(conn_id)  # 重启后恢复内存态（concept/tags/docs 统一入口）
     table_name = (args or {}).get("table_name", "").strip()
     keyword = (args or {}).get("keyword", "").strip()
-    query_type = (args or {}).get("query_type", "docs")  # docs | tags | all
+    column = (args or {}).get("column", "").strip()
+    query_type = (args or {}).get("query_type", "docs")  # docs | tags | concept | all
 
     results: dict[str, Any] = {"ok": True}
 
@@ -35,12 +37,24 @@ async def _kb_read(state: "AppState", args: dict[str, Any], conn_id: str, includ
         lib = store.tags(conn_id)["library"]
         results["tags"] = [t for t in lib if t["status"] == "confirmed"]
 
+    if query_type in ("concept", "all"):
+        cs = store.concept_store
+        if table_name and column:
+            c = cs.get_for_column(conn_id, table_name, column)
+            results["concept"] = c.to_dict() if c else None
+        elif keyword:
+            hits = [c.to_dict() for c in cs.list(conn_id) if keyword.lower() in c.name.lower()]
+            results["concepts"] = hits
+        else:
+            results["concepts"] = [c.to_dict() for c in cs.list(conn_id)]
+
     if table_name:
         card = store.table_card(conn_id, table_name)
         if card:
             results["context"] = card["text"]
 
-    count = len(results.get("docs", [])) + len(results.get("tags", []))
+    count = (len(results.get("docs", [])) + len(results.get("tags", []))
+             + len(results.get("concepts", [])))
     return ToolOutcome(
         result=results,
         think=f"知识库查询：{count} 条结果。",
@@ -50,11 +64,12 @@ async def _kb_read(state: "AppState", args: dict[str, Any], conn_id: str, includ
 def register() -> None:
     register_tool(
         "kb_read",
-        "查询知识库：按表名/关键词搜索表知识卡，或查看已确认的领域标签。",
+        "查询知识库：按表名/关键词搜索表知识卡，查看已确认的领域标签，或按表列查概念字典（值落地）。",
         {
             "table_name": {"type": "string", "description": "表名（可选）"},
+            "column": {"type": "string", "description": "列名（与 table_name 配合查概念，可选）"},
             "keyword": {"type": "string", "description": "搜索关键词（可选）"},
-            "query_type": {"type": "string", "enum": ["docs", "tags", "all"], "description": "查询类型（默认 docs）"},
+            "query_type": {"type": "string", "enum": ["docs", "tags", "concept", "all"], "description": "查询类型（默认 docs）"},
         },
         [],
         _kb_read,

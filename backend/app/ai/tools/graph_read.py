@@ -1,4 +1,4 @@
-"""graph_read 工具：查询表间关联关系。"""
+"""graph_read 工具：查询表间关联关系（统一图谱，T2 后指向知识库唯一图）。"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -9,24 +9,41 @@ if TYPE_CHECKING:
     from app.state import AppState
 
 
-async def _graph_read(state: "AppState", args: dict[str, Any], conn_id: str, include_data: bool = False) -> ToolOutcome:
-    from app.ai.graph.store import GraphStore
-    from app.config import get_env
+def _to_relation_list(edges: list[dict]) -> list[dict[str, Any]]:
+    """知识库图边 → 工具兼容结构 {source, target, relation, source_col, target_col}。"""
+    out = []
+    for e in edges:
+        out.append({
+            "source": e.get("from", ""),
+            "target": e.get("to", ""),
+            "relation": e.get("kind", "related"),
+            "source_col": e.get("from_col"),
+            "target_col": e.get("to_col"),
+            "cardinality": e.get("cardinality", "n:1"),
+            "reason": e.get("reason", ""),
+        })
+    return out
 
-    store = GraphStore(get_env().data_dir)
+
+async def _graph_read(state: "AppState", args: dict[str, Any], conn_id: str, include_data: bool = False) -> ToolOutcome:
+    kb = state.knowledge
     table_name = (args or {}).get("table_name", "").strip()
     hops = int((args or {}).get("hops") or 2)
 
+    edges = kb.graph(conn_id).get("edges", [])
     if table_name:
-        neighbors = store.get_neighbors(conn_id, table_name, hops=hops)
+        # 种子表可达范围（BFS，按图扩展）内的边，且至少一端是种子表可达节点
+        reachable = kb.expand_tables(conn_id, {table_name}, hops=hops)
+        related = [e for e in edges
+                   if e.get("from") in reachable or e.get("to") in reachable]
         return ToolOutcome(
-            result={"ok": True, "table": table_name, "relations": neighbors, "count": len(neighbors)},
-            think=f"查询 {table_name} 的关联表：{len(neighbors)} 条边。",
+            result={"ok": True, "table": table_name, "relations": _to_relation_list(related),
+                    "count": len(related)},
+            think=f"查询 {table_name} 的关联表：{len(related)} 条边。",
         )
     else:
-        edges = store.list_edges(conn_id)
         return ToolOutcome(
-            result={"ok": True, "edges": edges, "count": len(edges)},
+            result={"ok": True, "edges": _to_relation_list(edges), "count": len(edges)},
             think=f"图谱共 {len(edges)} 条边。",
         )
 

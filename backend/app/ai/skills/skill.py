@@ -40,6 +40,10 @@ class Skill:
     read_only: bool = False
     enabled: bool = True                      # 启用/禁用（技能广场）
     triggers: list[str] = field(default_factory=list)  # 关键词路由（自定义技能）
+    # E5/§15：路由匹配条件（action/modality 剖面）+ 循环控制 + 降级策略
+    match: dict = field(default_factory=dict)            # {action: ..., modality: ...}（None=任意）
+    termination: dict = field(default_factory=dict)      # {max_turns, done_when}
+    degradation: str = ""                                # 能力降级说明（路由命中但降级时提示）
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -68,4 +72,7 @@ class Skill:
             read_only=bool(d.get("read_only", False)),
             enabled=bool(d.get("enabled", True)),
             triggers=list(d.get("triggers", [])),
+            match=dict(d.get("match") or {}),
+            termination=dict(d.get("termination") or {}),
+            degradation=str(d.get("degradation") or ""),
         )

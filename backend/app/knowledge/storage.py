@@ -60,11 +60,52 @@ class KbSnapshot:
     schema: dict[str, Any] = field(default_factory=dict)
     emb_fingerprint: str = ""
     schema_fingerprint: str = ""          # 结构指纹（增量对比用）
-    edge_tombstones: list[dict] = field(default_factory=list)  # 用户删除的 overlap 边（不复活）
     excluded: list[str] = field(default_factory=list)          # 图谱视图中移出的表（不影响审查页）
     synced_at: str = ""                   # 最近一次增量同步时间
     llm_graph_edges: list[dict] = field(default_factory=list)  # LLM 发现的 draft 边（待人工确认）
-    llm_edge_tombstones: list[dict] = field(default_factory=list)  # 用户拒绝过的 LLM 边（重建不复活）
+    concepts: list[dict] = field(default_factory=list)  # 概念字典条目（T7）
+    table_filters: list[dict] = field(default_factory=list)  # 表级过滤器（T8）
+    fewshot: list[dict] = field(default_factory=list)  # few-shot 库（T10）
+
+
+def _normalize_edge(e: dict) -> dict:
+    """边字段归一化（SQLite/JSON 双存储共用，修 T3 cols 往返损坏）。
+
+    - cols：JSON 字符串解析为列对列表；缺失时从 from_col/to_col 合成
+      （旧库迁移映射，文档 T3 §5）
+    - provenance：旧 kind=user 边回填 human；fk 边缺省 declared_fk
+    - guard/confidence/cardinality/reason 默认值回填
+    """
+    e.setdefault("cardinality", "n:1")
+    e.setdefault("reason", "")
+    e.setdefault("guard", None)
+    if e.get("confidence") is None:
+        e["confidence"] = 1.0
+    if e.get("weight") is None:
+        e["weight"] = 1.0  # T3 表定义 weight DEFAULT 1.0（存量 NULL 行归一化）
+    if not e.get("provenance"):
+        e["provenance"] = {
+            "fk": "declared_fk",
+            "user": "human",
+            "llm": "human",
+            "overlap": "value_overlap",
+            "naming": "naming_inference",
+            "query_log": "query_log",
+        }.get(e.get("kind"), "")
+    raw_cols = e.get("cols")
+    if isinstance(raw_cols, str):
+        # SQLite TEXT 列读出是 JSON 字符串（v3 存储 bug 的历史数据也在此修复）
+        try:
+            raw_cols = json.loads(raw_cols)
+        except (TypeError, ValueError):
+            raw_cols = None
+    if raw_cols:
+        e["cols"] = [[str(a), str(b)] for a, b in raw_cols]
+    elif e.get("from_col") and e.get("to_col"):
+        e["cols"] = [[e["from_col"], e["to_col"]]]
+    else:
+        e["cols"] = None
+    return e
 
 
 class KbStorage(Protocol):
@@ -121,8 +162,7 @@ class JsonStorage:
                 snap.samples = data.get("samples", {})
                 edges = data.get("graph", {}).get("edges", [])
                 for e in edges:
-                    e.setdefault("cardinality", "n:1")  # 旧库边无基数 → 默认 n:1
-                    e.setdefault("reason", "")
+                    _normalize_edge(e)
                 snap.edges = edges
                 snap.vec = data.get("vec", {})
                 snap.table_vec = data.get("table_vec", {})
@@ -138,11 +178,12 @@ class JsonStorage:
                 snap.schema = data.get("schema", {})
                 snap.emb_fingerprint = data.get("emb_fingerprint", "")
                 snap.schema_fingerprint = data.get("schema_fingerprint", "")
-                snap.edge_tombstones = data.get("edge_tombstones", [])
                 snap.excluded = data.get("excluded", [])
                 snap.synced_at = data.get("synced_at", "")
                 snap.llm_graph_edges = data.get("llm_graph_edges", [])
-                snap.llm_edge_tombstones = data.get("llm_edge_tombstones", [])
+                snap.concepts = data.get("concepts", [])
+                snap.table_filters = data.get("table_filters", [])
+                snap.fewshot = data.get("fewshot", [])
             except Exception as e:
                 logger.warning("[kb.storage] %s artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
         return snap
@@ -172,11 +213,12 @@ class JsonStorage:
                 "schema": snap.schema,
                 "emb_fingerprint": snap.emb_fingerprint,
                 "schema_fingerprint": snap.schema_fingerprint,
-                "edge_tombstones": snap.edge_tombstones,
                 "excluded": snap.excluded,
                 "synced_at": snap.synced_at,
                 "llm_graph_edges": snap.llm_graph_edges,
-                "llm_edge_tombstones": snap.llm_edge_tombstones,
+                "concepts": snap.concepts,
+                "table_filters": snap.table_filters,
+                "fewshot": snap.fewshot,
             }, ensure_ascii=False),
             encoding="utf-8",
         )
@@ -198,15 +240,34 @@ CREATE TABLE IF NOT EXISTS docs (
   table_name TEXT, column_name TEXT, status TEXT, source TEXT, tags TEXT,
   conn_id TEXT, updated_at TEXT, archived INTEGER DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS edges (
-  from_table TEXT, from_col TEXT, to_table TEXT, to_col TEXT,
-  kind TEXT, weight REAL, shared INTEGER,
-  cardinality TEXT, reason TEXT
-);
 CREATE TABLE IF NOT EXISTS tags (name TEXT PRIMARY KEY, description TEXT, status TEXT, color TEXT);
 CREATE TABLE IF NOT EXISTS table_tags (table_name TEXT PRIMARY KEY, tags TEXT);
 CREATE TABLE IF NOT EXISTS embeddings (doc_id TEXT PRIMARY KEY, vec BLOB NOT NULL);
 CREATE TABLE IF NOT EXISTS table_embeddings (table_name TEXT PRIMARY KEY, vec BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS concepts (
+  name TEXT PRIMARY KEY,
+  canonical_enum TEXT NOT NULL,
+  members TEXT NOT NULL,
+  status TEXT DEFAULT 'draft',
+  kind TEXT DEFAULT 'dimension',
+  updated_at TEXT DEFAULT '',
+  source TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS table_filters (
+  table_name TEXT PRIMARY KEY,
+  predicate TEXT NOT NULL,
+  scope TEXT DEFAULT 'table',
+  status TEXT DEFAULT 'draft'
+);
+CREATE TABLE IF NOT EXISTS fewshot (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conn_id TEXT NOT NULL,
+  question TEXT NOT NULL,
+  sql TEXT NOT NULL,
+  join_path TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fewshot_conn ON fewshot(conn_id);
 CREATE TABLE IF NOT EXISTS version_archive (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   batch_ts TEXT NOT NULL,
@@ -217,8 +278,27 @@ CREATE TABLE IF NOT EXISTS version_archive (
   payload TEXT NOT NULL          -- JSON：{comment, values, example, status, ddl, vector_override}
 );
 CREATE INDEX IF NOT EXISTS idx_va_lookup ON version_archive(table_name, column_name, batch_ts);
-CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_table);
-CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_table);
+"""
+
+# T3 §3：edges 新表（复合主键 + 关系列；guard 归一化为 '' 存储）。独立于 _SCHEMA：
+# 旧库先走 _migrate_edges 重建（索引依赖新列名，不能在旧表上直接建）。
+_EDGES_DDL = """
+CREATE TABLE IF NOT EXISTS edges (
+  source_table TEXT NOT NULL,
+  target_table TEXT NOT NULL,
+  cols TEXT NOT NULL,
+  cardinality TEXT DEFAULT 'n:1',
+  relation TEXT DEFAULT 'fk',
+  confidence REAL DEFAULT 1.0,
+  provenance TEXT DEFAULT 'declared_fk',
+  guard TEXT DEFAULT '',
+  weight REAL DEFAULT 1.0,
+  reason TEXT DEFAULT '',
+  metadata TEXT DEFAULT '{}',
+  PRIMARY KEY (source_table, target_table, cols, guard)
+);
+CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_table);
+CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_table);
 """
 
 
@@ -273,13 +353,11 @@ class SqliteStorage:
         if "archived" not in cols:
             conn.execute("ALTER TABLE docs ADD COLUMN archived INTEGER DEFAULT 0")
             conn.commit()
-        # 旧库迁移：edges 表补 cardinality/reason 列（边 v2，已存在则跳过）
+        # edges（T3 §5）：旧 schema（有 from_table 无 source_table）→ 重建新表（复合主键/关系列/guard 归一化）
         ecols = {row["name"] for row in conn.execute("PRAGMA table_info(edges)")}
-        for col in ("cardinality", "reason"):
-            if col not in ecols:
-                conn.execute(f"ALTER TABLE edges ADD COLUMN {col} TEXT")
-        if "cardinality" not in ecols or "reason" not in ecols:
-            conn.commit()
+        if ecols and "source_table" not in ecols:
+            self._migrate_edges(conn)
+        conn.executescript(_EDGES_DDL)
         # 旧库迁移：tags 表补 color 列（标签颜色后端持久化，已存在则跳过）
         tcols = {row["name"] for row in conn.execute("PRAGMA table_info(tags)")}
         if "color" not in tcols:
@@ -288,6 +366,68 @@ class SqliteStorage:
         if self._vec_ok:
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS doc_vec USING vec0(doc_id TEXT PRIMARY KEY, vec float[256])")
             conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS table_vec USING vec0(table_name TEXT PRIMARY KEY, vec float[256])")
+
+    def _migrate_edges(self, conn: Any) -> None:
+        """旧 edges 表（from_table/from_col/to_table/to_col/kind）→ T3 新表（复合主键）。
+
+        流程（T3 §5）：读旧行 → 构造 GraphEdge → 备份（VACUUM INTO .bak）→ DROP+CREATE → INSERT OR REPLACE。
+        """
+        from app.knowledge.graph.model import RELATION_FK, GraphEdge
+
+        rows = [dict(r) for r in conn.execute("SELECT * FROM edges")]
+        bak = str(self._path) + ".bak"
+        try:
+            if os.path.exists(bak):
+                os.remove(bak)
+            conn.execute("VACUUM INTO ?", (bak,))
+        except Exception as e:  # 备份失败不阻塞迁移（旧库可由重新构建恢复）
+            logger.warning("[kb.storage] conn=%s edges 迁移前备份失败：%s", self._conn_id, e)
+        conn.execute("DROP TABLE edges")
+        conn.executescript(_EDGES_DDL)
+        migrated = 0
+        for r in rows:
+            try:
+                e = dict(r)
+                e["from"] = e.pop("from_table", None) or e.get("from", "")
+                e["to"] = e.pop("to_table", None) or e.get("to", "")
+                _normalize_edge(e)  # 旧列对 → 合成 cols；user→human 映射
+                if not e.get("cols") or not e.get("from") or not e.get("to"):
+                    continue
+                self._insert_edge(conn, GraphEdge(
+                    source_table=e["from"], target_table=e["to"],
+                    cols=[tuple(p) for p in e["cols"]],
+                    cardinality=e.get("cardinality") or "n:1",
+                    # 旧 kind=llm（已确认的 LLM draft 边）→ 归一化为 user（枚举内，human 确认语义）
+                    relation="user" if e.get("kind") == "llm" else (e.get("kind") or RELATION_FK),
+                    confidence=float(e.get("confidence") or 1.0),
+                    provenance=e.get("provenance") or "declared_fk",
+                    guard=e.get("guard"),
+                    weight=float(e.get("weight") or 1.0),
+                    reason=e.get("reason") or "",
+                ))
+                migrated += 1
+            except Exception as ex:
+                logger.warning("[kb.storage] conn=%s 边迁移跳过一行：%s", self._conn_id, ex)
+        conn.commit()
+        logger.info("[kb.storage] conn=%s edges 迁移：%d 行 → 新表", self._conn_id, migrated)
+
+    @staticmethod
+    def _insert_edge(conn: Any, e: Any) -> None:
+        """GraphEdge → 新 edges 表（INSERT OR REPLACE 幂等；guard 归一化 ''；cols JSON 保序）。"""
+        conn.execute(
+            "INSERT OR REPLACE INTO edges "
+            "(source_table, target_table, cols, cardinality, relation, confidence, provenance, guard, weight, reason, metadata) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (e.source_table, e.target_table,
+             json.dumps([list(p) for p in e.cols], ensure_ascii=False),
+             e.cardinality or "n:1", e.relation or "fk",
+             e.confidence if e.confidence is not None else 1.0,
+             e.provenance or "",
+             e.guard or "",
+             e.weight if e.weight is not None else 1.0,
+             e.reason or "",
+             json.dumps(e.metadata or {}, ensure_ascii=False)),
+        )
 
     # ---- 读取 ----
     def load(self) -> KbSnapshot:
@@ -311,9 +451,6 @@ class SqliteStorage:
                 snap.emb_fingerprint = self._meta(conn, "emb_fingerprint")
                 snap.schema_fingerprint = self._meta(conn, "schema_fingerprint")
                 snap.synced_at = self._meta(conn, "synced_at")
-                tombs = self._meta(conn, "edge_tombstones")
-                if tombs:
-                    snap.edge_tombstones = json.loads(tombs)
                 excl = self._meta(conn, "excluded_tables")
                 if excl:
                     snap.excluded = json.loads(excl)
@@ -328,11 +465,24 @@ class SqliteStorage:
                     (snap.auto if d["source"] != "user" else snap.user).append(d)
                 for row in conn.execute("SELECT * FROM edges"):
                     e = dict(row)
-                    e["from"] = e.pop("from_table")
-                    e["to"] = e.pop("to_table")
-                    e.setdefault("cardinality", "n:1")  # 旧库边无基数 → 默认 n:1
-                    e.setdefault("reason", "")
-                    snap.edges.append(e)
+                    raw_cols = e.pop("cols") or "[]"
+                    try:
+                        cols = json.loads(raw_cols)
+                    except (TypeError, ValueError):
+                        cols = []
+                    first = cols[0] if cols else [None, None]
+                    snap.edges.append({
+                        "from": e["source_table"], "from_col": first[0],
+                        "to": e["target_table"], "to_col": first[1],
+                        "kind": e["relation"], "weight": e.get("weight") or 1.0,
+                        "shared": None,
+                        "cardinality": e.get("cardinality") or "n:1",
+                        "reason": e.get("reason") or "",
+                        "guard": e.get("guard") or None,
+                        "confidence": e.get("confidence") if e.get("confidence") is not None else 1.0,
+                        "provenance": e.get("provenance") or "",
+                        "cols": cols,
+                    })
                 for row in conn.execute("SELECT name, description, status, color FROM tags"):
                     snap.tags[row["name"]] = {
                         "description": row["description"] or "",
@@ -357,9 +507,36 @@ class SqliteStorage:
                 llm_edges_json = self._meta(conn, "llm_graph_edges")
                 if llm_edges_json:
                     snap.llm_graph_edges = json.loads(llm_edges_json)
-                llm_tombstones_json = self._meta(conn, "llm_edge_tombstones")
-                if llm_tombstones_json:
-                    snap.llm_edge_tombstones = json.loads(llm_tombstones_json)
+                concepts_json = self._meta(conn, "concepts")
+                if concepts_json:
+                    self._migrate_meta_to_table(conn, "concepts", json.loads(concepts_json))
+                for row in conn.execute("SELECT name, canonical_enum, members, status, kind, updated_at, source FROM concepts"):
+                    snap.concepts.append({
+                        "name": row["name"],
+                        "canonical_enum": json.loads(row["canonical_enum"] or "[]"),
+                        "members": json.loads(row["members"] or "[]"),
+                        "status": row["status"] or "draft",
+                        "kind": row["kind"] or "dimension",
+                        "updated_at": row["updated_at"] or "",
+                        "source": row["source"] or "",
+                    })
+                filters_json = self._meta(conn, "table_filters")
+                if filters_json:
+                    self._migrate_meta_to_table(conn, "table_filters", json.loads(filters_json))
+                for row in conn.execute("SELECT table_name, predicate, scope, status FROM table_filters"):
+                    snap.table_filters.append({
+                        "table": row["table_name"], "predicate": row["predicate"],
+                        "scope": row["scope"] or "table", "status": row["status"] or "draft",
+                    })
+                fewshot_json = self._meta(conn, "fewshot")
+                if fewshot_json:
+                    self._migrate_meta_to_table(conn, "fewshot", json.loads(fewshot_json))
+                for row in conn.execute("SELECT question, sql, join_path, created_at FROM fewshot WHERE conn_id=?", (self._conn_id,)):
+                    snap.fewshot.append({
+                        "question": row["question"], "sql": row["sql"],
+                        "join_path": json.loads(row["join_path"] or "[]"),
+                        "created_at": row["created_at"] or "",
+                    })
             finally:
                 conn.close()
         except Exception as e:
@@ -370,6 +547,39 @@ class SqliteStorage:
     def _meta(conn: Any, key: str) -> str:
         row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return row["value"] if row else ""
+
+    def _migrate_meta_to_table(self, conn: Any, key: str, items: list[dict]) -> None:
+        """存量 meta JSON（concepts/table_filters/fewshot）→ 真表（R11 启动迁移，幂等）。"""
+        try:
+            if key == "concepts":
+                for it in items:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO concepts "
+                        "(name, canonical_enum, members, status, kind, updated_at, source) VALUES (?,?,?,?,?,?,?)",
+                        (it.get("name", ""),
+                         json.dumps(it.get("canonical_enum") or [], ensure_ascii=False),
+                         json.dumps(it.get("members") or [], ensure_ascii=False),
+                         it.get("status", "draft"), it.get("kind", "dimension"),
+                         it.get("updated_at", ""), it.get("source", "")))
+            elif key == "table_filters":
+                for it in items:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO table_filters (table_name, predicate, scope, status) VALUES (?,?,?,?)",
+                        (it.get("table", ""), it.get("predicate", ""),
+                         it.get("scope", "table"), it.get("status", "draft")))
+            elif key == "fewshot":
+                conn.execute("DELETE FROM fewshot WHERE conn_id=?", (self._conn_id,))
+                for it in items:
+                    conn.execute(
+                        "INSERT INTO fewshot (conn_id, question, sql, join_path, created_at) VALUES (?,?,?,?,?)",
+                        (self._conn_id, it.get("question", ""), it.get("sql", ""),
+                         json.dumps(it.get("join_path") or [], ensure_ascii=False),
+                         it.get("created_at", "")))
+            conn.execute("DELETE FROM meta WHERE key=?", (key,))
+            conn.commit()
+            logger.info("[kb.storage] conn=%s 存量 meta[%s] %d 条 → 真表", self._conn_id, key, len(items))
+        except Exception as e:
+            logger.warning("[kb.storage] conn=%s meta[%s] 迁移失败：%s", self._conn_id, key, e)
 
     # ---- 保存 ----
     def save(self, snap: KbSnapshot) -> None:
@@ -383,6 +593,9 @@ class SqliteStorage:
                 conn.execute("DELETE FROM table_tags")
                 conn.execute("DELETE FROM embeddings")
                 conn.execute("DELETE FROM table_embeddings")
+                conn.execute("DELETE FROM concepts")
+                conn.execute("DELETE FROM table_filters")
+                conn.execute("DELETE FROM fewshot")
                 conn.execute("DELETE FROM meta WHERE key NOT IN ('kb_version', 'prev_stash')")  # 版本机制 key 由专属方法管理，不随快照重建
                 for d in snap.auto + snap.user:
                     conn.execute(
@@ -394,19 +607,36 @@ class SqliteStorage:
                          d.get("conn_id"), d.get("updated_at", ""), int(bool(d.get("archived")))),
                     )
                 for e in snap.edges:
-                    conn.execute(
-                        "INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, shared, cardinality, reason) "
-                        "VALUES (?,?,?,?,?,?,?,?,?)",
-                        (e.get("from"), e.get("from_col"), e.get("to"), e.get("to_col"),
-                         e.get("kind"), e.get("weight"), e.get("shared"),
-                         e.get("cardinality") or "n:1", e.get("reason") or ""),
-                    )
+                    try:
+                        from app.knowledge.graph.model import GraphEdge
+                        self._insert_edge(conn, GraphEdge.from_dict(e))
+                    except Exception as ex:
+                        logger.warning("[kb.storage] conn=%s 边保存跳过：%s", self._conn_id, ex)
                 for name, v in snap.tags.items():
                     conn.execute("INSERT INTO tags (name, description, status, color) VALUES (?,?,?,?)",
                                  (name, v.get("description", ""), v.get("status", "draft"), v.get("color", "") or None))
                 for table, names in snap.table_tags.items():
                     conn.execute("INSERT INTO table_tags (table_name, tags) VALUES (?,?)",
                                  (table, json.dumps(names, ensure_ascii=False)))
+                for c in snap.concepts:
+                    conn.execute(
+                        "INSERT INTO concepts (name, canonical_enum, members, status, kind, updated_at, source) VALUES (?,?,?,?,?,?,?)",
+                        (c.get("name", ""),
+                         json.dumps(c.get("canonical_enum") or [], ensure_ascii=False),
+                         json.dumps(c.get("members") or [], ensure_ascii=False),
+                         c.get("status", "draft"), c.get("kind", "dimension"),
+                         c.get("updated_at", ""), c.get("source", "")))
+                for f in snap.table_filters:
+                    conn.execute(
+                        "INSERT INTO table_filters (table_name, predicate, scope, status) VALUES (?,?,?,?)",
+                        (f.get("table", ""), f.get("predicate", ""),
+                         f.get("scope", "table"), f.get("status", "draft")))
+                for fs in snap.fewshot:
+                    conn.execute(
+                        "INSERT INTO fewshot (conn_id, question, sql, join_path, created_at) VALUES (?,?,?,?,?)",
+                        (self._conn_id, fs.get("question", ""), fs.get("sql", ""),
+                         json.dumps(fs.get("join_path") or [], ensure_ascii=False),
+                         fs.get("created_at", "")))
                 for doc_id, vec in snap.vec.items():
                     conn.execute("INSERT INTO embeddings (doc_id, vec) VALUES (?,?)", (doc_id, _f32_blob(vec)))
                 for table, vec in snap.table_vec.items():
@@ -415,14 +645,10 @@ class SqliteStorage:
                 conn.execute("INSERT INTO meta (key, value) VALUES ('emb_fingerprint', ?)", (snap.emb_fingerprint,))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema_fingerprint', ?)", (snap.schema_fingerprint,))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('synced_at', ?)", (snap.synced_at,))
-                conn.execute("INSERT INTO meta (key, value) VALUES ('edge_tombstones', ?)",
-                             (json.dumps(snap.edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('excluded_tables', ?)",
                              (json.dumps(snap.excluded, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('llm_graph_edges', ?)",
                              (json.dumps(snap.llm_graph_edges, ensure_ascii=False),))
-                conn.execute("INSERT INTO meta (key, value) VALUES ('llm_edge_tombstones', ?)",
-                             (json.dumps(snap.llm_edge_tombstones, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('tables', ?)", (json.dumps(snap.tables, ensure_ascii=False),))
@@ -448,11 +674,11 @@ class SqliteStorage:
         return f"""WITH RECURSIVE reach(name, depth) AS (
   SELECT '{table}', 0
   UNION
-  SELECT e.to_table, r.depth + 1 FROM edges e JOIN reach r ON e.from_table = r.name
-    WHERE e.kind = 'fk' AND r.depth < {depth}
+  SELECT e.target_table, r.depth + 1 FROM edges e JOIN reach r ON e.source_table = r.name
+    WHERE e.relation = 'fk' AND r.depth < {depth}
   UNION
-  SELECT e.from_table, r.depth + 1 FROM edges e JOIN reach r ON e.to_table = r.name
-    WHERE e.kind = 'fk' AND r.depth < {depth}
+  SELECT e.source_table, r.depth + 1 FROM edges e JOIN reach r ON e.target_table = r.name
+    WHERE e.relation = 'fk' AND r.depth < {depth}
 )
 SELECT DISTINCT name FROM reach ORDER BY name;"""
 

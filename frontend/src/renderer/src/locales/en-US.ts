@@ -836,6 +836,7 @@ export const enUS: Messages = {
     clickToExpand: 'Click to expand SQL',
     showQueryPrefix: 'Show query · ',
     refTables: 'Referenced tables',
+    sqlOptions: 'Optional refinements',
     locateInGraph: 'Locate in graph',
     sentToApproval: 'Sent for approval',
     toApprovalFail: 'Failed to send for approval (team mode only)',

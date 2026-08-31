@@ -42,6 +42,7 @@ async def test_graph_includes_fk_only(tmp_path):
     """设计文档：图谱仅包含 FK 边（overlap 边已移除，仅用于内部检索）。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
+    kb.confirm_graph_edges("c1")
     edges = kb.graph("c1")["edges"]
     assert any(e["kind"] == "fk" for e in edges)
     # 无 overlap 边（设计文档：图谱仅 FK 边用于可视化）
@@ -120,6 +121,7 @@ async def test_reject_clears_annotation(tmp_path):
 async def test_artifact_persists_across_instances(tmp_path):
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
+    kb.confirm_graph_edges("c1")
     kb.annotate_drafts("c1", [{"table": "orders", "column": "status", "comment": "订单状态草稿"}])
     await kb.confirm("c1", "orders", "status")
 
@@ -156,6 +158,7 @@ async def test_tag_lifecycle(tmp_path):
 async def test_route_tables_fk_expansion(tmp_path):
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())  # orders FK→customers
+    kb.confirm_graph_edges("c1")
     kb.upsert_tags("c1", [{"name": "订单"}])
     kb.confirm_tag("c1", "订单")
     kb.assign_table_tags("c1", "orders", ["订单"])
@@ -217,6 +220,7 @@ async def test_overview_without_retrieve_loads_artifact(tmp_path):
     """回归：重启后（新实例）直接 overview 不经过 retrieve 也能恢复工件——表列表不再为空。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema(), _samples())
+    kb.confirm_graph_edges("c1")
     kb2 = KnowledgeBase(tmp_path)
     assert kb2.is_built("c1")
     kb2.ensure_loaded("c1")
@@ -321,6 +325,7 @@ async def test_fk_edge_v2_direction_and_cardinality(tmp_path):
         {"table": "user_profiles", "column": "id", "ref_table": "customers", "ref_column": "id"})
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", schema, enable_ai_annotation=False)
+    kb.confirm_graph_edges("c1")
     edges = kb.graph("c1")["edges"]
     by_field = {(e["from"], e["from_col"]): e for e in edges}
     e_n1 = by_field[("orders", "customer_id")]

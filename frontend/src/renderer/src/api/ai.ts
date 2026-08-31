@@ -65,6 +65,15 @@ export interface AiCard {
   /** WS5 问题库命中卡 */
   question_library?: boolean
   question_id?: string
+  /** S3：LLM 顺带产出的可选追加项（用户点一下 → 轻量改写 SQL） */
+  options?: SqlOption[]
+}
+
+/** S3：SQL 可选追加项建议 */
+export interface SqlOption {
+  id?: string
+  label: string
+  hint?: string
 }
 
 /* 报告模式：章节计划/执行/图表数据/数字回溯 */

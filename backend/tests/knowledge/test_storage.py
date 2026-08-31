@@ -180,3 +180,85 @@ def test_make_storage_backend_choice(tmp_path):
     assert make_storage(tmp_path, "c1", "json").kind == "json"
     assert make_storage(tmp_path, "c1", "sqlite").kind == "sqlite"
     assert make_storage(tmp_path, "c1", "").kind == "sqlite"  # 默认 sqlite
+
+
+# ---------- R11：T3 edges 重建迁移 + concepts/table_filters/fewshot 真表 ----------
+
+def test_edges_schema_migration_from_old(tmp_path):
+    """旧 edges 表（from_table 无主键）+ meta JSON 三键 → 迁移：数据无损 + .bak 备份 + 复合主键。"""
+    import sqlite3 as _sqlite3
+
+    db = tmp_path / "knowledge-c1.db"
+    con = _sqlite3.connect(str(db))
+    con.executescript("""
+        CREATE TABLE edges (
+          from_table TEXT, from_col TEXT, to_table TEXT, to_col TEXT,
+          kind TEXT, weight REAL, shared INTEGER,
+          cardinality TEXT, reason TEXT,
+          guard TEXT, confidence REAL, provenance TEXT, cols TEXT
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        INSERT INTO edges (from_table, from_col, to_table, to_col, kind, weight, cardinality, reason, guard, confidence, provenance, cols) VALUES
+          ('orders', 'customer_id', 'customers', 'id', 'fk', 1.0, 'n:1', '', NULL, 1.0, 'declared_fk', NULL),
+          ('orders', 'shipped_by', 'customers', 'id', 'user', 1.0, 'n:1', '', NULL, 1.0, '', NULL);
+        INSERT INTO meta (key, value) VALUES
+          ('version', '2'),
+          ('concepts', '[{"name":"订单状态","canonical_enum":[{"code":"P","label":"待付款"}],"members":[{"table":"orders","column":"status","mapping":"code"}],"status":"draft","kind":"dimension","updated_at":"","source":""}]'),
+          ('table_filters', '[{"table":"orders","predicate":"is_deleted = 0","scope":"table","status":"confirmed"}]'),
+          ('fewshot', '[{"question":"查订单","sql":"SELECT * FROM orders","join_path":["orders.id = 1"],"created_at":"2026-08-30"}]');
+    """)
+    con.commit()
+    con.close()
+    st = SqliteStorage(tmp_path, "c1")
+    snap = st.load()
+    # edges：旧列对合成 cols、user→human
+    assert len(snap.edges) == 2
+    fk = next(e for e in snap.edges if e["kind"] == "fk")
+    assert fk["cols"] == [["customer_id", "id"]]
+    user = next(e for e in snap.edges if e["kind"] == "user")
+    assert user["provenance"] == "human"
+    # 三键 meta JSON → 真表
+    assert len(snap.concepts) == 1 and snap.concepts[0]["name"] == "订单状态"
+    assert snap.concepts[0]["canonical_enum"] == [{"code": "P", "label": "待付款"}]
+    assert len(snap.table_filters) == 1 and snap.table_filters[0]["predicate"] == "is_deleted = 0"
+    assert len(snap.fewshot) == 1 and snap.fewshot[0]["question"] == "查订单"
+    # .bak 备份 + 新表复合主键 + meta 三键已清除
+    assert (tmp_path / "knowledge-c1.db.bak").exists()
+    con2 = _sqlite3.connect(str(db))
+    try:
+        ddl = con2.execute("SELECT sql FROM sqlite_master WHERE name='edges'").fetchone()[0]
+        assert "PRIMARY KEY (source_table, target_table, cols, guard)" in ddl
+        keys = [r[0] for r in con2.execute(
+            "SELECT key FROM meta WHERE key IN ('concepts','table_filters','fewshot')").fetchall()]
+        assert keys == []
+    finally:
+        con2.close()
+
+
+def test_sqlite_tables_roundtrip(tmp_path):
+    """concepts/table_filters/fewshot 真表读写往返无损（meta 不再承载）。"""
+    import sqlite3 as _sqlite3
+
+    snap = _snap()
+    snap.concepts = [{"name": "订单状态", "canonical_enum": [{"code": "P", "label": "待付款"}],
+                      "members": [{"table": "orders", "column": "status", "mapping": "code"}],
+                      "status": "confirmed", "kind": "dimension", "updated_at": "", "source": ""}]
+    snap.table_filters = [{"table": "orders", "predicate": "is_deleted = 0",
+                           "scope": "table", "status": "confirmed"}]
+    snap.fewshot = [{"question": "查订单", "sql": "SELECT * FROM orders",
+                     "join_path": ["orders.id = 1"], "created_at": "2026-08-30"}]
+    st = SqliteStorage(tmp_path, "c1")
+    st.save(snap)
+    s2 = st.load()
+    assert s2.concepts == snap.concepts
+    assert s2.table_filters == snap.table_filters
+    assert s2.fewshot == snap.fewshot
+    con = _sqlite3.connect(str(tmp_path / "knowledge-c1.db"))
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert {"concepts", "table_filters", "fewshot"} <= tables
+        keys = [r[0] for r in con.execute(
+            "SELECT key FROM meta WHERE key IN ('concepts','table_filters','fewshot')").fetchall()]
+        assert keys == []
+    finally:
+        con.close()

@@ -3,7 +3,7 @@
 纯内存/mock 网关测：不依赖真实 LLM。
 覆盖：
 - _sync_removed_tables：删表 → 表标签绑定移除 + LLM draft 边清除 + 0 表标签清理
-- _upsert_llm_edges：替换涉及目标的旧边、保留其它、墓碑不复活
+- _upsert_llm_edges：替换涉及目标的旧边、保留其它、去重
 - annotate_domain(mode="incremental")：只 assign 目标表、不清已有标签、新域 draft
 - annotate_graph(mode="incremental")：mock 走 FK 元数据边（局部子图）
 """
@@ -80,19 +80,16 @@ def test_upsert_llm_edges_replaces_target_keeps_others():
     assert all(e.get("reason") == "新" or e.get("reason") == "新地址" for e in orders_edges)
 
 
-def test_upsert_llm_edges_respects_tombstone():
+def test_upsert_llm_edges_reproposes_after_reject():
+    """拒绝过的边在增量补边时照常重新提案（无墓碑，去重只按当前 draft 列表）。"""
     kb = _mk_ctx()
-    # 墓碑：order→product 用户拒绝过
-    kb._llm_edge_tombstones["c1"] = [
-        {"from_table": "orders", "from_col": "product_id", "to_table": "products", "to_col": "id"},
-    ]
     new_edges = [
         {"from_table": "orders", "from_col": "product_id", "to_table": "products",
-         "to_col": "id", "cardinality": "n:1", "reason": "不应复活", "confidence": "high"},
+         "to_col": "id", "cardinality": "n:1", "reason": "重新提案", "confidence": "high"},
     ]
     kb._upsert_llm_edges("c1", {"orders"}, new_edges)
     edges = kb._llm_graph_edges["c1"]
-    assert not any(e["to_table"] == "products" for e in edges)
+    assert any(e["to_table"] == "products" for e in edges)
 
 
 # ---------- D1：增量标签吸收（mock） ----------

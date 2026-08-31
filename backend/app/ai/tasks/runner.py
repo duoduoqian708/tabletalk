@@ -46,6 +46,12 @@ async def run_task(state: "AppState", task_id: str) -> dict[str, Any]:
         store.finish_run(run_id, status, summary)
         return {"ok": False, "status": status, "summary": summary}
 
+    # R6/T8：会话变量替换 + 表级过滤器注入（闸门/执行/审计用真实执行 SQL）
+    try:
+        from app.knowledge.filters import prepare_query_sql
+        sql = prepare_query_sql(state, conn_id, sql)
+    except Exception:
+        pass
     assessment = safety_gate.assess_sql(sql, dialect, Origin.MANUAL)
 
     if assessment.verdict != Verdict.ALLOW or assessment.tier.value != "read":

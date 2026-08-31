@@ -25,6 +25,7 @@ class ConnectionCreate(BaseModel):
     timeout: int = 10
     credential_ref: str | None = None
     sensitive: list[str | dict[str, Any]] = Field(default_factory=list)  # 敏感表/列名单（不进模型上下文与知识库）：字符串=旧 glob；dict{table,columns[]} 精确名
+    session_vars: dict[str, Any] | None = None  # T8 连接级会话变量默认值（:current_tenant 等）
 
 
 class TestDraftBody(ConnectionCreate):
@@ -46,6 +47,7 @@ class ConnectionUpdate(BaseModel):
     timeout: int | None = None
     credential_ref: str | None = None
     sensitive: list[str | dict[str, Any]] | None = None
+    session_vars: dict[str, Any] | None = None
 
 
 def _get_cfg(state, conn_id):

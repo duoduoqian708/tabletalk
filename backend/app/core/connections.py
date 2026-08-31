@@ -32,6 +32,8 @@ class ConnectionConfig:
     sensitive: list[str | dict[str, Any]] = field(default_factory=list)
     kb_status: str = "none"
     kb_updated_at: str = ""
+    # T8：连接级会话变量默认值（如 {"current_tenant": 7}）；执行层替换 LLM 写的 :current_tenant
+    session_vars: dict[str, Any] = field(default_factory=dict)
 
     def to_dialect_config(self) -> DialectConfig:
         return DialectConfig(
@@ -161,6 +163,7 @@ class ConnectionRegistry:
             credential_ref=data.get("credential_ref"),
             created_at=utcnow_iso(),
             sensitive=list(data.get("sensitive") or []),
+            session_vars=dict(data.get("session_vars") or {}),
         )
         self._conns[cfg.id] = cfg
         self.save()
@@ -182,6 +185,7 @@ class ConnectionRegistry:
         allowed = {
             "name", "dialect", "host", "port", "user", "password", "database",
             "file", "ssl", "read_only", "timeout", "credential_ref", "sensitive",
+            "session_vars",
         }
         for k, v in patch.items():
             if k in allowed and v is not None:

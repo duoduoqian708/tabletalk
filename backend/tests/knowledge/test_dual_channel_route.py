@@ -47,6 +47,7 @@ async def test_expand_tables_fk_connectivity(tmp_path):
     """图谱通道：融合种子沿 FK 扩展成连通子图。"""
     kb = KnowledgeBase(tmp_path)
     await kb.build("c1", _schema())
+    kb.confirm_graph_edges("c1")
     expanded = kb.expand_tables("c1", {"refund_requests"}, hops=2)
     assert "orders" in expanded      # refund_requests FK→orders
     assert "customers" in expanded   # orders FK→customers（2 跳）
@@ -58,6 +59,7 @@ async def test_assemble_context_fusion_uses_both_channels(app_state, conn_id):
 
     # 构建是显式前置步骤：AI 链路不再静默懒构建
     await app_state.knowledge.build(conn_id, await get_schema(app_state, conn_id))
+    app_state.knowledge.confirm_graph_edges(conn_id)
     text, meta = await assemble_context_full(app_state, conn_id, query="returns 表里都有哪些退货记录")
     tables = set(meta.get("candidate_tables", []))
     assert tables, "融合路由必须产生候选表（不再因标签未命中退化为全表）"
@@ -98,3 +100,18 @@ async def test_reembed_when_embedding_config_changes(tmp_path):
     assert kb._artifact_fingerprint.get("c1").startswith("api:")
     # 再次调用：指纹一致 → 不重嵌
     assert await kb.reembed_if_needed("c1") is False
+
+
+async def test_expand_tables_includes_non_fk_edges(tmp_path):
+    """P2-15/§10②：BFS 不限边类型——naming/overlap 可达表同样进候选集合。"""
+    from app.knowledge.graph.model import GraphEdge
+    kb = KnowledgeBase(tmp_path)
+    # 直接构造：fk 边 a-b + naming 边 b-c（c 无 fk 关系）
+    kb.graph_store._graph["c1"] = {"edges": [
+        GraphEdge(source_table="a", target_table="b", cols=[("bid", "id")],
+                  relation="fk", confidence=1.0),
+        GraphEdge(source_table="b", target_table="c", cols=[("name", "name")],
+                  relation="naming", confidence=0.6),
+    ]}
+    expanded = kb.expand_tables("c1", {"a"}, hops=2)
+    assert expanded == {"a", "b", "c"}  # naming 边可达表进入候选

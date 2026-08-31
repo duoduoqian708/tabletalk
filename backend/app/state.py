@@ -13,7 +13,7 @@ from app.core.auth import AuthStore
 from app.core.questions import QuestionStore
 from app.core.settings import SettingsStore
 from app.knowledge.jobs import BuildJobManager, SyncLoop
-from app.knowledge.store import KnowledgeBase
+from app.knowledge.facade import KnowledgeBase
 
 
 @dataclass

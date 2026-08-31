@@ -89,8 +89,8 @@ backend/app/
       graph_write.py 图谱维护（增/删边）
       manage_task.py 定时任务 CRUD
       suggest_followup.py 追问建议生成（loop 自动调用）
-    skills/          6 个内置技能（skill = 意图 = 场景指导书）
-      builtin/       query / write / report / knowledge / scheduler / refusal
+    skills/          8 个内置技能（skill = 意图 = 场景指导书）
+      builtin/       query / write / ddl / report / knowledge / scheduler / refusal / general
     knowledge/       知识库新模块：store.py（SQLite docs+tags）+ route
     graph/           图谱新模块：store.py（SQLite edges + BFS 查询）
     tasks/           定时任务：storage.py + scheduler（asyncio）
@@ -116,7 +116,7 @@ Key invariants:
 
 `get_schema` · `run_query` (read-only, gated, returns columns+rowcount only) · `run_dml` (gated, preview+confirm, never auto-executes) · `draft_ddl` (draft only) · `query_audit` (审计日志查询) · `ai_review` (SQL 语义安全审查, advisory only) · `kb_read` / `kb_write` (知识库查询/维护) · `graph_read` / `graph_write` (图谱查询/维护) · `manage_task` (定时任务 CRUD) · `suggest_followup` (追问建议, loop 自动调用)
 
-6 skills (intent→skill 1:1): `query` (地板常开) · `write` · `report` · `knowledge` · `scheduler` · `refusal` (地板常开).
+8 skills (intent→skill 1:1): `query` (地板常开) · `write` (DML) · `ddl` (仅草稿，无执行工具) · `report` · `knowledge` · `scheduler` · `refusal` (地板常开) · `general` (只读兜底).
 
 ### Privacy red line
 

@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 from app.ai import gateway as gw
 from app.ai.agent.dispatcher import dispatch_skill
 from app.ai.context import assemble_context_full, system_prompt
+from app.ai.context_object import Context
 from app.ai.intent import MODE_QUERY, MODE_REPORT
 from app.ai.manifest import build_manifest
+from app.ai.plan import TaskPlan, TaskSpec
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.report import report_stream
 from app.ai.dto import ChatRequest
@@ -28,87 +30,154 @@ from app.ai.tools.registry import set_active_session as _set_active_session
 if TYPE_CHECKING:
     from app.state import AppState
 
-MAX_TURNS = 6
+MAX_TURNS = 6  # P3：兜底轮数；技能级 max_turns 优先（route.termination_max_turns）
 
 
 async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str, Any]]:
-    """统一入口：显式 mode 优先，否则 preflight 统一意图（WS1）。
+    """统一入口（E7）：preflight（plan 级字段）→ decompose(TaskPlan) → 任务循环。
 
-    report 走 report_stream，其余走 chat_stream。preflight 产出 intent/tags/followup，
-    dispatcher 感知 enabled 集合做降级。
+    单任务计划（绝大多数请求）→ 一个 ReAct（chat_stream/report_stream 单任务执行器）；
+    复合计划 → 顺序执行 + 失败即停 + 编号结果。事件协议向后兼容（增量 task_* 事件）。
     """
-    if req.mode in (MODE_REPORT, MODE_QUERY):
-        mode = req.mode
-    else:
-        # WS3 T3.1：服务端历史优先——从 state.chats 读 session 历史，req.messages 降级为兼容通道。
-        # 统一在此取一次，供 preflight（对话尾部判类/追问轮种子）与 chat_stream（模型历史组装）复用。
-        req._server_history = []
-        if req.session_id:
-            try:
-                # WS4 T4.4：上一轮遗留的过期 pending 惰性清除 + 写回系统消息（须在装载历史前，本轮模型即可见）
-                _expire_stale_pending(state, req.session_id)
-                req._server_history = state.chats.get_messages(req.session_id) or []
-                # T3.4 压缩 v1：服务端历史机械化压缩（机械优先，仍超限才 LLM 兜底走单管道）。
-                # 压缩在组装前完成，preflight 尾部/追问轮种子与 chat_stream 模型历史两处一致。
-                if req._server_history:
-                    try:
-                        from app.ai.compress import compress_hist
+    from app.ai.context_object import Context
+    from app.ai.executor import execute_plan
+    from app.ai.plan import TaskPlan, TaskSpec
+    from app.ai.skills.route import route_effective
 
-                        _ch = await compress_hist(state, req.connection_id, req._server_history)
-                        req._server_history = _ch["rows"]
-                        req._compress_stats = _ch["stats"]
-                    except Exception:
-                        pass
-            except Exception:
-                req._server_history = []
-        user_text = _last_user_text(_normalize_messages(req.messages))
-        # WS1 preflight 统一 owner（单次脱敏/清单/审计，≤2s）
+    # 显式 mode 兼容：report/query 显式指定 → 单任务 plan
+    if req.mode in (MODE_REPORT, MODE_QUERY):
+        action = "query"
+        modality = "report" if req.mode == MODE_REPORT else "answer"
+        plan = TaskPlan(tasks=[TaskSpec(action=action, modality=modality)])
+        req.skill_id = route_effective(action, modality)
+        ctx = Context(conn_id=req.connection_id, plan=plan, session_id=req.session_id,
+                      include_data=bool(req.include_data))
+        async for ev in execute_plan(state, plan, ctx,
+                                     lambda s, c, t: task_runner(s, req, c, t)):
+            yield ev
+        yield {"type": "done"}
+        return
+
+    # WS3 T3.1：服务端历史优先（同原逻辑，preflight 与执行器共用）
+    req._server_history = []
+    if req.session_id:
         try:
-            from app.ai.preflight import preflight as _pf
-            from app.ai.agent.dispatcher import resolve_skill_from_intent as _resolve_skill
-            # 追问轮/对话尾的历史：有服务端历史用服务端，否则用前端 req.messages（旧会话/测试直连）
-            history_tail = getattr(req, "_server_history", None) or _normalize_messages(req.messages)
-            pf = await _pf(state, req.connection_id, user_text, history_tail=history_tail)
-            # 缓存于 req 供 chat_stream 复用（避免二次 preflight）
-            req._preflight = pf  # type: ignore[attr-defined]
-            skill_id, degraded, msg = _resolve_skill(pf.intent)
-            if degraded:
-                # 降级应答：不进检索/工具，直接 SSE 文案
-                async def _degraded_stream():
-                    yield {"type": "turn_start", "connection": req.connection_id}
-                    yield {"type": "text", "content": msg or "此能力已关闭，可在设置中开启"}
-                    yield {"type": "done"}
-                if pf.intent == "offtopic":
-                    # offtopic 即使被降级也走 refusal 文案（若 refusal 可用则已路由到 refusal）
-                    # 此分支仅处理 write/ddl 等被禁用情况
+            _expire_stale_pending(state, req.session_id)
+            req._server_history = state.chats.get_messages(req.session_id) or []
+            if req._server_history:
+                try:
+                    from app.ai.compress import compress_hist
+                    _ch = await compress_hist(state, req.connection_id, req._server_history)
+                    req._server_history = _ch["rows"]
+                    req._compress_stats = _ch["stats"]
+                except Exception:
                     pass
-                # 若降级且目标非 query/refusal（需用户显式开启），直接返回降级流
-                if degraded:
-                    async for ev in _degraded_stream():
-                        yield ev
-                    return
-            # T2.1 strict 离线拒答：完全离线档下 offtopic 不调任何模型，本地固定文案
-            if pf.intent == "offtopic" and _strict_offline(state):
-                async def _strict_refusal_stream():
-                    yield {"type": "turn_start", "connection": req.connection_id}
-                    yield {"type": "text", "content": _strict_refusal_text()}
-                    yield {"type": "done"}
-                async for ev in _strict_refusal_stream():
-                    yield ev
-                return
-            req.skill_id = skill_id
-            mode = MODE_REPORT if skill_id == "report" else MODE_QUERY
         except Exception:
-            # preflight 异常兜底：旧 dispatcher 路径
-            skill_id = await dispatch_skill(state, user_text)
-            mode = MODE_REPORT if skill_id == "report" else MODE_QUERY
-            req.skill_id = skill_id
-    if mode == MODE_REPORT:
-        async for ev in report_stream(state, req):
+            req._server_history = []
+    user_text = _last_user_text(_normalize_messages(req.messages))
+    # preflight：plan 级辅助字段（tags/followup/skip_retrieval）+ 脱敏/清单/审计管道
+    plan: TaskPlan | None = None
+    try:
+        from app.ai.preflight import preflight as _pf
+        pf = await _pf(state, req.connection_id, user_text, history_tail=req._server_history or _normalize_messages(req.messages))
+        req._preflight = pf  # type: ignore[attr-defined]  # chat_stream 复用
+        # decompose → TaskPlan（关键词快判 / mock 零 LLM；真实 LLM 单次）
+        from app.ai.decompose import decompose as _decompose
+        plan = await _decompose(state, req.connection_id, user_text,
+                                confirmed_tags=pf.tags or None,
+                                history_tail=req._server_history or _normalize_messages(req.messages))
+        # preflight 的 plan 级字段优先（追问轮检测更完整）
+        if pf.is_followup:
+            plan.followup_tables = pf.followup_tables or []
+        if pf.skip_retrieval:
+            plan.skip_retrieval = True
+    except Exception:
+        # preflight/decompose 异常兜底：单任务 query
+        from app.ai.plan import TaskPlan as _TP, TaskSpec as _TS
+        plan = _TP(tasks=[_TS(action="query", modality="answer")], degraded=True)
+    req.skill_id = route_effective(plan.tasks[0].action, plan.tasks[0].modality)
+    # T2.1 strict 离线拒答：完全离线档下 offtopic/unknown 不调任何模型，本地固定文案
+    if plan.tasks[0].action == "unknown" and _strict_offline(state):
+        async def _strict_refusal_stream():
+            yield {"type": "turn_start", "connection": req.connection_id}
+            yield {"type": "text", "content": _strict_refusal_text()}
+            yield {"type": "done"}
+        async for ev in _strict_refusal_stream():
             yield ev
         return
-    async for ev in chat_stream(state, req):
+    # offtopic（unknown）：走 refusal 技能引导拒答（不进任务循环/检索/工具）
+    if plan.tasks[0].action == "unknown" and len(plan.tasks) == 1:
+        from app.ai.skills.registry import get_skill as _gs
+        _ref = _gs("refusal")
+        if _ref is not None and _ref.enabled:
+            req.skill_id = "refusal"
+            async for ev in chat_stream(state, req):
+                yield ev
+            return
+    ctx = Context(conn_id=req.connection_id, plan=plan, session_id=req.session_id,
+                  include_data=bool(req.include_data))
+    async for ev in execute_plan(state, plan, ctx,
+                                 lambda s, c, t: task_runner(s, req, c, t)):
         yield ev
+    # 协议兼容：任务循环结束统一补发 done（chat_stream/report_stream 的 done 已延迟）
+    yield {"type": "done"}
+
+
+async def task_runner(state: "AppState", req: ChatRequest, ctx: Context,
+                      task: TaskSpec) -> AsyncIterator[dict[str, Any]]:
+    """单任务执行器（E7）：TaskSpec → skill_id → chat_stream / report_stream。
+
+    - modality=report → report 技能执行器（report_stream，保留 report_id/章节事件）
+    - 其余 → chat_stream（单任务 ReAct）
+    - 前序任务结果经 ctx 注入子请求（req._prior_results），由 chat_stream 组装进上下文
+    """
+    from app.ai.skills.route import route_effective as _route
+    skill_id = _route(task.action, task.modality)
+    # 任务级 skill_id 注入（chat_stream 用它过滤工具集 + scene_start 事件）
+    req.skill_id = skill_id
+    # F5：任务级 target 传递（chat_stream 并入检索种子/上下文）
+    req._task_target = task.target or {}  # type: ignore[attr-defined]
+    # P2-13/§18：Context 跨层共享字段填充——selected_tables（任务 target + 追问表集）、
+    # session_vars（连接级配置真实值，执行层替换用）
+    try:
+        _tbls: list[str] = []
+        _tgt = task.target or {}
+        if isinstance(_tgt.get("tables"), list):
+            _tbls.extend(t for t in _tgt["tables"] if isinstance(t, str))
+        _pf = getattr(req, "_preflight", None)
+        if _pf is not None and getattr(_pf, "followup_tables", None):
+            _tbls.extend(getattr(_pf, "followup_tables"))
+        if _tbls:
+            ctx.selected_tables = list(dict.fromkeys(_tbls))
+        try:
+            _sv = state.connections.get(req.connection_id).session_vars
+            ctx.session_vars = dict(_sv or {})
+        except Exception:
+            ctx.session_vars = {}
+    except Exception:
+        pass
+    if skill_id == "report":
+        req.mode = MODE_REPORT
+        async for ev in report_stream(state, req):
+            # done 延迟到 task_result 之后（协议兼容）
+            if ev.get("type") == "done":
+                continue
+            yield ev
+    else:
+        req.mode = MODE_QUERY
+        try:
+            req._prior_results = {  # type: ignore[attr-defined]
+                k: (v.to_dict() if hasattr(v, "to_dict") else v)
+                for k, v in ctx.task_results.items()
+            }
+        except Exception:
+            req._prior_results = {}  # type: ignore[attr-defined]
+        async for ev in chat_stream(state, req):
+            # done 延迟到 task_result 之后（协议兼容）
+            if ev.get("type") == "done":
+                continue
+            yield ev
+    # 任务结束：done 统一由任务循环末尾补发（stream 层）
 
 
 def _normalize_messages(messages: list) -> list[dict]:
@@ -251,7 +320,7 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         yield {"type": "turn_start", "connection": conn_id}
         yield {"type": "stage", "stage": "intent", "value": ["question_library"]}
         yield {"type": "stage", "stage": "retrieval", "tables": matched.get("tables", []), "vec_tables": []}
-        yield {"type": "manifest", "manifest": {"tables": matched.get("tables", []), "kb_docs": 0, "history_turns": _hist_q, "include_data": False, "redactions": [], "mode": _mode_q, "ts": __import__("time").strftime("%Y-%m-%dT%H:%M:%S"), "model": "question_library", "provider": "local"}}
+        yield {"type": "manifest", "manifest": {"tables": matched.get("tables", []), "kb_docs": 0, "history_turns": _hist_q, "include_data": False, "redactions": [], "mode": _mode_q, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "question_library", "provider": "local"}}
         yield {"type": "sql_card", "card": card_q}
         yield {"type": "text", "content": f"已从问题库命中“{matched.get('question','')[:24]}”，请确认后执行（零模型调用）。"}
         yield {"type": "done"}
@@ -291,7 +360,8 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         except Exception:
             _sens_hist = []
         for _m in _norm_msgs:
-            if _m.get("role") == "user" and _m.get("content"):
+            # P3：user 与 assistant 均脱敏——assistant 回复中可能回显真实值，同样不能出网
+            if _m.get("role") in ("user", "assistant") and _m.get("content"):
                 _rc, _mp2 = _rt2(_m["content"], _slt, _sens_hist)
                 if _mp2:
                     # 合并到总 redactions（去重，上限 5）
@@ -305,6 +375,14 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     _pf = getattr(req, "_preflight", None)
     _pf_tags = getattr(_pf, "tags", None) if _pf else None
     _followup_tables = getattr(_pf, "followup_tables", None) if _pf else None
+    # F5：任务级 target.tables 并入检索种子（§13.2#4 target 影响 prompt 组装）
+    try:
+        _tgt = getattr(req, "_task_target", None) or {}
+        _tgt_tables = [t for t in (_tgt.get("tables") or []) if isinstance(t, str)]
+        if _tgt_tables:
+            _followup_tables = list(dict.fromkeys((_followup_tables or []) + _tgt_tables))
+    except Exception:
+        pass
     # skip_retrieval：结构问答/审计类意图跳过向量检索管线（由 preflight.skip_retrieval 控制）
     _skip_retrieval = getattr(_pf, "skip_retrieval", False)
     context, context_meta = await assemble_context_full(
@@ -319,6 +397,18 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
         {"role": "system", "content": context},
         *_norm_msgs,
     ]
+    # E7：前序任务结果注入（复合计划共享 Context，§18）
+    try:
+        _prior = getattr(req, "_prior_results", None) or {}
+        if _prior:
+            _prior_text = "\n".join(
+                f"- 任务 {k}（{v.get('type', 'text')}）：{(v.get('content') or '')[:200]}"
+                for k, v in _prior.items()
+            )
+            messages.insert(2, {"role": "system",
+                                "content": f"【前序任务结果（只读参考，勿重复执行）】\n{_prior_text}"})
+    except Exception:
+        pass
     # 技能注入：自定义技能的 system_prompt（使用指导书）在上下文后追加，指导本次执行
     if req.skill_id:
         skill = get_skill(req.skill_id)
@@ -358,7 +448,10 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
     # 只收窄 schema 只对模型是"建议"；此处杜绝 mock 的硬编码 tool_call 或模型幻觉
     # 在只读技能（如 query）下误触发 run_dml/draft_ddl。
     _scoped_names = {t["function"]["name"] for t in skill_tool_schemas(req.skill_id)}
-    for _ in range(MAX_TURNS):
+    # F2：技能级终止条件（termination.max_turns），缺省回退全局 MAX_TURNS
+    from app.ai.skills.route import termination_max_turns as _tmt
+    _max_turns = _tmt(req.skill_id) if req.skill_id else MAX_TURNS
+    for _ in range(_max_turns):
         tool_calls: list = []
         # 中央记账：拦截器在流式 finally 落一条（llm_log + cost + egress），ctx 带全上下文
         async for chunk in provider.chat_stream(messages, skill_tool_schemas(req.skill_id), ctx={
@@ -496,7 +589,11 @@ async def chat_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict
                     yield {"type": "block", "id": _sub_id, "block": {"kind": "confirm", "prompt": f"确认执行 {tc.name}？", "confirmLabel": "确认", "cancelLabel": "取消"}}
             except Exception:
                 pass
-            yield {"type": "subtask_done", "id": _sub_id, "tool": tc.name, "status": "done", "detail": outcome.think or ""}
+            # P1-5：verdict=block 的卡（图校验打回/严格模式拦截/只读拦截）→ 工具失败信号，
+            # executor 归纳为 TaskResult ok=False → 失败即停对后续写任务生效（§14）
+            _is_block = bool(outcome.card and outcome.card.get("verdict") == "block")
+            yield {"type": "subtask_done", "id": _sub_id, "tool": tc.name,
+                   "status": "error" if _is_block else "done", "detail": outcome.think or ""}
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,

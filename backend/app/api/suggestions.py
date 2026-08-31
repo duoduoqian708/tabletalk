@@ -28,12 +28,9 @@ async def initial_suggestions(body: InitialRequest, request) -> dict[str, Any]:
     except Exception:
         schema_text = "（无法获取 schema）"
 
-    # 取已确认标签
+    # 取已确认标签（统一走 state.knowledge，与知识库同存储）
     try:
-        from app.ai.knowledge.store import KnowledgeStore
-        store = KnowledgeStore(get_env().data_dir)
-        tags = store.get_confirmed_tags(conn_id)
-        tag_names = [t["name"] for t in tags]
+        tag_names = state.knowledge.confirmed_tags(conn_id)
     except Exception:
         tag_names = []
 

@@ -184,40 +184,69 @@ _REFUSAL_SYSTEM_PROMPT = """你是 TableTalk 的数据库助手引导员。用�
 禁止：回答问题本身；延伸话题；编造数据库里不存在的内容。"""
 
 
+_GENERAL_SYSTEM_PROMPT = """你是 TableTalk 的通用助手。用户请求未匹配到特定场景，按最保守方式处理：
+- 优先用 get_schema / kb_read / graph_read / run_query 回答（只读低危）
+- 拿不准时向用户澄清，不猜、不编造、不执行任何写操作
+- 若请求涉及写/DDL/定时任务，提示用户使用对应入口"""
+
+
 def BUILTIN_SKILLS() -> list[Skill]:
     return [
         Skill(
             id="query",
             name="数据库查询",
             description="查数据、查表结构、查审计日志、SQL安全审查。地板常开。",
-            tools=["run_query", "get_schema", "query_audit", "ai_review"],
+            tools=["run_query", "get_schema", "query_audit", "ai_review", "kb_read", "graph_read"],  # P2-12/§15.3：知识只读面
             script=_query_steps(),
             system_prompt=_QUERY_SYSTEM_PROMPT,
             builtin=True,
             read_only=True,
             enabled=True,
+            match={"action": "query"},  # F2：query 承接 answer/analyze（§15.3 共用技能）
+            termination={"max_turns": 6, "done_when": "已产出最终回答"},
+            degradation="知识库无命中 → 退回纯 schema 生成",
         ),
         Skill(
             id="write",
             name="数据写操作",
-            description="DML数据操作（INSERT/UPDATE/DELETE）+ DDL结构变更（CREATE/ALTER/DROP）。可关闭。",
-            tools=["run_dml", "draft_ddl", "run_query", "get_schema", "ai_review"],
+            description="DML数据操作（INSERT/UPDATE/DELETE）。可关闭。",
+            tools=["run_dml", "run_query", "get_schema", "ai_review"],
             script=_write_steps(),
             system_prompt=_WRITE_SYSTEM_PROMPT,
             builtin=True,
             read_only=False,
             enabled=True,
+            match={"action": "write"},  # E5：写操作
+            termination={"max_turns": 6, "done_when": "DML 已确认"},
+            degradation="写能力已关闭时禁止任何 DML",
+        ),
+        Skill(
+            id="ddl",
+            name="DDL 结构变更",
+            description="表结构变更（CREATE/ALTER/DROP、索引）——只生成草稿，永不执行。可关闭。",
+            tools=["draft_ddl", "get_schema", "run_query"],  # F4：无 run_dml（墙1 隔离）
+            script=_write_steps(),
+            system_prompt=_WRITE_SYSTEM_PROMPT,
+            builtin=True,
+            read_only=False,
+            enabled=True,
+            match={"action": "ddl"},  # F4/§15.3：独立 ddl 技能
+            termination={"max_turns": 4, "done_when": "DDL 草稿已生成"},
+            degradation="DDL 能力已关闭时禁止生成脚本",
         ),
         Skill(
             id="report",
             name="数据分析报告",
             description="章节化分析报告（澄清→规划→逐章查数→汇总成文→导出）。可关闭。",
-            tools=["run_query", "get_schema"],
+            tools=["run_query", "get_schema", "kb_read", "graph_read"],  # P2-12/§15.3：知识只读面
             script=_report_steps(),
             system_prompt=_REPORT_SYSTEM_PROMPT,
             builtin=True,
             read_only=True,
             enabled=True,
+            match={"action": "query", "modality": "report"},  # E5/§15.4
+            termination={"max_turns": 8, "done_when": "报告已产出且数字已核对"},
+            degradation="知识库无命中 → 退回纯 schema 生成；行数超限 → 提示收窄条件",
         ),
         Skill(
             id="knowledge",
@@ -229,6 +258,9 @@ def BUILTIN_SKILLS() -> list[Skill]:
             builtin=True,
             read_only=False,
             enabled=True,
+            match={"action": "kb"},  # E5/§15.4
+            termination={"max_turns": 6, "done_when": "知识库/图谱操作已完成"},
+            degradation="知识库未构建时提示先构建",
         ),
         Skill(
             id="scheduler",
@@ -240,6 +272,10 @@ def BUILTIN_SKILLS() -> list[Skill]:
             builtin=True,
             read_only=False,
             enabled=True,
+            match={"action": "schedule"},  # E5/§15.4（设计命名 schedule）
+            # F2：route(query, automate)→scheduler（§15.4），声明同步覆盖
+            termination={"max_turns": 4, "done_when": "定时任务已创建/修改/删除"},
+            degradation="定时任务能力已关闭",
         ),
         Skill(
             id="refusal",
@@ -251,5 +287,19 @@ def BUILTIN_SKILLS() -> list[Skill]:
             builtin=True,
             read_only=True,
             enabled=True,
+        ),
+        Skill(
+            id="general",
+            name="通用兜底",
+            description="未匹配场景的只读兜底：查结构/知识/执行只读查询。地板常开。",
+            tools=["get_schema", "kb_read", "graph_read", "run_query"],
+            script=None,
+            system_prompt=_GENERAL_SYSTEM_PROMPT,
+            builtin=True,
+            read_only=True,
+            enabled=True,
+            match={},  # 无 match：兜底技能不参与自动匹配，路由规则显式回退
+            termination={"max_turns": 4, "done_when": "已澄清或已用只读工具回答"},
+            degradation="只读低危，永不拒绝也不闯祸",
         ),
     ]
