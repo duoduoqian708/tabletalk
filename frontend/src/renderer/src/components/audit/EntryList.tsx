@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { listAuditPage, type PageQuery } from '@renderer/api/audit'
+import { listApprovals, type ApprovalItem } from '@renderer/api/approvals'
 import { VerdictBadge } from '../VerdictBadge'
 import { fmtDT } from '@renderer/lib/timefmt'
 import { useI18n } from '@renderer/store/i18n'
 
 export type Sel = { kind: 'approval'; id: string } | { kind: 'entry'; id: number } | null
-type Tab = 'todo' | 'all'
+type Tab = 'todo' | 'approvals' | 'all'
 
 const PAGE = 50
 
 interface Item { _id: number; ts: string; verdict: string; tier: string; origin: string; sql: string; ack?: string }
 
-/** 左列下部：子页签[异常待办|全部流水] + 服务端搜索 + keyset 懒加载列表。 */
+/** 左列下部：子页签[异常待办|待审批|全部流水] + 服务端搜索 + keyset 懒加载列表。
+ *  待审批页签产出 {kind:'approval'} 选中项，右栏 ApprovalDetail 首次可达（修断流）。 */
 export default function EntryList(props: {
   selected: Sel
   onSelect: (s: Sel) => void
+  apprRev?: number  // 审批变动信号：批准/驳回后 +1，触发列表重取
 }): React.JSX.Element {
   const connId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '')
@@ -27,6 +30,7 @@ export default function EntryList(props: {
   const [items, setItems] = useState<Item[]>([])
   const [cursor, setCursor] = useState<number | null>(0)
   const [loading, setLoading] = useState(false)
+  const [appr, setAppr] = useState<ApprovalItem[]>([])
   const sentinel = useRef<HTMLDivElement>(null)
   const seqRef = useRef(0)
 
@@ -35,6 +39,20 @@ export default function EntryList(props: {
     const h = window.setTimeout(() => setQ(qRaw.trim()), 300)
     return () => window.clearTimeout(h)
   }, [qRaw])
+
+  // 审批列表：mount 即拉（供待审批页签计数徽章即时显示），apprRev 变更时重取
+  const loadAppr = useCallback(() => {
+    void listApprovals().then((r) => setAppr(r.items)).catch(() => setAppr([]))
+  }, [])
+  useEffect(loadAppr, [loadAppr])
+  useEffect(loadAppr, [loadAppr, props.apprRev])
+
+  // 待审批在前，其余按时间倒序
+  const sortedAppr = useMemo(() => {
+    const order = (a: ApprovalItem): number => (a.status === 'pending' ? 0 : 1)
+    return [...appr].sort((a, b) => order(a) - order(b) || (a.requested_at < b.requested_at ? 1 : -1))
+  }, [appr])
+  const pendingCount = appr.filter((a) => a.status === 'pending').length
 
   const baseQuery = useMemo<PageQuery>(() => ({
     connection: connName || undefined,
@@ -80,28 +98,50 @@ export default function EntryList(props: {
       <div className="au-search-row">
         {tab === 'all'
           ? <input className="au-search mono" placeholder={t('audit.searchServer')} value={qRaw} onChange={(e) => setQRaw(e.target.value)} />
-          : <button className={`au-ltab${unreadOnly ? ' on' : ''}`} onClick={() => setUnreadOnly((v) => !v)}>{t('audit.unreadOnly')}</button>}
+          : tab === 'todo'
+            ? <button className={`au-ltab${unreadOnly ? ' on' : ''}`} onClick={() => setUnreadOnly((v) => !v)}>{t('audit.unreadOnly')}</button>
+            : <span className="au-search mono" style={{ fontSize: 11, opacity: 0.6 }}>{t('audit.approvalHint')}</span>}
         <span className="spacer" />
         <button className={`au-ltab${tab === 'todo' ? ' on' : ''}`} onClick={() => setTab('todo')}>{t('audit.tabTodo')}</button>
+        <button className={`au-ltab${tab === 'approvals' ? ' on' : ''}`} onClick={() => setTab('approvals')}>
+          {t('audit.tabApprovals')}
+          {pendingCount > 0 && <span className="au-tab-n">{pendingCount}</span>}
+        </button>
         <button className={`au-ltab${tab === 'all' ? ' on' : ''}`} onClick={() => setTab('all')}>{t('audit.tabAll')}</button>
       </div>
       <div style={{ overflowY: 'auto', flex: 1 }}>
-        {items.map((it) => (
-          <div key={it._id}
-            className={`au-row${props.selected?.kind === 'entry' && props.selected.id === it._id ? ' sel' : ''}`}
-            onClick={() => props.onSelect({ kind: 'entry', id: it._id })}>
-            <VerdictBadge v={it.verdict} />
-            <span className="mono" style={{ fontSize: 11 }}>{it.sql.slice(0, 48)}</span>
-            <span className="au-meta">
-              {it.verdict === 'review' ? t('verdict.review') : ''}
-              {it.ack === 'unread' && it.verdict !== 'allow' ? ` · ${t('audit.unreadTag')}` : ''}
-              {' '}{fmtDT(it.ts)}
-            </span>
-          </div>
-        ))}
-        {!loading && items.length === 0 && <div className="mpage-empty">{t('audit.empty')} 🎉</div>}
-        <div ref={sentinel} style={{ height: 28 }} />
-        {cursor == null && items.length > 0 && <div className="mpage-empty" style={{ fontSize: 11 }}>{t('audit.noMore')}</div>}
+        {tab === 'approvals' ? (
+          sortedAppr.map((a) => (
+            <div key={a.id}
+              className={`au-row${props.selected?.kind === 'approval' && props.selected.id === a.id ? ' sel' : ''}`}
+              onClick={() => props.onSelect({ kind: 'approval', id: a.id })}>
+              <VerdictBadge v={a.status === 'pending' ? 'review' : a.status === 'rejected' ? 'block' : 'executed'} />
+              <span className="mono" style={{ fontSize: 11 }}>{a.sql.slice(0, 48)}</span>
+              <span className="au-meta">
+                {a.status === 'pending' ? t('verdict.review') : a.status}
+                {' '}· {a.requested_by} · {fmtDT(a.requested_at)}
+              </span>
+            </div>
+          ))
+        ) : (
+          items.map((it) => (
+            <div key={it._id}
+              className={`au-row${props.selected?.kind === 'entry' && props.selected.id === it._id ? ' sel' : ''}`}
+              onClick={() => props.onSelect({ kind: 'entry', id: it._id })}>
+              <VerdictBadge v={it.verdict} />
+              <span className="mono" style={{ fontSize: 11 }}>{it.sql.slice(0, 48)}</span>
+              <span className="au-meta">
+                {it.verdict === 'review' ? t('verdict.review') : ''}
+                {it.ack === 'unread' && it.verdict !== 'allow' ? ` · ${t('audit.unreadTag')}` : ''}
+                {' '}{fmtDT(it.ts)}
+              </span>
+            </div>
+          ))
+        )}
+        {!loading && tab !== 'approvals' && items.length === 0 && <div className="mpage-empty">{t('audit.empty')} 🎉</div>}
+        {!loading && tab === 'approvals' && appr.length === 0 && <div className="mpage-empty">{t('approval.empty')}</div>}
+        <div ref={sentinel} style={{ height: tab === 'approvals' ? 0 : 28 }} />
+        {cursor == null && items.length > 0 && tab !== 'approvals' && <div className="mpage-empty" style={{ fontSize: 11 }}>{t('audit.noMore')}</div>}
       </div>
     </>
   )

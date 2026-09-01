@@ -259,6 +259,13 @@ def _mask_key(key: str | None) -> str:
     return f"{key[:3]}•••{key[-3:]}"
 
 
+# gate_rules 契约（严格度阶梯）与引擎共用单一来源：normalize_gate_rules
+def _clean_gate_rules(rules: object) -> dict[str, str]:
+    from app.safety.rules import normalize_gate_rules
+
+    return normalize_gate_rules(rules)
+
+
 def _is_masked(val: Any) -> bool:
     return isinstance(val, str) and "•••" in val
 
@@ -515,6 +522,8 @@ class SettingsStore:
                         if vi < 1:
                             continue
                         v = vi
+                    if k == "gate_rules":
+                        v = _clean_gate_rules(v)
                     self._data[k] = v
             if "policy" in patch:
                 pol = patch["policy"]

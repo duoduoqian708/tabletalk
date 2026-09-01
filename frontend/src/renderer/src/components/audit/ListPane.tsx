@@ -6,10 +6,11 @@ import { useI18n } from '@renderer/store/i18n'
 
 type Scope = 'today' | '7d' | '30d'
 
-/** 左列：三档统计 SVG 柱图 + 关键数 + 审计流水列表。 */
+/** 左列：三档统计 SVG 柱图 + 关键数 + 审计流水列表（含待审批页签）。 */
 export default function ListPane(props: {
   selected: Sel
   onSelect: (s: Sel) => void
+  apprRev?: number
 }): React.JSX.Element {
   const connId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '')
@@ -53,7 +54,7 @@ export default function ListPane(props: {
           <span className="knum"><b className="c-amber">{totals.review}</b>{t('audit.kReview')}</span>
         </div>
       </div>
-      <EntryList selected={props.selected} onSelect={props.onSelect} />
+      <EntryList selected={props.selected} onSelect={props.onSelect} apprRev={props.apprRev} />
     </div>
   )
 }

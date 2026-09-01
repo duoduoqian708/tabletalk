@@ -10,16 +10,16 @@ from typing import TYPE_CHECKING, Any
 import sqlglot
 from sqlglot import exp
 
-from app.safety import parser, rules
+from app.safety import parser, policy, rules
 from app.safety.models import Assessment, Origin
 
 if TYPE_CHECKING:
     from app.state import AppState
 
 
-def assess_sql(sql: str, sqlglot_dialect: str, origin: Origin) -> Assessment:
+def assess_sql(sql: str, sqlglot_dialect: str, origin: Origin, overrides: dict | None = None) -> Assessment:
     infos = parser.parse_sql(sql, sqlglot_dialect)
-    results = rules.run_rules(infos, origin)
+    results = rules.run_rules(infos, origin, overrides)
     agg = rules.aggregate(infos, results)
     return Assessment(
         verdict=agg["verdict"],
@@ -31,6 +31,20 @@ def assess_sql(sql: str, sqlglot_dialect: str, origin: Origin) -> Assessment:
         has_limit=agg["has_limit"],
         parse_error=agg["parse_error"],
         is_multi=agg["is_multi"],
+    )
+
+
+def assess_configured(state: "AppState", sql: str, sqlglot_dialect: str, origin: Origin) -> Assessment:
+    """统一判定入口：规则阶梯覆盖（gate_rules） + 策略覆盖（policy）同源生效。
+
+    手动查询、AI 工具、审批流、lint 都走这里——策略与规则对 AI 和手动一致，防绕过。
+    读操作成本阈值（cost-threshold）不在此处，留在手动查询路径（数据量护栏，与策略无关）。
+    """
+    rt = state.runtime.get()
+    return policy.apply_policy(
+        assess_sql(sql, sqlglot_dialect, origin, overrides=rt.gate_rules or None),
+        rt.policy,
+        sql,
     )
 
 

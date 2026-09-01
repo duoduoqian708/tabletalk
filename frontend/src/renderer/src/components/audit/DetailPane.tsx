@@ -16,15 +16,16 @@ function explain403(e: unknown, gateBlockMsg: string): string {
 }
 
 /** 右列：默认今日时间线；选中左列条目→完整详情+处置。 */
-export default function DetailPane(props: { selected: Sel }): React.JSX.Element {
+export default function DetailPane(props: { selected: Sel; onApprovalChanged?: () => void }): React.JSX.Element {
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '')
   const { t } = useI18n()
   const refreshSignal = useAuditSignal((s) => s.refresh)
+  const onChanged = (): void => { void refreshSignal() }
 
   if (!props.selected) return <TodayTimeline connName={connName} />
   return props.selected.kind === 'approval'
-    ? <ApprovalDetail id={props.selected.id} onChanged={() => void refreshSignal()} />
-    : <EntryDetail id={props.selected.id} onChanged={() => void refreshSignal()} />
+    ? <ApprovalDetail id={props.selected.id} onChanged={onChanged} onApprovalChanged={props.onApprovalChanged} />
+    : <EntryDetail id={props.selected.id} onChanged={onChanged} />
 
   function TodayTimeline({ connName }: { connName: string }): React.JSX.Element {
     const [rows, setRows] = useState<Entry[]>([])
@@ -52,19 +53,29 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
     )
   }
 
-  function ApprovalDetail({ id, onChanged }: { id: string; onChanged: () => void }): React.JSX.Element {
+  function ApprovalDetail({ id, onChanged, onApprovalChanged }: { id: string; onChanged: () => void; onApprovalChanged?: () => void }): React.JSX.Element {
     const [item, setItem] = useState<ApprovalItem | null>(null)
     const [busy, setBusy] = useState(false)
+    const [confirming, setConfirming] = useState(false)
     const [err, setErr] = useState<string | null>(null)
-    const reload = useCallback(() => { void listApprovals().then((r) => setItem(r.items.find((x) => x.id === id) ?? null)).catch(() => undefined) }, [id])
+    const reload = useCallback(() => {
+      setConfirming(false)
+      void listApprovals().then((r) => setItem(r.items.find((x) => x.id === id) ?? null)).catch(() => undefined)
+    }, [id])
     useEffect(reload, [reload])
-    async function decide(kind: 'approve' | 'reject'): Promise<void> {
+    // Q6：批准即执行写库——影响行数较大时先红框确认，避免误点即写
+    const APPROVE_CONFIRM_ROWS = 1000
+    async function decide(kind: 'approve' | 'reject', force = false): Promise<void> {
       if (!item) return
-      setBusy(true); setErr(null)
+      if (kind === 'approve' && !force && item.preview_rows != null && item.preview_rows > APPROVE_CONFIRM_ROWS) {
+        setConfirming(true)
+        return
+      }
+      setConfirming(false); setBusy(true); setErr(null)
       try {
         if (kind === 'approve') await approveApproval(item.id)
         else await rejectApproval(item.id, 'rejected from audit page')
-        onChanged(); reload()
+        onChanged(); onApprovalChanged?.(); reload()
       } catch (e) { setErr(explain403(e, t('audit.gateBlockRetry'))) } finally { setBusy(false) }
     }
     if (!item) return <div className="au-right-pane"><div className="mpage-empty">{t('common.loading')}</div></div>
@@ -74,6 +85,13 @@ export default function DetailPane(props: { selected: Sel }): React.JSX.Element 
         <div className="det-sql">{item.sql}</div>
         {item.preview_rows != null && <div className="det-kv"><span className="k">{t('audit.previewRows')}</span><span className="mono">COUNT ≈ {item.preview_rows}</span></div>}
         {err && <div className="review-err">{err}</div>}
+        {confirming && (
+          <div className="review-err" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>{t('audit.approveConfirmRows', { n: item.preview_rows ?? '?' })}</span>
+            <button className="btn pri" disabled={busy} onClick={() => void decide('approve', true)}>{t('audit.confirmApprove')}</button>
+            <button className="btn gho" disabled={busy} onClick={() => setConfirming(false)}>{t('common.cancel')}</button>
+          </div>
+        )}
         {item.status === 'pending' ? (
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn pri" disabled={busy} onClick={() => void decide('approve')}>{t('audit.approveExec')}</button>

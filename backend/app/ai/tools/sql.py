@@ -172,7 +172,7 @@ async def _run_query(state, args, conn_id, include_data=False):
                   "reason_detail": hint},
             think="图校验未通过：该 JOIN 不在知识库图内，提示模型重写。",
         )
-    assessment = safety_gate.assess_sql(sql, dialect, Origin.AI)
+    assessment = safety_gate.assess_configured(state, sql, dialect, Origin.AI)
     if assessment.verdict == Verdict.ALLOW:
         from app.core.query import execute as run_query
 
@@ -337,7 +337,7 @@ async def _run_dml(state, args, conn_id, include_data=False):
         sql = prepare_query_sql(state, conn_id, sql)
     except Exception:
         pass
-    assessment = safety_gate.assess_sql(sql, dialect, Origin.AI)
+    assessment = safety_gate.assess_configured(state, sql, dialect, Origin.AI)
     if assessment.verdict == Verdict.BLOCK:
         reason_text = "; ".join(r.get("message", "") for r in assessment.reasons)
         return ToolOutcome(

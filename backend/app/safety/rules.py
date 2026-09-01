@@ -56,149 +56,138 @@ def _msg(rule: str) -> tuple[str, str]:
     return _MSGS.get(rule, ("", ""))
 
 
-def _rules_for(info: StatementInfo, origin: Origin) -> list[RuleResult]:
+# ── 规则目录元数据（闸门配置面 & GET /safety/rules 共享） ─────────────────
+# floor=True = 硬规则：只允许收严、不可放宽（默认值已是安全下限）。
+RULE_META: dict[str, dict[str, object]] = {
+    "parse-failure":    {"tier": "unknown", "scope": "any",           "default": "review", "floor": True},
+    "ddl-ai":           {"tier": "ddl",     "scope": "ddl",           "default": "block",  "floor": True},
+    "ddl-manual":       {"tier": "ddl",     "scope": "ddl",           "default": "review", "floor": False},
+    "dml-no-where":     {"tier": "dml",     "scope": "update/delete", "default": "block",  "floor": True},
+    "dml-confirm":      {"tier": "dml",     "scope": "dml",           "default": "review", "floor": False},
+    "tcl-confirm":      {"tier": "unknown", "scope": "tcl",           "default": "review", "floor": False},
+    "read-no-limit":    {"tier": "read",    "scope": "select",        "default": "allow",  "floor": False},
+    "read-allow":       {"tier": "read",    "scope": "read",          "default": "allow",  "floor": False},
+    "unknown-fallback": {"tier": "unknown", "scope": "any",           "default": "review", "floor": True},
+    "multi-statement":  {"tier": "unknown", "scope": "batch",         "default": "block",  "floor": True},
+}
+
+# 严格度阶梯：只允许向更严方向覆盖（同级 no-op，放宽一律忽略）
+_LADDER: dict[Verdict, int] = {Verdict.ALLOW: 0, Verdict.REVIEW: 1, Verdict.BLOCK: 2}
+
+
+def normalize_gate_rules(rules: object) -> dict[str, str]:
+    """契约收口（settings 校验与引擎共用，单一来源）：仅保留「已知规则 + 合法判定 +
+    严格更严」的覆盖。同级/放宽/未知规则/旧 bool 历史数据一律丢弃。"""
+    if not isinstance(rules, dict):
+        return {}
+    out: dict[str, str] = {}
+    for rid, val in rules.items():
+        if not isinstance(rid, str) or not isinstance(val, str):
+            continue
+        meta = RULE_META.get(rid)
+        if meta is None:
+            continue
+        v = val.lower()
+        if v not in {x.value for x in Verdict}:
+            continue
+        if _LADDER[Verdict(v)] <= _LADDER[Verdict(str(meta["default"]))]:
+            continue  # 同级/放宽 → 丢弃（floor 规则自然不可放宽）
+        out[rid] = v
+    return out
+
+
+def _eff_verdict(rule_id: str, default: Verdict, overrides: dict | None) -> tuple[Verdict, bool]:
+    """应用规则覆盖。返回 (生效判定, 是否被覆盖收严)。"""
+    raw = (overrides or {}).get(rule_id)
+    if not raw:
+        return default, False
+    raw = str(raw).lower()
+    if raw not in {v.value for v in Verdict}:
+        return default, False
+    target = Verdict(raw)
+    if _LADDER[target] > _LADDER[default]:
+        return target, True  # 严格更严 → 生效
+    return default, False     # 同级/放宽 → 忽略
+
+
+def _mk(rule_id: str, default: Verdict, tier: Tier, objects: list[str], overrides: dict | None,
+        detail: str | None = None) -> RuleResult:
+    """统一构造 RuleResult：应用阶梯覆盖，并在 reason 中留痕 override 来源（A1 可解释）。"""
+    verdict, applied = _eff_verdict(rule_id, default, overrides)
+    zh, en = _msg(rule_id)
+    if applied:
+        zh += f"（配置收严 → {verdict.value}）"
+        en += f" (configured stricter -> {verdict.value})"
+    if detail:
+        zh += f"（{detail}）"
+        en += f" ({detail})"
+    return RuleResult(rule=rule_id, verdict=verdict, tier=tier, reason=zh, reason_en=en, objects=objects)
+
+
+def _rules_for(info: StatementInfo, origin: Origin, overrides: dict | None = None) -> list[RuleResult]:
     out: list[RuleResult] = []
     tables = list(info.tables) if info.tables else []
+    ov = overrides or None
 
     # R1 解析失败/未知 → 按写处理，永不 ALLOW
     if info.parse_error or info.kind == "unknown":
-        zh, en = _msg("parse-failure")
-        # 细节：把解析错误/未知类型拼到中文里，保留可读性
-        zh_detail = f"{zh}（{info.parse_error or '未知类型'}）"
-        en_detail = f"{en} ({info.parse_error or 'unknown'})"
-        out.append(RuleResult(
-            rule="parse-failure",
-            verdict=Verdict.REVIEW,
-            tier=Tier.UNKNOWN,
-            reason=zh_detail,
-            reason_en=en_detail,
-            objects=tables or [info.parse_error or "unknown"][:1],
-        ))
+        out.append(_mk("parse-failure", Verdict.REVIEW, Tier.UNKNOWN,
+                       tables or [info.parse_error or "unknown"][:1], ov,
+                       detail=info.parse_error or "未知类型"))
         return out
 
     # R2 DDL：AI 物理上无 DDL 工具，此路径不应发生 → 硬拦截
     if info.kind == "ddl":
         if origin == Origin.AI:
-            zh, en = _msg("ddl-ai")
-            out.append(RuleResult(
-                rule="ddl-ai",
-                verdict=Verdict.BLOCK,
-                tier=Tier.DDL,
-                reason=zh,
-                reason_en=en,
-                objects=tables,
-            ))
+            out.append(_mk("ddl-ai", Verdict.BLOCK, Tier.DDL, tables, ov))
         else:
-            zh, en = _msg("ddl-manual")
-            out.append(RuleResult(
-                rule="ddl-manual",
-                verdict=Verdict.REVIEW,
-                tier=Tier.DDL,
-                reason=zh,
-                reason_en=en,
-                objects=tables,
-            ))
+            out.append(_mk("ddl-manual", Verdict.REVIEW, Tier.DDL, tables, ov))
         return out
 
     # R3 UPDATE/DELETE 无 WHERE → 拦截
     if info.stmt_type in ("update", "delete") and not info.has_where:
-        zh, en = _msg("dml-no-where")
-        out.append(RuleResult(
-            rule="dml-no-where",
-            verdict=Verdict.BLOCK,
-            tier=Tier.DML,
-            reason=zh,
-            reason_en=en,
-            objects=tables,
-        ))
+        out.append(_mk("dml-no-where", Verdict.BLOCK, Tier.DML, tables, ov))
         return out
 
     # R4 其余 DML → 需确认
     if info.kind == "dml":
-        zh, en = _msg("dml-confirm")
-        out.append(RuleResult(
-            rule="dml-confirm",
-            verdict=Verdict.REVIEW,
-            tier=Tier.DML,
-            reason=zh,
-            reason_en=en,
-            objects=tables,
-        ))
+        out.append(_mk("dml-confirm", Verdict.REVIEW, Tier.DML, tables, ov))
         return out
 
     # R5 事务控制 → 需确认
     if info.kind == "tcl":
-        zh, en = _msg("tcl-confirm")
-        out.append(RuleResult(
-            rule="tcl-confirm",
-            verdict=Verdict.REVIEW,
-            tier=Tier.UNKNOWN,
-            reason=zh,
-            reason_en=en,
-            objects=tables,
-        ))
+        out.append(_mk("tcl-confirm", Verdict.REVIEW, Tier.UNKNOWN, tables, ov))
         return out
 
     # R6 读 → 放行
     if info.kind == "read":
         if info.stmt_type == "select" and not info.has_limit:
-            zh, en = _msg("read-no-limit")
-            out.append(RuleResult(
-                rule="read-no-limit",
-                verdict=Verdict.ALLOW,
-                tier=Tier.READ,
-                reason=zh,
-                reason_en=en,
-                objects=tables,
-            ))
+            out.append(_mk("read-no-limit", Verdict.ALLOW, Tier.READ, tables, ov))
         else:
-            zh, en = _msg("read-allow")
-            out.append(RuleResult(
-                rule="read-allow",
-                verdict=Verdict.ALLOW,
-                tier=Tier.READ,
-                reason=zh,
-                reason_en=en,
-                objects=tables,
-            ))
+            out.append(_mk("read-allow", Verdict.ALLOW, Tier.READ, tables, ov))
         return out
 
     # 兜底
-    zh, en = _msg("unknown-fallback")
-    out.append(RuleResult(
-        rule="unknown-fallback",
-        verdict=Verdict.REVIEW,
-        tier=Tier.UNKNOWN,
-        reason=zh,
-        reason_en=en,
-        objects=tables,
-    ))
+    out.append(_mk("unknown-fallback", Verdict.REVIEW, Tier.UNKNOWN, tables, ov))
     return out
 
 
-def run_rules(infos: list[StatementInfo], origin: Origin) -> list[RuleResult]:
+def run_rules(infos: list[StatementInfo], origin: Origin, overrides: dict | None = None) -> list[RuleResult]:
     results: list[RuleResult] = []
+    ov = normalize_gate_rules(overrides) or None
 
     # R7 多语句批处理：>1 且含非只读 → 拦截
     if len(infos) > 1 and any(i.kind != "read" for i in infos):
-        zh, en = _msg("multi-statement")
         # 合并所有表的对象
         all_tables: list[str] = []
         for i in infos:
             for t in i.tables:
                 if t not in all_tables:
                     all_tables.append(t)
-        results.append(RuleResult(
-            rule="multi-statement",
-            verdict=Verdict.BLOCK,
-            tier=Tier.UNKNOWN,
-            reason=zh,
-            reason_en=en,
-            objects=all_tables,
-        ))
+        results.append(_mk("multi-statement", Verdict.BLOCK, Tier.UNKNOWN, all_tables, ov))
 
     for info in infos:
-        results.extend(_rules_for(info, origin))
+        results.extend(_rules_for(info, origin, ov))
     return results
 
 

@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, schema, settings, skills, suggestions, tasks, usage
+from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, skills, suggestions, tasks, usage
 from app.config import get_env, get_token
 from app.state import get_state
 
@@ -123,7 +123,7 @@ def create_app() -> FastAPI:
 
     for r in (health.router, connections.router, schema.router, query.router,
               audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router,
-              tasks.router, cost.router, suggestions.router):
+              tasks.router, cost.router, suggestions.router, safety.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）

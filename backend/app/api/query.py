@@ -106,50 +106,8 @@ async def run_query(req: QueryRequest) -> dict:
     # R6/T8：会话变量替换 + 表级过滤器注入（闸门/执行/审计一律用加工后的真实执行 SQL；
     # confirm-token 校验与 suggest_safe 保持原始 req.sql——token 存的是原文哈希）
     exec_sql = prepare_query_sql(state, req.connection_id, req.sql)
-    assessment = safety_gate.assess_sql(exec_sql, dialect, origin)
-    # A2 策略即配置：表级/模式级覆盖（热更新，无需重启）
-    try:
-        policy = state.runtime.get().policy
-        # 表级：最高优先生效
-        for tbl in list(assessment.tables):
-            act = policy.table_rules.get(tbl) or policy.table_rules.get(tbl.lower()) if hasattr(policy, "table_rules") else None
-            if act:
-                act = str(act).lower()
-                ver = Verdict.BLOCK if act == "block" else Verdict.REVIEW if act == "review" else Verdict.ALLOW
-                tier = assessment.tier
-                if ver != assessment.verdict:
-                    reason = {
-                        "rule_id": f"policy-table-{tbl}",
-                        "message": f"命中策略 v{getattr(policy, 'version', 1)}：表 “{tbl}” 规则 {act.upper()}",
-                        "message_en": f"Policy v{getattr(policy, 'version', 1)}: table '{tbl}' {act.upper()}",
-                        "objects": [tbl],
-                    }
-                    new_reasons = [reason] + [r for r in assessment.reasons if r.get("rule_id") != f"policy-table-{tbl}"]
-                    if act == "allow" and assessment.verdict != Verdict.ALLOW:
-                        pass
-                    else:
-                        assessment.verdict = ver
-                        assessment.reasons = new_reasons
-                        if ver == Verdict.BLOCK:
-                            assessment.tier = tier
-                        break
-        if assessment.verdict == Verdict.REVIEW and assessment.tables:
-            for pr in getattr(policy, "pattern_rules", []) or []:
-                pid = pr.get("id", "")
-                if pid == "delete-requires-time" and "delete" in req.sql.lower():
-                    has_time = any(kw in req.sql.lower() for kw in ["created_at", "updated_at", "time", "date", "timestamp"])
-                    if not has_time:
-                        reason = {
-                            "rule_id": "policy-pattern-delete-time",
-                            "message": f"命中策略 v{getattr(policy, 'version', 1)}：DELETE 必须 WHERE 带时间范围",
-                            "message_en": f"Policy v{getattr(policy, 'version', 1)}: DELETE requires time predicate",
-                            "objects": assessment.tables,
-                        }
-                        assessment.reasons = [reason] + assessment.reasons
-                        assessment.verdict = Verdict.BLOCK
-                        break
-    except Exception:
-        pass
+    # 统一判定入口：规则阶梯覆盖（gate_rules）+ 策略覆盖（policy）同源生效（A2）
+    assessment = safety_gate.assess_configured(state, exec_sql, dialect, origin)
     t0 = time.monotonic()
     # A5 成本防护：ALLOW 的读若估算超阈值则升 REVIEW；失败放行并审计
     estimated_rows_for_audit: int | None = None
@@ -289,7 +247,7 @@ async def run_query(req: QueryRequest) -> dict:
             _ret["rollback_ref"] = _review_extra.get("rollback_ref")
         return _ret
 
-    reassess = safety_gate.assess_sql(exec_sql, dialect, origin)
+    reassess = safety_gate.assess_configured(state, exec_sql, dialect, origin)
     if reassess.verdict == Verdict.BLOCK:
         return {
             "verdict": "block", "tier": reassess.tier.value,
@@ -396,8 +354,8 @@ async def lint_sql(req: LintRequest) -> dict:
         schema = await get_schema(state, req.connection_id)
     except Exception:
         schema = {"tables": [], "columns": [], "foreign_keys": []}
-    # Gate 评估（结构化 reasons 复用）
-    assessment = safety_gate.assess_sql(req.sql, dialect, Origin.MANUAL)
+    # Gate 评估（结构化 reasons 复用；rule 覆盖同源，保持与执行时一致的判定）
+    assessment = safety_gate.assess_configured(state, req.sql, dialect, Origin.MANUAL)
     # 只读连接硬边界（与闸门同源，保持编辑器与执行时一致）
     if cfg.read_only and assessment.verdict != Verdict.ALLOW:
         diagnostics = [{

@@ -37,7 +37,7 @@ async def create_approval(req: CreateRequest, request: Request):
     try:
         from app.safety import gate as _gate
         from app.safety.models import Origin as _Orig
-        _ass = _gate.assess_sql(req.sql, _gate.sqlglot_dialect_for(cfg.dialect), _Orig.AI)
+        _ass = _gate.assess_configured(state, req.sql, _gate.sqlglot_dialect_for(cfg.dialect), _Orig.AI)
         verdict = _ass.verdict.value
         tier = _ass.tier.value
         reasons = _ass.reasons
@@ -89,7 +89,7 @@ async def approve(aid: str, req: ReviewRequest, request: Request):
     reassess = None
     try:
         dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
-        reassess = safety_gate.assess_sql(a.sql, dialect, Origin.AI)
+        reassess = safety_gate.assess_configured(state, a.sql, dialect, Origin.AI)
     except Exception:
         reassess = None
     if reassess is None:

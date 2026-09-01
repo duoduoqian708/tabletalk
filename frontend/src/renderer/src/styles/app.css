@@ -1362,6 +1362,8 @@ body.resizing {
 
 .rule-table td { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--ink-dim); }
 .rule-table tr:last-child td { border-bottom: 0; }
+.ru-sel { background: var(--bg-2); border: 1px solid var(--line-strong); border-radius: 6px; color: var(--ink); font-size: 11px; padding: 3px 6px; cursor: pointer; }
+.ru-sel:disabled { opacity: 0.5; }
 .rule-table td .sql-k {
   color: var(--ink); background: var(--bg-2); border-radius: 5px;
   padding: 1px 6px; font-size: 11px;

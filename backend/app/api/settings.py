@@ -66,14 +66,21 @@ async def update_settings(body: SettingsUpdate, request: Request) -> dict:
     # 记录变更前快照，用于审计
     before_mode = state.runtime.get().privacy_mode
     before_policy_ver = getattr(state.runtime.get().policy, "version", 0)
+    before_gate = dict(state.runtime.get().gate_rules or {})
     runtime = state.runtime.update(body.model_dump(exclude_none=True))
     await state.pools.rebuild()
-    # B4: 档位/策略切换写审计（可追溯）
+    # B4: 档位/策略/规则切换写审计（可追溯——安全页要能回答"规则何时改的、改了什么"）
     try:
+        import json as _json
+
         if body.privacy_mode is not None and body.privacy_mode != before_mode:
             state.audit.log(connection="settings", origin="api", tier="read", verdict="allow", status=f"privacy_mode {before_mode}->{body.privacy_mode}", sql=f"[settings] privacy_mode={body.privacy_mode}", source="settings")
         if body.policy is not None:
             state.audit.log(connection="settings", origin="api", tier="read", verdict="allow", status=f"policy v{before_policy_ver}->v{runtime.policy.version}", sql=f"[settings] policy updated", source="settings")
+        if body.gate_rules is not None and (runtime.gate_rules or {}) != before_gate:
+            _cur = _json.dumps(runtime.gate_rules or {}, ensure_ascii=False, sort_keys=True)
+            state.audit.log(connection="settings", origin="api", tier="read", verdict="allow",
+                            status="gate_rules 更新", sql=f"[settings] gate_rules={_cur}", source="settings")
     except Exception:
         pass
     return runtime.public()

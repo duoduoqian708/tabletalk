@@ -18,6 +18,8 @@ export function AuditPage(): React.JSX.Element {
   const todayBlocked = useAuditSignal((s) => s.todayBlocked)
   const [drawer, setDrawer] = useState<'none' | 'report' | 'rules'>('none')
   const [selected, setSelected] = useState<Sel>(null)
+  // 审批变动信号：批准/驳回后 +1 → EntryList 重取待审批列表（保持与右栏决策同步）
+  const [apprRev, setApprRev] = useState(0)
 
   if (!currentId) return <div className="mpage"><div className="mpage-empty">{t('audit.noConnection')}</div></div>
 
@@ -37,8 +39,8 @@ export function AuditPage(): React.JSX.Element {
         <button className="rs-btn" onClick={() => setDrawer('rules')}>{t('audit.rulesLink')}</button>
       </div>
       <div className="au-cols2">
-        <ListPane selected={selected} onSelect={setSelected} />
-        <DetailPane selected={selected} />
+        <ListPane selected={selected} onSelect={setSelected} apprRev={apprRev} />
+        <DetailPane selected={selected} onApprovalChanged={() => setApprRev((r) => r + 1)} />
       </div>
       {drawer === 'report' && <ReportDrawer onClose={() => setDrawer('none')} />}
       {drawer === 'rules' && <RulesDrawer onClose={() => setDrawer('none')} />}
