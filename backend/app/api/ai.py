@@ -606,6 +606,66 @@ async def set_session_title(session_id: str, body: dict) -> dict:
     return {"ok": True}
 
 
+@router.post("/ai/continuation")
+async def ai_continuation(body: dict) -> Any:
+    """§19.5 continuation gate：统一"用户对 AI 回合的反应"入口。
+
+    四 type 分发到既有处理器（不重写引擎执行）：
+    - new_question：完整意图流程（decompose→plan→execute），复用 /ai/chat SSE 链
+    - clarify_report：续当前报告流（clarify 上下文 + 回答），复用 /ai/chat SSE 链
+    - sql_option：轻量改写 SQL 重跑（不进意图分解/检索），复用 /ai/sql-option
+    - confirm_write：DML 确认执行（preview 已给，confirm_token 闭环），复用 /api/v1/query
+    铁律：new_question 必须是完整流程（追问可引出任意意图）；协议守 new/continuation 边界。
+    """
+    from fastapi.responses import StreamingResponse
+    from app.ai.dto import ChatRequest
+
+    t = str(body.get("type") or "").strip()
+    conn_id = str(body.get("connection_id") or "")
+    payload = body.get("payload") or {}
+    if not conn_id:
+        raise HTTPException(status_code=422, detail="需要 connection_id")
+
+    if t in ("new_question", "clarify_report"):
+        # SSE：构造 ChatRequest → 复用 ai_chat 全链路（会话归属/知识库就绪边界都在内部）
+        raw = payload.get("question")
+        messages = payload.get("messages")
+        if not messages:
+            q = str(raw or payload.get("content") or "").strip()
+            if not q:
+                raise HTTPException(status_code=422, detail="需要 question")
+            messages = [{"role": "user", "content": q}]
+        req = ChatRequest(
+            connection_id=conn_id,
+            session_id=body.get("session_id"),
+            messages=messages,
+            provider=payload.get("provider"),
+            include_data=bool(payload.get("include_data", False)),
+            mode=payload.get("mode"),
+        )
+        return await ai_chat(req)
+
+    if t == "sql_option":
+        return await ai_sql_option({
+            "connection_id": conn_id,
+            "sql": str(payload.get("sql") or ""),
+            "option": payload.get("option") or {},
+        })
+
+    if t == "confirm_write":
+        from app.api.query import QueryRequest, run_query as _query_handler
+        qr = QueryRequest(
+            connection_id=conn_id,
+            sql=str(payload.get("sql") or ""),
+            confirm=True,
+            confirm_token=payload.get("confirm_token"),
+            session_id=body.get("session_id"),
+        )
+        return await _query_handler(qr)
+
+    raise HTTPException(status_code=422, detail=f"未知 continuation type：{t}")
+
+
 @router.post("/ai/selection")
 async def ai_selection(body: dict) -> dict:
     kind = body.get("kind", "explain")

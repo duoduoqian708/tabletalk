@@ -35,6 +35,13 @@ def _parse_llm_plan(text: str, confirmed_tags: list[str]) -> TaskPlan:
         data = json.loads(t)
         if not isinstance(data, dict):
             raise ValueError("not dict")
+        # §13.4 意图澄清优先：LLM 返回 clarify 候选问题（意图不完整/不清晰）→
+        # 空任务 + 澄清清单（执行前刹停），不校验 tasks
+        clarify = [str(x).strip() for x in data.get("clarify", []) if str(x).strip()][:3]
+        if clarify:
+            tags_raw = data.get("tags", [])
+            tags = [str(x).strip() for x in tags_raw if str(x).strip() in confirmed_tags][:3]
+            return TaskPlan(tasks=[], clarify=clarify, tags=tags, raw_question="")
         raw_tasks = data.get("tasks", [])
         if not isinstance(raw_tasks, list) or not raw_tasks:
             raise ValueError("empty tasks")
@@ -145,7 +152,9 @@ def _build_prompt(question: str, confirmed: list[str]) -> str:
         "kb（知识库图谱）/ schedule（定时任务）/ system / unknown\n"
         "- modality 有序枚举：answer（直接回答）/ analyze（统计分析）/ report（结构化报告）/ automate（自动化）\n"
         "- target：{tables: [表名]} 自由抽取（不确定可空）\n"
-        '只返回 JSON：{"tasks": [{"action": "query", "modality": "answer", "target": {"tables": []}}], "tags": ["标签"]}\n'
+        "意图不完整/不清晰时（缺目标、范围不明、空指代、信息冲突）：不输出 tasks，"
+        "改为输出 clarify 候选问题（1~3 个），让用户先确认。\n"
+        '只返回 JSON：{"tasks": [{"action": "query", "modality": "answer", "target": {"tables": []}}], "tags": ["标签"], "clarify": ["澄清问题"]}\n'
         "示例：\n"
         'Q: 查一下订单总数 → {"tasks":[{"action":"query","modality":"answer","target":{"tables":["orders"]}}],"tags":[]}\n'
         'Q: 生成销售趋势报告 → {"tasks":[{"action":"query","modality":"report"}],"tags":[]}\n'

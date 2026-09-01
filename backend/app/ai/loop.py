@@ -100,6 +100,15 @@ async def stream(state: "AppState", req: ChatRequest) -> AsyncIterator[dict[str,
         # preflight/decompose 异常兜底：单任务 query
         from app.ai.plan import TaskPlan as _TP, TaskSpec as _TS
         plan = _TP(tasks=[_TS(action="query", modality="answer")], degraded=True)
+    # §13.4 意图澄清闸门：意图不完整/不清晰 → 执行前刹停，发澄清卡片（不进任务循环/工具/检索）
+    if plan.clarify:
+        async def _clarify_stream():
+            yield {"type": "turn_start", "connection": req.connection_id}
+            yield {"type": "clarify", "question": "需要先确认一下", "options": list(plan.clarify)}
+            yield {"type": "done"}
+        async for ev in _clarify_stream():
+            yield ev
+        return
     req.skill_id = route_effective(plan.tasks[0].action, plan.tasks[0].modality)
     # T2.1 strict 离线拒答：完全离线档下 offtopic/unknown 不调任何模型，本地固定文案。
     # 2026-09：意图识别已无关键词层（LLM 唯一），离线无 LLM 判不出 unknown → 这里用一个

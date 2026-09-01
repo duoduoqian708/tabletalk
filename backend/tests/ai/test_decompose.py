@@ -60,6 +60,67 @@ def test_parse_llm_markdown_fence():
     assert p.tasks[0].action == "query"
 
 
+# ---------- §13.4 意图澄清 ----------
+
+def test_parse_llm_clarify():
+    """LLM 返回 clarify 候选问题（意图不完整/不清晰）→ 空任务 + 澄清清单（执行前刹停）。"""
+    p = _parse_llm_plan('{"tasks": [], "tags": [], "clarify": ["想查哪张表？", "时间范围是？"]}', [])
+    assert p.clarify == ["想查哪张表？", "时间范围是？"]
+    assert p.tasks == []
+    # 正常计划无 clarify
+    p2 = _parse_llm_plan('{"tasks": [{"action": "query"}], "tags": []}', [])
+    assert p2.clarify == []
+
+
+async def test_decompose_llm_clarify_reachable(app_state, conn_id, monkeypatch):
+    """真实 provider：LLM 判意图不完整 → 计划带 clarify（provider 被调用 1 次）。"""
+    from app.ai.decompose import decompose
+    from app.ai import gateway as gw
+
+    app_state.runtime.update({"ai_provider": "cloud", "ai_api_key": "test-key"})
+    text = '{"tasks": [], "tags": [], "clarify": ["想查哪张表？"]}'
+
+    class _F:
+        def __init__(self, t): self._t = t; self.calls = 0
+        async def chat(self, messages, tools=None, **kw):
+            self.calls += 1
+            import types
+            return types.SimpleNamespace(content=self._t)
+
+    fp = _F(text)
+    monkeypatch.setattr(gw, "build_provider", lambda *a, **k: fp)
+    p = await decompose(app_state, conn_id, "帮我查一下")
+    assert fp.calls == 1
+    assert p.clarify == ["想查哪张表？"]
+    assert p.tasks == []
+
+
+async def test_stream_clarify_brake_no_execution(app_state, conn_id, monkeypatch):
+    """流级：计划带 clarify → 发 clarify 卡片 + done，不发 task_start/subtask、不建 provider。"""
+    import app.ai.loop as loop
+    import app.ai.decompose as _dec
+    from app.ai.dto import ChatRequest
+    from app.ai.plan import TaskPlan, TaskSpec
+
+    async def _clarify_plan(*a, **k):
+        return TaskPlan(tasks=[], clarify=["想查哪张表？"])
+    monkeypatch.setattr(_dec, "decompose", _clarify_plan)
+
+    from app.ai import gateway as gw
+    async def boom(*a, **k):
+        raise AssertionError("澄清刹停不应建 provider")
+    monkeypatch.setattr(gw, "build_provider", boom)
+
+    req = ChatRequest(connection_id=conn_id, messages=[{"role": "user", "content": "帮我查一下"}])
+    evs = [ev async for ev in loop.stream(app_state, req)]
+    types = [ev.get("type") for ev in evs]
+    assert "clarify" in types
+    assert evs[-1]["type"] == "done"
+    assert "task_start" not in types and "subtask_start" not in types
+    clar = next(ev for ev in evs if ev["type"] == "clarify")
+    assert "想查哪张表？" in clar["options"]
+
+
 # ---------- decompose（mock 降级零 LLM / LLM 单次调用） ----------
 
 class _FakeProvider:

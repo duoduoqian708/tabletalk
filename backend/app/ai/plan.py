@@ -73,9 +73,10 @@ class TaskPlan:
     skip_retrieval: bool = False                            # 结构问答跳过检索管线
     degraded: bool = False                                  # 走了关键词/mock 降级
     raw_question: str = ""
+    clarify: list[str] = field(default_factory=list)        # 2026-09 §13.4：意图不完整/不清晰 → 候选澄清问题（非空则执行前刹停）
 
     def __post_init__(self) -> None:
-        if not self.tasks:
+        if not self.tasks and not self.clarify:
             self.tasks = [TaskSpec(action="query", modality="answer")]
 
     @property
@@ -89,6 +90,7 @@ class TaskPlan:
             "followup_tables": self.followup_tables,
             "skip_retrieval": self.skip_retrieval,
             "degraded": self.degraded,
+            "clarify": self.clarify,
         }
 
     @classmethod
@@ -101,6 +103,7 @@ class TaskPlan:
             skip_retrieval=bool(d.get("skip_retrieval", False)),
             degraded=bool(d.get("degraded", False)),
             raw_question=str(d.get("raw_question", "")),
+            clarify=list(d.get("clarify") or []),
         )
 
 
