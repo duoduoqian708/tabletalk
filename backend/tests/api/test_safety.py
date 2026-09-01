@@ -86,3 +86,35 @@ async def test_policy_blocks_approval_execution(client, conn_id):
     a = await client.post(f"/api/v1/approvals/{aid}/approve", json={"note": "t"})
     assert a.status_code == 403
     await client.put("/api/v1/settings", json={"policy": {"table_rules": {}}})
+
+
+async def test_scheduled_insert_executes(client, conn_id):
+    # scheduled 身份 INSERT 放行并可执行（scheduled-insert）
+    q = await client.post("/api/v1/query", json={
+        "connection_id": conn_id, "sql": "INSERT INTO orders (id) VALUES (999999)", "origin": "scheduled",
+    })
+    assert q.status_code == 200
+    body = q.json()
+    assert body["verdict"] == "allow"
+
+
+async def test_scheduled_update_with_where_no_confirm(client, conn_id):
+    # scheduled 身份 UPDATE（有 WHERE）→ review，无 confirm_token 不执行
+    q = await client.post("/api/v1/query", json={
+        "connection_id": conn_id, "sql": "UPDATE orders SET status='paid' WHERE id=999999", "origin": "scheduled",
+    })
+    assert q.status_code == 200
+    assert q.json()["verdict"] == "review"
+
+
+async def test_readonly_connection_blocks_scheduled_insert(client, app_state, demo_db):
+    # 只读硬边界：scheduled-insert 是 allow 但 tier=dml → 仍拦（只读连接永不写）
+    c = app_state.connections.create({"name": "ro", "dialect": "sqlite", "file": str(demo_db), "read_only": True})
+    app_state.connections.set_kb_status(c.id, "ready")
+    q = await client.post("/api/v1/query", json={
+        "connection_id": c.id, "sql": "INSERT INTO orders (id) VALUES (999999)", "origin": "scheduled",
+    })
+    assert q.status_code == 200
+    body = q.json()
+    assert body["verdict"] == "block"
+    assert body["reasons"][0]["rule_id"] == "read-only"

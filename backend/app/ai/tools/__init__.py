@@ -19,7 +19,7 @@ from app.ai.tools.registry import (
 # 注册内置工具（import 触发 register()）
 from app.ai.tools import schema_tools, sql, query_audit, ai_review  # noqa: F401
 from app.ai.tools import kb_read, kb_write, graph_read, graph_write  # noqa: F401
-from app.ai.tools import manage_task, suggest_followup  # noqa: F401
+from app.ai.tools import suggest_followup, task_dev  # noqa: F401
 
 schema_tools.register()
 sql.register()
@@ -29,8 +29,8 @@ kb_read.register()
 kb_write.register()
 graph_read.register()
 graph_write.register()
-manage_task.register()
 suggest_followup.register()
+task_dev.register()
 
 # 兼容旧命名
 TOOL_SCHEMAS = tool_schemas(readonly=False)

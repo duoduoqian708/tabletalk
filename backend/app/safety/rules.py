@@ -49,6 +49,14 @@ _MSGS: dict[str, tuple[str, str]] = {
         "多语句批处理含非只读操作——MVP 禁止批量写，请拆成单条执行。",
         "Multi-statement batch contains non-read ops — batch writes are blocked, split into single statements.",
     ),
+    "scheduled-insert": (
+        "定时任务写入（INSERT）已放行，将记入审计。",
+        "Scheduled INSERT allowed; will be audited.",
+    ),
+    "ddl-scheduled": (
+        "定时任务禁止执行 DDL 结构变更。",
+        "Scheduled tasks cannot execute DDL.",
+    ),
 }
 
 
@@ -69,6 +77,8 @@ RULE_META: dict[str, dict[str, object]] = {
     "read-allow":       {"tier": "read",    "scope": "read",          "default": "allow",  "floor": False},
     "unknown-fallback": {"tier": "unknown", "scope": "any",           "default": "review", "floor": True},
     "multi-statement":  {"tier": "unknown", "scope": "batch",         "default": "block",  "floor": True},
+    "scheduled-insert": {"tier": "dml",     "scope": "insert",        "default": "allow",  "floor": False},
+    "ddl-scheduled":    {"tier": "ddl",     "scope": "ddl",           "default": "block",  "floor": True},
 }
 
 # 严格度阶梯：只允许向更严方向覆盖（同级 no-op，放宽一律忽略）
@@ -136,10 +146,12 @@ def _rules_for(info: StatementInfo, origin: Origin, overrides: dict | None = Non
                        detail=info.parse_error or "未知类型"))
         return out
 
-    # R2 DDL：AI 物理上无 DDL 工具，此路径不应发生 → 硬拦截
+    # R2 DDL：AI/定时任务 无 DDL 工具 → 硬拦截；手动 → 强确认
     if info.kind == "ddl":
         if origin == Origin.AI:
             out.append(_mk("ddl-ai", Verdict.BLOCK, Tier.DDL, tables, ov))
+        elif origin == Origin.SCHEDULED:
+            out.append(_mk("ddl-scheduled", Verdict.BLOCK, Tier.DDL, tables, ov))
         else:
             out.append(_mk("ddl-manual", Verdict.REVIEW, Tier.DDL, tables, ov))
         return out
@@ -149,9 +161,12 @@ def _rules_for(info: StatementInfo, origin: Origin, overrides: dict | None = Non
         out.append(_mk("dml-no-where", Verdict.BLOCK, Tier.DML, tables, ov))
         return out
 
-    # R4 其余 DML → 需确认
+    # R4 其余 DML → 需确认；定时任务仅放行 INSERT（其余 DML 无人确认即不执行）
     if info.kind == "dml":
-        out.append(_mk("dml-confirm", Verdict.REVIEW, Tier.DML, tables, ov))
+        if origin == Origin.SCHEDULED and info.stmt_type == "insert":
+            out.append(_mk("scheduled-insert", Verdict.ALLOW, Tier.DML, tables, ov))
+        else:
+            out.append(_mk("dml-confirm", Verdict.REVIEW, Tier.DML, tables, ov))
         return out
 
     # R5 事务控制 → 需确认

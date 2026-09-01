@@ -38,7 +38,7 @@ async def test_provider_cfg_resolves_model_id():
     assert cfg["provider"] == "cloud"
     assert cfg["model"] == "m2-model"
     assert cfg["temperature"] == 0.5
-    assert cfg["reasoning"] is True
+    assert cfg["reasoning"] is None  # reasoning_for_model: True 但无有效 effort → 不传参
 
     # 缺省 model_id → 默认模型
     cfg_def = resolve_provider_cfg(_FakeState(), ChatRequest(connection_id="c"))

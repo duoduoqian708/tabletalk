@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, skills, suggestions, tasks, usage
+from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, skills, suggestions, system, tasks, usage
 from app.config import get_env, get_token
 from app.state import get_state
 
@@ -53,7 +53,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     state.sync_loop.start()  # 知识库增量同步周期任务（kb_sync_minutes）
+    state.job_scheduler.start()  # 脚本任务调度（jobs/ 扫描，cron 触发）
     yield
+    state.job_scheduler.stop()
     state.sync_loop.stop()
     await state.pools.close_all()
 
@@ -123,7 +125,7 @@ def create_app() -> FastAPI:
 
     for r in (health.router, connections.router, schema.router, query.router,
               audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router,
-              tasks.router, cost.router, suggestions.router, safety.router):
+              tasks.router, cost.router, suggestions.router, safety.router, system.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）

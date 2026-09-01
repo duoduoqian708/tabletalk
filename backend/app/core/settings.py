@@ -184,7 +184,7 @@ class RuntimeSettings:
             "model": m.model,
             "temperature": m.temperature,
             "timeout": m.timeout,
-            "reasoning": m.reasoning,
+            "reasoning": reasoning_for_model(m),
         }
 
     def embedding_config(self) -> dict[str, Any]:
@@ -264,6 +264,25 @@ def _clean_gate_rules(rules: object) -> dict[str, str]:
     from app.safety.rules import normalize_gate_rules
 
     return normalize_gate_rules(rules)
+
+
+def reasoning_for_model(m: "ModelConfig") -> str | None:
+    """按模型探测能力归一推理强度（避免把 True 盲目当 high 导致 400）。
+
+    deepseek/glm 等模型探测出「支持思考」但 reasoning_effort 全档位 400 时，
+    只存 capability 不存档位（reasoning_effort=None）——此时返回 None，不追加参数，保正常可用。
+    显式档位（low/medium/high）或探测出有效档位才返回该档。
+    """
+    r = m.reasoning
+    # 显式档位最优先
+    if isinstance(r, str) and r in ("low", "medium", "high"):
+        return r
+    caps = m.capabilities or {}
+    cap_effort = caps.get("reasoning_effort")
+    if caps.get("reasoning") and isinstance(cap_effort, str) and cap_effort in ("low", "medium", "high"):
+        return cap_effort
+    # 仅 bool True 且探测不出可用档位 → 不推理，保连通
+    return None
 
 
 def _is_masked(val: Any) -> bool:

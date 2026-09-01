@@ -93,7 +93,10 @@ backend/app/
       builtin/       query / write / ddl / report / knowledge / scheduler / refusal / general
     knowledge/       知识库新模块：store.py（SQLite docs+tags）+ route
     graph/           图谱新模块：store.py（SQLite edges + BFS 查询）
-    tasks/           定时任务：storage.py + scheduler（asyncio）
+    tasks/           脚本化定时任务（全脚本化）：cron.py(手写5字段) + jobs.py(声明头注册表) +
+                     runner.py(子进程+SDK过闸) + scheduler.py(beat循环) + store.py(jobs.db runs) +
+                     seed.py(播种lib.py SDK+系统保留脚本) + migrate.py(旧tasks.db迁移)
+  api/system.py      平台系统端点：日志保留清理（脚本经 SDK retain_logs 调用，审计留痕）
   audit/logger.py    SQLite audit_log（兼容旧 JSONL 迁移）
 ```
 
@@ -140,11 +143,12 @@ These were confirmed by reading `app/` source in 2026-08 and differ from plausib
 - **Multi-statement guard:** a batch with >1 statement where *any* is non-read is `BLOCK`. Pure multi-`SELECT` is allowed. (`_auto_cap`/`_apply_page` only rewrite single-`SELECT` parses.)
 - **Auth exempt set is exactly two paths** — `GET /health`, `GET /bootstrap` — plus `OPTIONS` and anything outside `/api/*`. Token is a single shared secret in `data_dir/tabletalk.token` (chmod 600); `/bootstrap` serves it to the browser and is LAN-accessible by default (`bind 127.0.0.1` only — networked deploy needs a gate). CORS is wide-open (`allow_origins=["*"]` + `allow_credentials=True`).
 - **Mock is the default provider** → the entire pipeline runs offline with deterministic responses out of the box.
+- **定时任务已全脚本化（2026-09）**：任务 = `data_dir/jobs/*.py`，声明头（`# name:`+`# cron:` 必填，`# connection`/`# enabled`/`# system` 可选）驱动注册；无声明的文件是辅助模块（`lib.py` SDK）。调度器 beat 循环每 30s 扫目录、到点**子进程**跑脚本（`lib.py` 经 sidecar API → 闸门 → 审计），删脚本即任务消失。`Origin.SCHEDULED` 仅放行 INSERT（scheduled-insert 规则），UPDATE/DELETE 无 WHERE、DDL、只读连接一律拦。脚本查询要求连接 KB 已 ready（`POST /query` 的既有硬约束）。旧 `tasks.db`（sql/natural_query）首启迁移为脚本；`manage_task` 工具下线，`scheduler` skill 只引导。系统保留脚本（`日志保留清理`）调用 `POST /system/retain` 按天清三库并留痕，保留天数 = 改脚本顶部常量。旧 `app/ai/tasks/` 已删。
 
 
 ## API surface (all under /api/v1)
 
-`GET /health` · `CRUD /connections` + `/{id}/test` · `GET /connections/{id}/schema[/{table}[/preview|/ddl]]` · `POST /query` + `/query/cancel` + `/sql/format` · `POST /ai/chat` (SSE) + `/ai/selection` · `GET /audit` · `GET/PUT /settings` · `GET/POST/PUT/DELETE /tasks` + `/{id}/run` · `GET /cost/summary` + `/cost/daily` · `POST /suggestions/initial`
+`GET /health` · `CRUD /connections` + `/{id}/test` · `GET /connections/{id}/schema[/{table}[/preview|/ddl]]` · `POST /query` + `/query/cancel` + `/sql/format` · `POST /ai/chat` (SSE) + `/ai/selection` · `GET /audit` · `GET/PUT /settings` · **任务（全脚本化）**`GET /tasks` / `POST /tasks/deploy` / `POST /tasks/agent`(AI 创作对话) / `POST /tasks/cron/preview` / `GET /tasks/{name}/runs` / `GET|PUT /tasks/{name}/script` / `PUT|DELETE /tasks/{name}` / `POST /tasks/{name}/run` · `POST /system/retain`(日志保留) · `GET /cost/summary` + `/cost/daily` · `POST /suggestions/initial`
 
 **Auth**: 中间件仅守 `/api/*`；除 `/health`、`/bootstrap` 与 OPTIONS 预检外，所有 `/api/*` 请求需带 `X-TableTalk-Token` 头（token 见 `config.get_token()`）；静态资源 / SPA 免鉴权。`/bootstrap` 向浏览器发放 token，仅本机可访问（默认绑 127.0.0.1），未来网络化部署需加门禁。
 

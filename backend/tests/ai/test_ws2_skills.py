@@ -39,8 +39,8 @@ def test_knowledge_skill_tools():
 
 
 def test_scheduler_skill_tools():
-    """设计文档 §4/§6：scheduler = manage_task, run_query, get_schema。"""
-    assert _names("scheduler") == {"manage_task", "run_query", "get_schema"}
+    """脚本化改造后 scheduler（引导）不再有 manage_task：只剩只读澄清工具。"""
+    assert _names("scheduler") == {"run_query", "get_schema"}
 
 
 def test_query_report_present_tools():

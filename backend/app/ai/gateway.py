@@ -29,8 +29,9 @@ class ChatResponse:
 
 @dataclass
 class StreamChunk:
-    """流式增量：delta=文本增量；content=非流式最终文本（mock）；tool_calls=最终工具调用。"""
+    """流式增量：delta=文本增量；reasoning=思考链增量（推理模型）；content=非流式最终文本（mock）；tool_calls=最终工具调用。"""
     delta: str | None = None
+    reasoning: str | None = None
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
 
@@ -208,8 +209,9 @@ class LLMGateway:
                                 slot["name"] = fn["name"]
                             slot["arguments"] += fn.get("arguments") or ""
                         text = delta.get("content")
-                        if text:
-                            yield StreamChunk(delta=text)
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning or text:
+                            yield StreamChunk(delta=text, reasoning=reasoning)
             _usage = _stream_usage
             # 流结束后存 last_meta（铁律：流完成再写，不丢信息）
             self.last_meta = {
@@ -412,6 +414,8 @@ def resolve_provider_cfg(state, req) -> dict[str, Any]:
     if mid:
         target = next((m for m in rs.ai_models if m.id == mid), None)
         if target is not None:
+            from app.core.settings import reasoning_for_model
+
             cfg = {
                 "provider": target.provider,
                 "base_url": target.base_url,
@@ -419,7 +423,7 @@ def resolve_provider_cfg(state, req) -> dict[str, Any]:
                 "model": target.model,
                 "temperature": target.temperature,
                 "timeout": target.timeout,
-                "reasoning": target.reasoning,
+                "reasoning": reasoning_for_model(target),
             }
         else:
             cfg = rs.provider_config()

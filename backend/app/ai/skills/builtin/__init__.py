@@ -59,7 +59,7 @@ def _scheduler_steps() -> ScriptSpec:
     return ScriptSpec(
         steps=[
             ScriptStep(id="parse", label="解析定时需求", tool=None, output="task_spec"),
-            ScriptStep(id="manage", label="管理任务", tool="manage_task", output="result"),
+            ScriptStep(id="guide", label="引导到任务页", tool=None, output="guide"),
         ],
         requires_schema=False,
     )
@@ -155,27 +155,17 @@ _KNOWLEDGE_SYSTEM_PROMPT = """你是 TableTalk 的知识图谱管理助手，覆
 铁律：维护操作（kb_write/graph_write）都走确认流程，不会直接写入。"""
 
 
-_SCHEDULER_SYSTEM_PROMPT = """你是 TableTalk 的定时任务管理助手。
+_SCHEDULER_SYSTEM_PROMPT = """你是 TableTalk 的定时任务引导助手。
 
-用 manage_task 工具完成任务的创建、查看、修改、删除。
+定时任务现已全部脚本化：每个任务 = 一个 .py 脚本（在数据目录 jobs/ 下），
+创建与编辑走「定时任务」页的 AI 对话完成（产物始终是 .py）。你**不创建、不修改、不删除任务**。
 
-自然语言 → cron 表达式转换规则：
-- '每天9点' → 0 9 * * *
-- '每周一早上' → 0 9 * * 1
-- '每月1号' → 0 9 1 * *
-- '每小时' → 0 * * * *
-- '每5分钟' → */5 * * * *
+你可以做的：
+- 帮用户翻译时间说法为 cron：'每天9点' → 0 9 * * *；'每周一早上' → 0 9 * * 1；'每月1号' → 0 9 1 * *；'每5分钟' → */5 * * * *
+- 用 get_schema / run_query 帮用户确认要查的表和列存在、预览查询效果（只读）
+- 帮用户把需求说清楚（要处理哪些表、什么口径、产出什么），引导用户去「定时任务」页新建
 
-创建任务前，可用 get_schema 和 run_query 验证 SQL 的正确性（确认表存在、试跑确认能通）。
-创建任务时需确认：
-- 任务名称（自然语言描述）
-- 执行的 SQL（v1 仅允许 SELECT 查询）
-- 目标连接
-- cron 表达式
-
-修改/删除任务前需列出当前任务让用户确认。
-
-注意：定时任务 v1 仅允许 SELECT 查询，禁止 DML/DDL。"""
+收到"创建/修改/删除任务"的请求时：提示用户到「定时任务」页用 AI 对话新建脚本任务即可。"""
 
 
 _REFUSAL_SYSTEM_PROMPT = """你是 TableTalk 的数据库助手引导员。用户的问题与数据库/本平台无关。
@@ -265,8 +255,8 @@ def BUILTIN_SKILLS() -> list[Skill]:
         Skill(
             id="scheduler",
             name="定时任务管理",
-            description="创建、查看、修改、删除定时任务。可关闭。",
-            tools=["manage_task", "run_query", "get_schema"],
+            description="引导定时任务创建（脚本化任务，见任务页 AI 对话）。可关闭。",
+            tools=["run_query", "get_schema"],
             script=_scheduler_steps(),
             system_prompt=_SCHEDULER_SYSTEM_PROMPT,
             builtin=True,
@@ -274,7 +264,7 @@ def BUILTIN_SKILLS() -> list[Skill]:
             enabled=True,
             match={"action": "schedule"},  # E5/§15.4（设计命名 schedule）
             # F2：route(query, automate)→scheduler（§15.4），声明同步覆盖
-            termination={"max_turns": 4, "done_when": "定时任务已创建/修改/删除"},
+            termination={"max_turns": 4, "done_when": "已引导用户到任务页/给出澄清与 cron 建议"},
             degradation="定时任务能力已关闭",
         ),
         Skill(

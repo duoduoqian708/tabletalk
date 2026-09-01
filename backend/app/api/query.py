@@ -102,7 +102,7 @@ async def run_query(req: QueryRequest) -> dict:
             "code": "kb_not_built",
             "message": "该数据源知识库未构建，请先构建并确认启用",
         })
-    origin = Origin.AI if req.origin == "ai" else Origin.MANUAL
+    origin = {"ai": Origin.AI, "scheduled": Origin.SCHEDULED, "manual": Origin.MANUAL}.get(req.origin, Origin.MANUAL)
     # R6/T8：会话变量替换 + 表级过滤器注入（闸门/执行/审计一律用加工后的真实执行 SQL；
     # confirm-token 校验与 suggest_safe 保持原始 req.sql——token 存的是原文哈希）
     exec_sql = prepare_query_sql(state, req.connection_id, req.sql)
@@ -137,7 +137,8 @@ async def run_query(req: QueryRequest) -> dict:
             cost_degraded_reason = str(e)
             pass
 
-    if cfg.read_only and assessment.verdict != Verdict.ALLOW:
+    if cfg.read_only and (assessment.verdict != Verdict.ALLOW or assessment.tier.value in ("dml", "ddl")):
+        # 只读硬边界：不止拦非 ALLOW——定时任务 INSERT（scheduled-insert=allow）也拦，只读连接永不写
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         ro_reasons = [{
             "rule_id": "read-only",

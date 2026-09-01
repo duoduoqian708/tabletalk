@@ -36,7 +36,7 @@ def test_existing_tools_have_meta_and_pass_selfcheck():
     assert {
         "get_schema", "run_query", "run_dml", "draft_ddl", "ai_review",
         "query_audit", "kb_read", "kb_write", "graph_read", "graph_write",
-        "manage_task", "suggest_followup",
+        "suggest_followup",
     } <= names
     meta = reg.TOOL_META
     assert meta["get_schema"]["trust"] == "readonly"

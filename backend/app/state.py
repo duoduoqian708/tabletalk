@@ -14,6 +14,9 @@ from app.core.questions import QuestionStore
 from app.core.settings import SettingsStore
 from app.knowledge.jobs import BuildJobManager, SyncLoop
 from app.knowledge.facade import KnowledgeBase
+from app.tasks.jobs import JobRegistry
+from app.tasks.scheduler import JobScheduler
+from app.tasks.store import JobStore
 
 
 @dataclass
@@ -30,6 +33,9 @@ class AppState:
     approvals: ApprovalStore
     build_jobs: "BuildJobManager"
     sync_loop: "SyncLoop"
+    jobs: JobRegistry
+    job_store: JobStore
+    job_scheduler: JobScheduler
 
 
 _state: AppState | None = None
@@ -56,6 +62,11 @@ def _build_state(data_dir=None) -> AppState:
     except Exception:
         pass
     runtime = SettingsStore(env.data_dir)
+    from app.tasks.migrate import migrate_legacy_tasks
+    from app.tasks.seed import seed_jobs_dir
+
+    seed_jobs_dir(env.data_dir)  # 播种 jobs/（SDK lib.py + 系统保留脚本），幂等
+    migrate_legacy_tasks(env.data_dir)  # 旧 tasks.db → jobs/*.py（一次性）
     knowledge = KnowledgeBase(env.data_dir, runtime=runtime)
     _migrate_kb_status(knowledge, connections)  # 老连接：artifact 已存在 → 视为已就绪
     return AppState(
@@ -71,6 +82,9 @@ def _build_state(data_dir=None) -> AppState:
         approvals=ApprovalStore(env.data_dir),
         build_jobs=BuildJobManager(),
         sync_loop=SyncLoop(),
+        jobs=JobRegistry(env.data_dir),
+        job_store=JobStore(env.data_dir),
+        job_scheduler=JobScheduler(),
     )
 
 

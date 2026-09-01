@@ -171,3 +171,36 @@ def test_normalize_gate_rules_contract():
     assert "dml-no-where" not in out    # 放宽
     assert "fake" not in out            # 未知规则
     assert isinstance(normalize_gate_rules(None), dict) and isinstance(normalize_gate_rules("x"), dict)
+
+
+# ── 定时任务身份（Origin.SCHEDULED）：INSERT 放行，其余 DML / DDL 仍被拦 ──
+
+def test_scheduled_insert_allowed():
+    agg = _ovr("INSERT INTO orders (id, region) VALUES (1, 'n')", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.ALLOW
+    r = next(x for x in agg["rules"] if x.rule == "scheduled-insert")
+    assert r.verdict == Verdict.ALLOW
+
+
+def test_scheduled_update_with_where_still_review():
+    # 无人确认 → 实际不会执行
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.REVIEW
+    assert all(x.rule != "scheduled-insert" for x in agg["rules"])
+
+
+def test_scheduled_no_where_update_blocked():
+    agg = _ovr("UPDATE orders SET status='paid'", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.BLOCK
+    assert any(x.rule == "dml-no-where" for x in agg["rules"])
+
+
+def test_scheduled_ddl_blocked():
+    agg = _ovr("DROP TABLE orders", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.BLOCK
+    assert any(x.rule == "ddl-scheduled" for x in agg["rules"])
+
+
+def test_scheduled_read_allowed():
+    agg = _ovr("SELECT * FROM orders", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.ALLOW
