@@ -306,9 +306,9 @@ class RetrievalService:
         return {
             "tables": tables_out,
             "graph": {
-                "edges": facade.graph_store._graph.get(conn_id, {"edges": []}).get("edges", []),
+                # 2026-09：走 diff 计算（red/removed 三色）而非裸 _grph
+                **facade.graph(conn_id),
                 "excluded": sorted(excluded),
-                "llm_draft_edges": facade.graph_store._llm_graph_edges.get(conn_id, []),
                 "layout": facade.graph_layout(conn_id),
             },
             "tags": facade.tags(conn_id),
