@@ -5810,6 +5810,27 @@ tr.clickable.open { background: var(--accent-dim); }
 .rv-edge-badge { font-style: normal; font-size: 10px; margin-left: 6px; padding: 1px 5px; border-radius: 4px; border: 1px solid; }
 .rv-edge-badge.diff-new { color: var(--green, #3eb777); border-color: var(--green, #3eb777); }
 .rv-edge-badge.diff-mod { color: var(--amber); border-color: var(--amber); }
+
+/* ── §19.6 实时任务流面板 ── */
+.tf-panel { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; font-size: 12.5px; }
+.tf-task { border: 1px solid var(--ink-faint); border-radius: 8px; overflow: hidden; }
+.tf-task-h { display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; background: color-mix(in srgb, var(--ink-faint) 20%, transparent); }
+.tf-task-h.live { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.tf-ic { width: 14px; text-align: center; }
+.tf-mono, .tf-action, .tf-tool-name, .tf-log, .tf-hint { font-family: var(--font-mono); font-size: 11px; }
+.tf-skill { font-weight: 600; }
+.tf-action { color: var(--ink-dim); }
+.tf-hint { color: var(--ink-dim); }
+.tf-err { color: var(--danger, #e0575b); margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-tools { padding: 4px 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+.tf-none { color: var(--ink-dim); padding: 2px 0; }
+.tf-tool { border-bottom: 1px dashed var(--ink-faint); padding: 4px 0; }
+.tf-tool:last-child { border-bottom: none; }
+.tf-tool-h { display: flex; align-items: center; gap: 6px; }
+.tf-tool.error .tf-tool-name { color: var(--danger, #e0575b); }
+.tf-tool-logs { margin: 3px 0 0 20px; display: flex; flex-direction: column; gap: 2px; }
+.tf-log { color: var(--ink-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+.cl-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .trg2d-edge.diff-new .trg2d-edge-line { stroke: var(--green, #3eb777); opacity: 1; }
 .trg2d-edge.diff-new .trg2d-edge-label { fill: var(--green, #3eb777); }
 .trg2d-edge.diff-modified .trg2d-edge-line { stroke: var(--amber); opacity: 1; }

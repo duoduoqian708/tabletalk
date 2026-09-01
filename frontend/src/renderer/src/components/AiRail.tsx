@@ -154,6 +154,55 @@ function BlockRenderer({ block }: { block: import('@renderer/api/ai').Block }): 
   return <div className="blk-text mono">{(block as { text: string }).text}</div>
 }
 
+/** §19.6 实时任务流：任务列表（task_start/result/done 驱动）→ 每任务动态工具条
+ * （subtask_start 驱动，实际调用才有）→ 每工具日志流（subtask_progress/think/结果）。
+ * 无固定模板；工具条 = 事件的投影。 */
+function TaskFlowPanel({ tasks }: { tasks: import('@renderer/api/ai').AiTaskFlow[] }): React.JSX.Element {
+  const { t } = useI18n()
+  const [open, setOpen] = useState<Set<string>>(new Set())
+  const toggle = (id: string): void => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  if (!tasks || tasks.length === 0) return <></>
+  return (
+    <div className="tf-panel">
+      {tasks.map((tk) => {
+        const isOpen = open.has(tk.id)
+        const doneTools = tk.tools.filter((x) => x.status === 'done' || x.status === 'error').length
+        return (
+          <div key={tk.id} className={`tf-task ${tk.status}`}>
+            <div className={`tf-task-h${tk.tools.some((x) => x.status === 'running') ? ' live' : ''}`} onClick={() => toggle(tk.id)}>
+              <span className="tf-ic">{tk.status === 'running' ? <span className="spin" /> : tk.status === 'error' || tk.status === 'blocked' ? <span className="ok">✗</span> : <span className="ok">✓</span>}</span>
+              <span className="tf-mono">{tk.index != null ? `${tk.index}.` : ''}</span>
+              <span className="tf-skill">{tk.skill}</span>
+              <span className="tf-action mono">{tk.action}</span>
+              {tk.tools.length > 0 && <span className="tf-hint mono">({doneTools}/{tk.tools.length} 工具)</span>}
+              {tk.status === 'error' && tk.error && <span className="tf-err">{String(tk.error)}</span>}
+              <span className="step-arrow">{isOpen ? '▾' : '▸'}</span>
+            </div>
+            {isOpen && (
+              <div className="tf-tools">
+                {tk.tools.length === 0 && <div className="tf-none mono">{t('aiRail.noTool')}</div>}
+                {tk.tools.map((tool) => (
+                  <div key={tool.id} className={`tf-tool ${tool.status}`}>
+                    <div className="tf-tool-h">
+                      <span className="tf-ic">{tool.status === 'done' ? <span className="ok">✓</span> : tool.status === 'error' ? <span className="ok">✗</span> : <span className="spin" />}</span>
+                      <span className="tf-tool-name mono">{tool.label || tool.tool}</span>
+                    </div>
+                    {tool.logs.length > 0 && (
+                      <div className="tf-tool-logs">
+                        {tool.logs.map((lg, li) => <div key={li} className="tf-log mono">{lg}</div>)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function SubtaskPanel({ subtasks, scene }: { subtasks: import('@renderer/store/chat').Subtask[]; scene?: string }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(true)
@@ -1050,10 +1099,10 @@ export function AiRail(): React.JSX.Element {
     // 报告模式：turn 标记 isReport，不走 query 模式步骤动画
     if (mode === 'report') {
       setTurns((t) => [...t, { role: 'user', text: q }])
-      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true, sessionId: reqSid }])
+      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true, sessionId: reqSid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
     } else {
       setTurns((t) => [...t, { role: 'user', text: q }])
-      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], steps: makeSteps(), subtasks: [], running: true, sessionId: reqSid }])
+      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], steps: makeSteps(), subtasks: [], running: true, sessionId: reqSid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
     }
     cardsRef.current = []
     // 提问刷新会话更新时间（查看历史不刷新）
@@ -1094,12 +1143,16 @@ export function AiRail(): React.JSX.Element {
             return
           }
           if (ev.type === 'clarify') {
-            // 澄清：挂起等用户答。把问题挂到当前 turn.clarify + 渲染内联输入
-            setClarifyPending({ q: ev.question, field: ev.field })
+            // 澄清：把问题挂到当前 turn.clarify；意图澄清带 options（点击候选=续问 new_question）
+            const opts = (ev as { options?: string[] }).options
+            setClarifyPending({ q: ev.question, field: ev.field ?? '' })
             setTurns((t) => {
               const n = [...t]
               const last = n[n.length - 1]
-              if (last.role === 'ai') last.clarify = [...(last.clarify ?? []), ev.question]
+              if (last.role === 'ai') {
+                last.clarify = [...(last.clarify ?? []), ev.question]
+                if (opts && opts.length) last.clarifyOptions = opts
+              }
               return n
             })
             return
@@ -1214,6 +1267,49 @@ export function AiRail(): React.JSX.Element {
               if (last.role === 'ai') last.scene = se.scene
               return n
             })
+          } else if ((ev as unknown as { type: string }).type === 'task_start') {
+            const se = ev as unknown as { id: string; skill: string; action: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') {
+                last.tasks = [...(last.tasks ?? []), { id: se.id, skill: se.skill || se.action, action: se.action || se.skill, status: 'running', index: (last.tasks?.length ?? 0) + 1, tools: [] }]
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'task_result') {
+            const se = ev as unknown as { id: string; index?: number; result_type: string; ok: boolean; error?: string | null }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') {
+                const tk = (last.tasks ?? []).find((x) => x.id === se.id)
+                if (tk) { tk.result_type = se.result_type; tk.index = se.index ?? tk.index; if (!se.ok) tk.error = se.error || '任务失败' }
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'task_done') {
+            const se = ev as unknown as { id: string; ok: boolean; error?: string | null }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') {
+                const tk = (last.tasks ?? []).find((x) => x.id === se.id)
+                if (tk) { tk.status = se.ok ? 'done' : 'error'; if (!se.ok && !tk.error) tk.error = se.error || '任务失败' }
+              }
+              return n
+            })
+          } else if ((ev as unknown as { type: string }).type === 'plan_stopped') {
+            const se = ev as unknown as { reason: string }
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai' && last.tasks) {
+                const cur = last.tasks[last.tasks.length - 1]
+                if (cur && cur.status === 'running') { cur.status = 'blocked'; cur.error = se.reason }
+              }
+              return n
+            })
           } else if ((ev as unknown as { type: string }).type === 'subtask_start') {
             const se = ev as unknown as { id: string; tool: string; label: string }
             setTurns((t) => {
@@ -1221,6 +1317,8 @@ export function AiRail(): React.JSX.Element {
               const last = n[n.length - 1]
               if (last.role === 'ai') {
                 last.subtasks = [...(last.subtasks ?? []), { id: se.id, tool: se.tool, label: se.label || se.tool, status: 'running', details: [], blocks: [] }]
+                const tks = last.tasks ?? []; const tk = tks[tks.length - 1]
+                if (tk) tk.tools = [...tk.tools, { id: se.id, tool: se.tool, label: se.label || se.tool, status: 'running', logs: [] }]
               }
               return n
             })
@@ -1232,6 +1330,9 @@ export function AiRail(): React.JSX.Element {
               if (last.role === 'ai' && last.subtasks) {
                 const it = last.subtasks.find((s) => s.id === se.id)
                 if (it) it.details = [...it.details, se.delta]
+                const tk = last.tasks && (last.tasks[last.tasks.length - 1])
+                const tool = tk && tk.tools.find((x) => x.id === se.id)
+                if (tool) tool.logs = [...tool.logs, se.delta]
               }
               return n
             })
@@ -1245,6 +1346,12 @@ export function AiRail(): React.JSX.Element {
                 if (it) {
                   it.status = se.status === 'error' ? 'error' : 'done'
                   if (se.detail) it.details = [...it.details, se.detail]
+                }
+                const tk = last.tasks && (last.tasks[last.tasks.length - 1])
+                const tool = tk && tk.tools.find((x) => x.id === se.id)
+                if (tool) {
+                  tool.status = se.status === 'error' ? 'error' : 'done'
+                  if (se.detail) tool.logs = [...tool.logs, se.detail]
                 }
               }
               return n
@@ -1383,7 +1490,7 @@ export function AiRail(): React.JSX.Element {
               sections: [], narration: '', refs: []
             })
           } else if (ev.type === 'clarify') {
-            setClarifyPending({ q: ev.question, field: ev.field })
+            setClarifyPending({ q: ev.question, field: ev.field ?? '' })
           } else if (ev.type === 'plan') {
             setTurns((tt) => {
               const n = [...tt]
@@ -1623,9 +1730,16 @@ export function AiRail(): React.JSX.Element {
                       {turn.clarify.map((cq, ci) => (
                         <div key={ci} className="cl-line">{cq}</div>
                       ))}
+                      {turn.clarifyOptions && turn.clarifyOptions.length > 0 && (
+                        <div className="cl-options">
+                          {turn.clarifyOptions.map((op, oi) => (
+                            <button key={oi} className="follow-chip" onClick={() => void send(op, { mode: 'query' })}>{op}</button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
-                  {turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : turn.steps && !(turn.text && (turn.text.includes('不处理此类问题') || turn.text.includes('不在处理范围') || turn.text.includes('引导'))) && <ThinkPanel steps={turn.steps} />}
+                  {turn.tasks && turn.tasks.length > 0 ? <TaskFlowPanel tasks={turn.tasks} /> : (turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : turn.steps && !(turn.text && (turn.text.includes('不处理此类问题') || turn.text.includes('不在处理范围') || turn.text.includes('引导'))) && <ThinkPanel steps={turn.steps} />)}
                   {turn.manifest && <ManifestView manifest={turn.manifest} />}
                   {turn.text && !turn.isReport && (
                     <div className="ai-txt"><AiMd text={turn.text} /></div>

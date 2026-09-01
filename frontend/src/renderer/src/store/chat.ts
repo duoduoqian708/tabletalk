@@ -20,6 +20,10 @@ export interface Turn {
   steps?: { id: string; label: string; status: string; detail: string[] }[]
   subtasks?: Subtask[]
   scene?: string
+  /** 2026-09 §19.6 实时任务流：任务级树（task_/subtask_ 事件驱动） */
+  tasks?: import('@renderer/api/ai').AiTaskFlow[]
+  /** 意图澄清候选问题（点击=续问 new_question） */
+  clarifyOptions?: string[]
   pending?: boolean
   running?: boolean
   /** 报告模式 turn 标记：表明这是报告流（澄清/计划/章节走 results store.report） */

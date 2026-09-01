@@ -130,13 +130,36 @@ export type AiEvent =
   | { type: 'subtask_progress'; id: string; tool: string; delta: string }
   | { type: 'subtask_done'; id: string; tool: string; status: string; detail?: string }
   | { type: 'block'; id: string; block: Block }
+  // 任务级（2026-09 §19.6 实时任务流）
+  | { type: 'task_start'; id: string; skill: string; action: string }
+  | { type: 'task_result'; index: number; id: string; result_type: string; ok: boolean; error?: string | null; data?: Record<string, unknown> }
+  | { type: 'task_done'; id: string; ok: boolean; error?: string | null; result_type?: string }
+  | { type: 'plan_stopped'; reason: string }
   // 报告模式事件
   | { type: 'report_start'; connection: string; report_id: string; snapshot_ts: string }
-  | { type: 'clarify'; question: string; field: string }
+  | { type: 'clarify'; question: string; field?: string; options?: string[] }
   | { type: 'plan'; sections: ReportSection[] }
   | ({ type: 'section' } & ReportSectionResult)
   | { type: 'narration'; section_id: string | null; text: string; refs: ReportRef[] }
   | { type: 'report_done'; report_id: string; section_count: number }
+
+export interface AiToolLog {
+  id: string
+  tool: string
+  label: string
+  status: 'running' | 'done' | 'error'
+  logs: string[]   // 实时日志流（subtask_progress delta + 结果/错误）
+}
+export interface AiTaskFlow {
+  id: string
+  skill: string
+  action: string
+  status: 'running' | 'done' | 'error' | 'blocked'
+  result_type?: string
+  index?: number
+  error?: string | null
+  tools: AiToolLog[]
+}
 
 export interface ChatParams {
   connection_id: string
