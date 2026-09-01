@@ -865,9 +865,26 @@ export function AiRail(): React.JSX.Element {
     if (!currentId) { setDynamicSugs(null); return }
     let alive = true
     void (async () => {
+      let rt
+      try { rt = getRuntime() } catch { return }
+      if (!rt?.token) return
+      // 数据源感知快捷提问（LLM：schema+领域标签 → 贴合业务，如电商→订单/退货问题）
       try {
-        const rt = getRuntime()
-        if (!rt?.token) return
+        const sr = await fetch('/api/v1/suggestions/initial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token },
+          body: JSON.stringify({ connection_id: currentId }),
+        })
+        if (sr.ok) {
+          const sj = await sr.json() as { suggestions?: string[] }
+          if (Array.isArray(sj.suggestions) && sj.suggestions.length > 0 && alive) {
+            setDynamicSugs(sj.suggestions.slice(0, 5))
+            return
+          }
+        }
+      } catch {}
+      // 回退：标签模板（LLM 不可用/离线）
+      try {
         const r = await fetch(`/api/v1/knowledge/${currentId}/tags`, { headers: { 'X-TableTalk-Token': rt.token } })
         if (!r.ok) return
         const j = await r.json() as { library: { name: string; status: string }[]; tables: Record<string, string[]> }
