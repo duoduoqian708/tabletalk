@@ -84,11 +84,9 @@ def validate_registry() -> None:
         raise ValueError(f"工具缺 trust 元数据，启动自检失败: {missing}")
 
 
-def tool_schemas(readonly: bool = False) -> list[dict]:
-    if not readonly:
-        return list(TOOL_SCHEMAS)
-    allow = {"get_schema", "run_query", "query_audit", "ai_review"}
-    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allow]
+def tool_schemas() -> list[dict]:
+    """全量工具 schema（工具面收窄由调用方按 trust 元数据过滤，见 harness.py）。"""
+    return list(TOOL_SCHEMAS)
 
 
 async def execute_tool(

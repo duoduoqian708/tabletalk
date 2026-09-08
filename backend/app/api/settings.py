@@ -29,7 +29,6 @@ class SettingsUpdate(BaseModel):
     embedding_api_key: str | None = None
     embedding_model: str | None = None
     # 通用
-    gate_review_threshold: int | None = None
     gate_rules: dict[str, Any] | None = None
     kb_sample_rows: int | None = None
     kb_ai_annotation_samples: bool | None = None
@@ -39,6 +38,8 @@ class SettingsUpdate(BaseModel):
     # 策略与隐私（A2/B4 修复：Pydantic 缺字段导致 PUT 静默丢弃）
     policy: dict[str, Any] | None = None
     privacy_mode: str | None = None
+    # 默认数据源（连接 id；空串=清除默认）
+    default_connection: str | None = None
 
 
 @router.get("/settings")

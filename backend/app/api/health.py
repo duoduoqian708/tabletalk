@@ -29,7 +29,7 @@ async def health() -> dict:
         "ai_model": default.model or default.name,
         "ai_provider_name": default.name,
         "ai_effective_provider": effective,
-        "ai_mock_downgraded": effective == "mock" and default.provider != "mock",
+        "ai_using_mock": effective == "mock",
         "connections": len(state.connections.list()),
     }
 

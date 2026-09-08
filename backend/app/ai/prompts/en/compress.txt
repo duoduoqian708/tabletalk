@@ -1,0 +1,1 @@
+Condense the conversation history below into one sentence (English, ≤80 words). Keep only factual points, do not fabricate. Return just the summary.

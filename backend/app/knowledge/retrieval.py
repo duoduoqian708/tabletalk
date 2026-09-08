@@ -99,7 +99,12 @@ class RetrievalService:
         tokens = [t for t in re.split(r"[\s,，。；;：:、/\\|()（）]+", (query or "").lower()) if t]
         q = (query or "").lower()
         tgt = (table or "").lower()
-        qvec = await emb.embed(query) if emb and query else None
+        # 嵌入失败降级词法（与 _vector_route_impl 对齐）：向量端点抖动不阻断检索
+        try:
+            qvec = await emb.embed(query) if emb and query else None
+        except Exception as e:
+            logger.warning("[kb.retrieve] conn=%s 查询向量失败，降级词法检索：%s", conn_id, e)
+            qvec = None
         vec_scores = self._vector_store(conn_id).scores_all(qvec, collection="table") if qvec is not None else {}
 
         texts: dict[str, str] = {}
@@ -167,7 +172,7 @@ class RetrievalService:
                                  synthesize_text_fn: Any = None) -> list[tuple[str, float]]:
         """向量通道：问题向量 × 表级 chunk（与 retrieve 同一 chunk 集）→ top-K 表。
 
-        语义召回不依赖标签覆盖率；离线 HashingEmbedder 只桥接表面重叠，
+        语义召回不依赖标签覆盖率；向量模型需通过 API 接入，
         因此叠加词面加权作为底线：表名/字段/注释与问题同词 → 加分
         （配 API 真语义 embedder 时语义分数自动更强）。
         """
@@ -213,7 +218,7 @@ class RetrievalService:
             tables=facade.semantic_store._tables,
             table_tags=facade.semantic_store._table_tags,
             synced_at=facade._synced_at.get(conn_id, ""),
-            synthesize_text_fn=facade.semantic_store._synthesize_table_text,
+            synthesize_text_fn=facade.semantic_store.table_vector_text,
             table_payload_fn=facade.semantic_store._table_payload,
         )
 
@@ -242,7 +247,7 @@ class RetrievalService:
             tables=facade.semantic_store._tables,
             emb=facade._emb,
             reembed_fn=facade.reembed_if_needed,
-            synthesize_text_fn=facade.semantic_store._synthesize_table_text,
+            synthesize_text_fn=facade.semantic_store.table_vector_text,
         )
 
 
@@ -299,14 +304,16 @@ class RetrievalService:
                 "excluded": tk.name in excluded,
                 "ddl": tk.ddl,
                 "columns": cols,
-                "vector_text": facade.semantic_store._synthesize_table_text(conn_id, tk),
+                "vector_text": facade.semantic_store.table_vector_text(conn_id, tk),
                 "vector_override": tk.vector_override or None,
+                "vector_profile": tk.vector_profile or None,
+                "proposed_profile": tk.proposed_profile or None,
             })
 
         return {
             "tables": tables_out,
             "graph": {
-                # 2026-09：走 diff 计算（red/removed 三色）而非裸 _grph
+                # 走 diff 计算（red/removed 三色）
                 **facade.graph(conn_id),
                 "excluded": sorted(excluded),
                 "layout": facade.graph_layout(conn_id),
@@ -316,7 +323,7 @@ class RetrievalService:
             "tag_draft_count": sum(1 for v in lib.values() if v.get("status") == "draft"),
             "sample_cols": sum(len(cols) for cols in facade.semantic_store._samples.get(conn_id, {}).values()),
             "embedding_provider": (
-                facade._runtime.get().embedding_provider if facade._runtime else "hash"
+                facade._runtime.get().embedding_provider if facade._runtime else ""
             ),
         }
 

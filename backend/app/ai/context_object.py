@@ -28,9 +28,3 @@ class Context:
 
     def set_result(self, task_id: str, result: Any) -> None:
         self.task_results[task_id] = result
-
-    @property
-    def current_trust(self) -> str:
-        if self.current_task is None:
-            return "read"
-        return self.current_task.trust

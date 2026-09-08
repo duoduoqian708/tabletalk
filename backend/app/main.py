@@ -8,14 +8,13 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, skills, suggestions, system, tasks, usage
+from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, suggestions, system, tasks, usage
 from app.config import get_env, get_token
 from app.state import get_state
 
@@ -40,6 +39,12 @@ def _ensure_demo_db() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state = get_state()
+    # 进程启动标记（观测用）：与 uvicorn 的 restart 行配对——构建中断排查时，
+    # 若「连接断开时刻」附近出现本行，即进程被重启（如 --reload 热重载）杀掉了任务/连接
+    logging.getLogger(__name__).info(
+        "[lifespan] sidecar 启动 pid=%s port=%s data_dir=%s",
+        os.getpid(), get_env().port, get_env().data_dir,
+    )
     get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/tabletalk.token，供 /bootstrap 读取
     _ensure_demo_db()
     from app.ai.tools import validate_registry
@@ -87,6 +92,17 @@ def create_app() -> FastAPI:
         return resp
 
     @app.middleware("http")
+    async def locale_middleware(request: Request, call_next):
+        """从 X-Locale 头读取语言偏好，写入 contextvar 供 prompts.render() 使用。"""
+        from app.ai.prompts import _LOCALE
+        locale = request.headers.get("X-Locale", "")
+        old = _LOCALE.set(locale if locale else None)
+        try:
+            return await call_next(request)
+        finally:
+            _LOCALE.reset(old)
+
+    @app.middleware("http")
     async def sidecar_token_guard(request: Request, call_next):
         """全接口强鉴权：除 health 与 POST /auth/login 外均需登录（为企业版预留 per-user 钩子）。"""
         path = request.url.path
@@ -123,14 +139,24 @@ def create_app() -> FastAPI:
             pass
         return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
 
+    from app.api import results as results_api
+    from app.api import plans as plans_api
+
     for r in (health.router, connections.router, schema.router, query.router,
-              audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router,
-              tasks.router, cost.router, suggestions.router, safety.router, system.router):
+              audit.router, settings.router, ai.router, knowledge.router, questions.router, auth.router, approvals.router, usage.router,
+              tasks.router, cost.router, suggestions.router, safety.router, system.router,
+              results_api.router, plans_api.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）
     web_dist = get_env().web_dist
     if web_dist.is_dir():
+        # /assets/ 单独挂载（2026-09 修复）：无 html=True → 旧 hash 资源请求真 404，
+        # 不再被 SPA fallback 用 index.html 冒充 JS（浏览器执行 HTML → 白屏 → 全站 fetch 失败）。
+        # 重 build 清空 assets 后，持旧 index.html 的客户端会拿到干净的 404 而非假 200。
+        assets_dir = web_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="web-assets")
         app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
     else:
 

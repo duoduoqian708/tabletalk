@@ -103,9 +103,6 @@ class Settings:
     # 连接池：PG/MySQL 每连接并发句柄数（SQLite 恒为 1，单连接串行）
     pool_size: int = 3
 
-    # 闸门默认参数（可被 runtime settings 覆盖）
-    gate_review_threshold: int = 1000
-
     # 影响行数预览（COUNT 同 WHERE）超时秒数；超时返回 None（"无法预估"）
     gate_preview_timeout: float = 3.0
 
@@ -113,7 +110,7 @@ class Settings:
     sidecar_token: str = ""
 
     # 知识库（可被 runtime settings 覆盖）
-    embedding_provider: str = "hash"
+    embedding_provider: str = ""
     embedding_base_url: str = ""
     embedding_model: str = "bge-m3"
     embedding_api_key: str = ""
@@ -135,7 +132,7 @@ class Settings:
             port=int(os.environ.get("TABLETALK_PORT", "8777")),
             data_dir=_expand(os.environ.get("TABLETALK_DATA_DIR", "~/.tabletalk")),
             web_dist=Path(os.environ.get("TABLETALK_WEB_DIST", "../frontend/dist")),
-            ai_provider=os.environ.get("TABLETALK_AI_PROVIDER", "mock"),
+            ai_provider=os.environ.get("TABLETALK_AI_PROVIDER", ""),
             ai_base_url=os.environ.get("TABLETALK_AI_BASE_URL", ""),
             ai_api_key=os.environ.get("TABLETALK_AI_API_KEY", ""),
             ai_model=os.environ.get("TABLETALK_AI_MODEL", "deepseek-v4-flash"),
@@ -144,10 +141,9 @@ class Settings:
             ai_timeout=float(os.environ.get("TABLETALK_AI_TIMEOUT", "120")),
             query_max_rows=int(os.environ.get("TABLETALK_QUERY_MAX_ROWS", "1000")),
             pool_size=int(os.environ.get("TABLETALK_POOL_SIZE", "3")),
-            gate_review_threshold=int(os.environ.get("TABLETALK_GATE_REVIEW_THRESHOLD", "1000")),
             gate_preview_timeout=float(os.environ.get("TABLETALK_GATE_PREVIEW_TIMEOUT", "3.0")),
             sidecar_token=os.environ.get("TABLETALK_SIDECAR_TOKEN", ""),
-            embedding_provider=os.environ.get("TABLETALK_EMBEDDING_PROVIDER", "hash"),
+            embedding_provider=os.environ.get("TABLETALK_EMBEDDING_PROVIDER", ""),
             embedding_base_url=os.environ.get("TABLETALK_EMBEDDING_BASE_URL", ""),
             embedding_model=os.environ.get("TABLETALK_EMBEDDING_MODEL", "bge-m3"),
             embedding_api_key=os.environ.get("TABLETALK_EMBEDDING_API_KEY", ""),

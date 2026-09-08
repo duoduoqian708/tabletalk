@@ -19,9 +19,10 @@ router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
 
 class RetainRequest(BaseModel):
-    audit: int | None = None  # 审计日志保留天数
-    chat: int | None = None   # 聊天会话保留天数
-    cost: int | None = None   # 成本日志保留天数
+    audit: int | None = None    # 审计日志保留天数
+    chat: int | None = None     # 聊天会话保留天数
+    cost: int | None = None     # 成本日志保留天数
+    results: int | None = None  # 报告结果保留最新 N 条（按总数，非天数）
 
 
 def _cutoff_iso(days: int) -> str:
@@ -81,6 +82,8 @@ async def retain(req: RetainRequest) -> dict[str, Any]:
         deleted["chat"] = _delete_chat(data_dir / "chat.db", _cutoff_iso(req.chat))
     if req.cost:
         deleted["cost"] = _delete_cost(data_dir / "cost.db", _cutoff_iso(req.cost))
+    if req.results:
+        deleted["results"] = state.results.cleanup(keep_n=req.results)
     # 操作本身留痕（可追溯清理行为）
     try:
         import json as _json

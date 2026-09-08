@@ -19,7 +19,7 @@ async def _graph_write(state: "AppState", args: dict[str, Any], conn_id: str, in
         return ToolOutcome(result={"ok": False, "error": "需要 action, source, target 参数"})
 
     if action == "add":
-        relation = (args or {}).get("relation") or "user"   # 手工连线 → kind=user
+        relation = (args or {}).get("relation") or "user"   # 手工连线 → source=user
         source_col = (args or {}).get("source_col")
         target_col = (args or {}).get("target_col")
         try:

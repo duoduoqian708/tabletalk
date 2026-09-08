@@ -36,17 +36,8 @@ async def initial_suggestions(body: InitialRequest, request) -> dict[str, Any]:
 
     tags_str = "、".join(tag_names) if tag_names else "（暂无领域标签）"
 
-    prompt = (
-        f"你是 TableTalk 的数据库助手。当前数据库结构：\n{schema_text[:2000]}\n\n"
-        f"领域标签：{tags_str}\n\n"
-        "请根据以上数据库结构和业务领域，生成 4-5 个用户最可能想问的问题。\n"
-        "要求：\n"
-        "- 问题必须与当前数据库的业务高度相关\n"
-        "- 覆盖不同场景：查数据、看结构、统计分析\n"
-        "- 语言自然，像真人会问的问题\n"
-        "- 不要问与数据库无关的问题\n"
-        '只返回 JSON 数组：["问题1", "问题2", ...]'
-    )
+    from app.ai.prompts import render
+    prompt = render("suggestions_initial", schema_text=schema_text[:2000], tags=tags_str)
 
     try:
         from app.ai import gateway as gw
@@ -56,7 +47,15 @@ async def initial_suggestions(body: InitialRequest, request) -> dict[str, Any]:
             pass
         provider_cfg = resolve_provider_cfg(state, _Req())
         provider = gw.build_provider(provider_cfg)
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        # 中央记账：llm_log + cost + egress 审计（铁律4——每次模型调用可审计，不漏）
+        try:
+            conn_name = state.connections.get(conn_id).name
+        except Exception:
+            conn_name = conn_id
+        resp = await provider.chat(
+            [{"role": "user", "content": prompt}], tools=None,
+            ctx={"conn_id": conn_id, "connection": conn_name, "skill": "suggestions_initial",
+                 "source": "egress", "status": "egress", "include_data": False})
         import json, re
         text = (getattr(resp, "content", "") or "").strip()
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE | re.DOTALL).strip()

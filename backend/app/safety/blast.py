@@ -29,7 +29,7 @@ def build_blast(
             else:
                 graph = raw_graph.get(conn_id, {}) if isinstance(raw_graph, dict) else {}
         edges = graph.get("edges", []) if isinstance(graph, dict) else []
-        fk_edges = [e for e in edges if e.get("kind") == "fk"]
+        fk_edges = [e for e in edges if e.get("source") == "fk"]
     except Exception:
         fk_edges = []
 
@@ -40,7 +40,6 @@ def build_blast(
     cascade: list[dict[str, Any]] = []
     try:
         seeds = set(direct_tables)
-        # 构建邻接表（带边信息）
         adj: dict[str, list[dict[str, Any]]] = {}
         for e in fk_edges:
             adj.setdefault(e["from"], []).append(e)

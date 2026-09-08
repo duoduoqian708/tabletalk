@@ -66,6 +66,8 @@ class KbSnapshot:
     concepts: list[dict] = field(default_factory=list)  # 概念字典条目（T7）
     table_filters: list[dict] = field(default_factory=list)  # 表级过滤器（T8）
     fewshot: list[dict] = field(default_factory=list)  # few-shot 库（T10）
+    annotation_cache: dict[str, dict] = field(default_factory=dict)  # 表名 -> {input_hash, items, created_at}（注释缓存）
+    round: dict = field(default_factory=dict)  # 本轮审核对比区（baseline/diff/tags_new/failed_tables，重启恢复用）
 
 
 def _normalize_edge(e: dict) -> dict:
@@ -73,9 +75,12 @@ def _normalize_edge(e: dict) -> dict:
 
     - cols：JSON 字符串解析为列对列表；缺失时从 from_col/to_col 合成
       （旧库迁移映射，文档 T3 §5）
-    - provenance：旧 kind=user 边回填 human；fk 边缺省 declared_fk
+    - 旧 kind 键统一改名 source（2026-09：来源字段正名，兼容旧工件读取）
+    - provenance：旧 source=user 边回填 human；fk 边缺省 declared_fk
     - guard/confidence/cardinality/reason 默认值回填
     """
+    if "kind" in e and "source" not in e:
+        e["source"] = e.pop("kind")
     e.setdefault("cardinality", "n:1")
     e.setdefault("reason", "")
     e.setdefault("guard", None)
@@ -88,10 +93,9 @@ def _normalize_edge(e: dict) -> dict:
             "fk": "declared_fk",
             "user": "human",
             "llm": "human",
-            "overlap": "value_overlap",
             "naming": "naming_inference",
             "query_log": "query_log",
-        }.get(e.get("kind"), "")
+        }.get(e.get("source", ""), "")
     raw_cols = e.get("cols")
     if isinstance(raw_cols, str):
         # SQLite TEXT 列读出是 JSON 字符串（v3 存储 bug 的历史数据也在此修复）
@@ -184,6 +188,8 @@ class JsonStorage:
                 snap.concepts = data.get("concepts", [])
                 snap.table_filters = data.get("table_filters", [])
                 snap.fewshot = data.get("fewshot", [])
+                snap.annotation_cache = data.get("annotation_cache", {})
+                snap.round = data.get("round", {})
             except Exception as e:
                 logger.warning("[kb.storage] %s artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
         return snap
@@ -219,6 +225,8 @@ class JsonStorage:
                 "concepts": snap.concepts,
                 "table_filters": snap.table_filters,
                 "fewshot": snap.fewshot,
+                "annotation_cache": snap.annotation_cache,
+                "round": snap.round,
             }, ensure_ascii=False),
             encoding="utf-8",
         )
@@ -280,15 +288,16 @@ CREATE TABLE IF NOT EXISTS version_archive (
 CREATE INDEX IF NOT EXISTS idx_va_lookup ON version_archive(table_name, column_name, batch_ts);
 """
 
-# T3 §3：edges 新表（复合主键 + 关系列；guard 归一化为 '' 存储）。独立于 _SCHEMA：
+# T3 §3：edges 新表（复合主键 + 来源列；guard 归一化为 '' 存储）。独立于 _SCHEMA：
 # 旧库先走 _migrate_edges 重建（索引依赖新列名，不能在旧表上直接建）。
+# 2026-09：来源字段正名 relation→source（旧库经 _init RENAME COLUMN 迁移）。
 _EDGES_DDL = """
 CREATE TABLE IF NOT EXISTS edges (
   source_table TEXT NOT NULL,
   target_table TEXT NOT NULL,
   cols TEXT NOT NULL,
   cardinality TEXT DEFAULT 'n:1',
-  relation TEXT DEFAULT 'fk',
+  source TEXT DEFAULT 'fk',
   confidence REAL DEFAULT 1.0,
   provenance TEXT DEFAULT 'declared_fk',
   guard TEXT DEFAULT '',
@@ -329,9 +338,6 @@ class SqliteStorage:
         except Exception:
             return False
 
-    def vec_available(self) -> bool:
-        return self._vec_ok
-
     def exists(self) -> bool:
         return self._path.exists()
 
@@ -353,10 +359,14 @@ class SqliteStorage:
         if "archived" not in cols:
             conn.execute("ALTER TABLE docs ADD COLUMN archived INTEGER DEFAULT 0")
             conn.commit()
-        # edges（T3 §5）：旧 schema（有 from_table 无 source_table）→ 重建新表（复合主键/关系列/guard 归一化）
+        # edges（T3 §5）：旧 schema（有 from_table 无 source_table）→ 重建新表（复合主键/来源列/guard 归一化）
         ecols = {row["name"] for row in conn.execute("PRAGMA table_info(edges)")}
         if ecols and "source_table" not in ecols:
             self._migrate_edges(conn)
+        elif "relation" in ecols and "source" not in ecols:
+            # 2026-09：来源字段正名 relation→source（新表旧列 RENAME COLUMN 迁移）
+            conn.execute("ALTER TABLE edges RENAME COLUMN relation TO source")
+            conn.commit()
         conn.executescript(_EDGES_DDL)
         # 旧库迁移：tags 表补 color 列（标签颜色后端持久化，已存在则跳过）
         tcols = {row["name"] for row in conn.execute("PRAGMA table_info(tags)")}
@@ -372,7 +382,7 @@ class SqliteStorage:
 
         流程（T3 §5）：读旧行 → 构造 GraphEdge → 备份（VACUUM INTO .bak）→ DROP+CREATE → INSERT OR REPLACE。
         """
-        from app.knowledge.graph.model import RELATION_FK, GraphEdge
+        from app.knowledge.graph.model import SOURCE_FK, GraphEdge
 
         rows = [dict(r) for r in conn.execute("SELECT * FROM edges")]
         bak = str(self._path) + ".bak"
@@ -390,15 +400,15 @@ class SqliteStorage:
                 e = dict(r)
                 e["from"] = e.pop("from_table", None) or e.get("from", "")
                 e["to"] = e.pop("to_table", None) or e.get("to", "")
-                _normalize_edge(e)  # 旧列对 → 合成 cols；user→human 映射
+                _normalize_edge(e)  # 旧列对 → 合成 cols；旧 kind → source；user→human 映射
                 if not e.get("cols") or not e.get("from") or not e.get("to"):
                     continue
                 self._insert_edge(conn, GraphEdge(
                     source_table=e["from"], target_table=e["to"],
                     cols=[tuple(p) for p in e["cols"]],
                     cardinality=e.get("cardinality") or "n:1",
-                    # 旧 kind=llm（已确认的 LLM draft 边）→ 归一化为 user（枚举内，human 确认语义）
-                    relation="user" if e.get("kind") == "llm" else (e.get("kind") or RELATION_FK),
+                    # 旧 source=llm（已确认的 LLM draft 边）→ 归一化为 user（枚举内，human 确认语义）
+                    source="user" if e.get("source") == "llm" else (e.get("source") or SOURCE_FK),
                     confidence=float(e.get("confidence") or 1.0),
                     provenance=e.get("provenance") or "declared_fk",
                     guard=e.get("guard"),
@@ -416,11 +426,11 @@ class SqliteStorage:
         """GraphEdge → 新 edges 表（INSERT OR REPLACE 幂等；guard 归一化 ''；cols JSON 保序）。"""
         conn.execute(
             "INSERT OR REPLACE INTO edges "
-            "(source_table, target_table, cols, cardinality, relation, confidence, provenance, guard, weight, reason, metadata) "
+            "(source_table, target_table, cols, cardinality, source, confidence, provenance, guard, weight, reason, metadata) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (e.source_table, e.target_table,
              json.dumps([list(p) for p in e.cols], ensure_ascii=False),
-             e.cardinality or "n:1", e.relation or "fk",
+             e.cardinality or "n:1", e.source or "fk",
              e.confidence if e.confidence is not None else 1.0,
              e.provenance or "",
              e.guard or "",
@@ -474,7 +484,7 @@ class SqliteStorage:
                     snap.edges.append({
                         "from": e["source_table"], "from_col": first[0],
                         "to": e["target_table"], "to_col": first[1],
-                        "kind": e["relation"], "weight": e.get("weight") or 1.0,
+                        "source": e["source"], "weight": e.get("weight") or 1.0,
                         "shared": None,
                         "cardinality": e.get("cardinality") or "n:1",
                         "reason": e.get("reason") or "",
@@ -507,6 +517,12 @@ class SqliteStorage:
                 llm_edges_json = self._meta(conn, "llm_graph_edges")
                 if llm_edges_json:
                     snap.llm_graph_edges = json.loads(llm_edges_json)
+                ann_json = self._meta(conn, "annotation_cache")
+                if ann_json:
+                    snap.annotation_cache = json.loads(ann_json)
+                round_json = self._meta(conn, "round_json")
+                if round_json:
+                    snap.round = json.loads(round_json)
                 concepts_json = self._meta(conn, "concepts")
                 if concepts_json:
                     self._migrate_meta_to_table(conn, "concepts", json.loads(concepts_json))
@@ -652,6 +668,10 @@ class SqliteStorage:
                 conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (json.dumps(snap.schema, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('samples', ?)", (json.dumps(snap.samples, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('tables', ?)", (json.dumps(snap.tables, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('annotation_cache', ?)",
+                             (json.dumps(snap.annotation_cache, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('round_json', ?)",
+                             (json.dumps(snap.round, ensure_ascii=False),))
                 # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）
                 if self._vec_ok:
                     conn.execute("DELETE FROM doc_vec")
@@ -675,10 +695,10 @@ class SqliteStorage:
   SELECT '{table}', 0
   UNION
   SELECT e.target_table, r.depth + 1 FROM edges e JOIN reach r ON e.source_table = r.name
-    WHERE e.relation = 'fk' AND r.depth < {depth}
+    WHERE e.source = 'fk' AND r.depth < {depth}
   UNION
   SELECT e.source_table, r.depth + 1 FROM edges e JOIN reach r ON e.target_table = r.name
-    WHERE e.relation = 'fk' AND r.depth < {depth}
+    WHERE e.source = 'fk' AND r.depth < {depth}
 )
 SELECT DISTINCT name FROM reach ORDER BY name;"""
 
@@ -749,29 +769,6 @@ SELECT DISTINCT name FROM reach ORDER BY name;"""
                         "id": r["id"], "batch_ts": r["batch_ts"], "version": r["version"],
                         "comment": p.get("comment", ""), "values": p.get("values", ""),
                         "example": p.get("example", ""), "status": p.get("status", ""),
-                    })
-                return out
-            finally:
-                con.close()
-
-    def table_history(self, table: str) -> list[dict[str, Any]]:
-        """某表注释的历史版本（倒序）：[{id, batch_ts, version, comment, ddl, vector_override}]。"""
-        with self._lock:
-            con = self._conn()
-            try:
-                rows = con.execute(
-                    "SELECT id, batch_ts, version, payload FROM version_archive "
-                    "WHERE kind='table' AND table_name=? "
-                    "ORDER BY version DESC, batch_ts DESC",
-                    (table,),
-                ).fetchall()
-                out = []
-                for r in rows:
-                    p = json.loads(r["payload"])
-                    out.append({
-                        "id": r["id"], "batch_ts": r["batch_ts"], "version": r["version"],
-                        "comment": p.get("comment", ""), "ddl": p.get("ddl", ""),
-                        "vector_override": p.get("vector_override", ""),
                     })
                 return out
             finally:

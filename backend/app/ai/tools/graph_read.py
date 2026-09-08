@@ -10,13 +10,16 @@ if TYPE_CHECKING:
 
 
 def _to_relation_list(edges: list[dict]) -> list[dict[str, Any]]:
-    """知识库图边 → 工具兼容结构 {source, target, relation, source_col, target_col}。"""
+    """知识库图边 → 工具兼容结构 {source, target, relation, source_col, target_col}。
+
+    relation 字段承载边的来源（fk/naming/llm/query_log/user），供 AI 判断可信度。
+    """
     out = []
     for e in edges:
         out.append({
             "source": e.get("from", ""),
             "target": e.get("to", ""),
-            "relation": e.get("kind", "related"),
+            "relation": e.get("source", "related"),
             "source_col": e.get("from_col"),
             "target_col": e.get("to_col"),
             "cardinality": e.get("cardinality", "n:1"),

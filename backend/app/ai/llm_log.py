@@ -212,34 +212,6 @@ class LlmCallLog:
             finally:
                 con.close()
 
-    def list_calls(
-        self,
-        *,
-        limit: int = 20,
-        offset: int = 0,
-        conn_id: str | None = None,
-        model: str | None = None,
-    ) -> list[dict]:
-        where_parts: list[str] = []
-        params: list = []
-        if conn_id:
-            where_parts.append("conn_id = ?")
-            params.append(conn_id)
-        if model:
-            where_parts.append("model = ?")
-            params.append(model)
-        where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
-        with self._lock:
-            con = self._conn()
-            try:
-                rows = con.execute(
-                    f"SELECT * FROM llm_call_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",
-                    params + [limit, offset],
-                ).fetchall()
-                return [dict(r) for r in rows]
-            finally:
-                con.close()
-
     def count(self, *, conn_id: str | None = None) -> int:
         where, params = "", []
         if conn_id:

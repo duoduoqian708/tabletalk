@@ -20,6 +20,7 @@ from app.ai.tools.registry import (
 from app.ai.tools import schema_tools, sql, query_audit, ai_review  # noqa: F401
 from app.ai.tools import kb_read, kb_write, graph_read, graph_write  # noqa: F401
 from app.ai.tools import suggest_followup, task_dev  # noqa: F401
+from app.ai.tools import interaction  # noqa: F401
 
 schema_tools.register()
 sql.register()
@@ -31,7 +32,7 @@ graph_read.register()
 graph_write.register()
 suggest_followup.register()
 task_dev.register()
+interaction.register()
 
-# 兼容旧命名
-TOOL_SCHEMAS = tool_schemas(readonly=False)
-TOOL_SCHEMAS_READONLY = tool_schemas(readonly=True)
+# 引擎合一后工具面单一事实来源 = trust 元数据过滤（harness.py）；旧的 readonly 硬编码白名单已删（评审 H4）
+TOOL_SCHEMAS = tool_schemas()

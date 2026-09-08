@@ -1,0 +1,5 @@
+Based on the aggregate query results below, write the English summary narrative for this report.
+Every number in the narrative must come from the real results below, and annotate the source with [r<id>] after each number.
+Analysis goal: __QUESTION__
+__BLOCKS__
+Output 2–4 paragraphs of English narrative. Do not repeat tables.

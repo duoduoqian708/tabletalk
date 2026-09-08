@@ -6,7 +6,6 @@ from app.core.timeutil import utcnow_iso
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from app.core.system_db import get_conn, init_system_db
 

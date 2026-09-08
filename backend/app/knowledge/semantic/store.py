@@ -10,6 +10,12 @@ from app.knowledge.docs import KnowledgeDoc
 
 logger = logging.getLogger(__name__)
 
+# 向量文本体系版本：进 emb 指纹，改动此值 → 全库自动重嵌（reembed_if_needed）
+SYNTH_VERSION = "v3"
+# 向量文本零代码拼接（2026-09 裁决）：唯一来源优先级
+#   vector_override（人工覆盖）> vector_profile（AI 表画像，审核确认后）> 空。
+# 空 = 该表本轮不生成新向量（保留旧向量继续可用），检索走词法+图谱通道。
+
 
 class SemanticStore:
     """语义存储：负责表知识、标签、文档等"""
@@ -22,6 +28,82 @@ class SemanticStore:
         self._samples: dict[str, dict[str, dict[str, list[Any]]]] = {}  # conn -> table -> column -> [values]
         self._schema: dict[str, dict[str, Any]] = {}  # conn -> 表/列/外键快照
         self._user: dict[str, list[KnowledgeDoc]] = {}  # conn -> 用户手写文档
+        # 本轮构建对比区（2026-09 审核重构，内存态；确认启用/放弃时清除）：
+        # baseline = 旧版表知识（对比层"旧"侧）；diff = 结构增删改；tags_new = 全量划分的标签全集
+        self._round: dict[str, dict[str, Any]] = {}
+
+    # ---------- 本轮对比区（审核页数据源） ----------
+    def set_round(self, conn_id: str, **kv: Any) -> None:
+        self._round.setdefault(conn_id, {}).update(kv)
+
+    def get_round(self, conn_id: str) -> dict[str, Any]:
+        return self._round.get(conn_id, {})
+
+    def clear_round(self, conn_id: str) -> None:
+        self._round.pop(conn_id, None)
+
+    def round_table_baseline(self, conn_id: str, table: str) -> dict[str, Any] | None:
+        """单表旧版知识（对比层"旧"侧）：{comment, ddl, columns: {col: {comment, values, example}}}。"""
+        base = (self.get_round(conn_id).get("baseline") or {}).get("tables", {}).get(table)
+        return dict(base) if base else None
+
+    def snapshot_round_baseline(self, conn_id: str) -> None:
+        """构建发起时快照当前生效知识（对比基线）。必须在 _sync_table_shells/提案覆盖之前调用。"""
+        tabs = self._tables.get(conn_id, {})
+        if not tabs:
+            return  # 首建无旧版 → baseline 为空，对比层全走 new
+        tables: dict[str, Any] = {}
+        for name, tk in tabs.items():
+            tables[name] = {
+                "comment": tk.comment,
+                "ddl": tk.ddl,
+                "columns": {cn: {"comment": ci.comment, "values": ci.values, "example": ci.example}
+                            for cn, ci in tk.columns.items()},
+            }
+        self.set_round(conn_id, baseline={"tables": tables})
+
+    def apply_round_tags(self, conn_id: str, keep_old: list[str], adopt_new: list[str],
+                         save_conn_fn: Any = None) -> dict[str, int]:
+        """标签版本制应用（审核页两栏混选，2026-09 语义修订）：
+
+        应用后标签库 = 用户勾选结果：新版勾选（adopt_new）∪ 旧版勾选（keep_old），其余全部淘汰。
+        - adopt_new：按新版划分生效——不存在则创建；**同名已存在也采用新版描述**（该怎样就是怎样，
+          与旧集合无纠缠）；成员表按 round 划分覆盖绑定；
+        - keep_old：旧 confirmed 勾选保留（纯对比辅助，勾选才回归）；
+        - 未被勾选的一切（旧 confirmed + 本轮 draft）→ 删除 + 全表解绑。
+        """
+        round_new = {t.get("name"): t for t in (self.get_round(conn_id).get("tags_new") or [])}
+        lib = self._tags.setdefault(conn_id, {})
+        binds = self._table_tags.setdefault(conn_id, {})
+        keep = set(keep_old) | set(adopt_new)
+        for nm in adopt_new:
+            desc = (round_new.get(nm) or {}).get("description", "")
+            if nm in lib:
+                lib[nm]["status"] = "confirmed"
+                if desc:
+                    lib[nm]["description"] = desc  # 同名也采用新版描述（按新结果应用）
+            else:
+                lib[nm] = {"description": desc, "status": "confirmed"}
+            # 表绑定按新划分覆盖：members 之外的旧挂点解绑，members 内补挂
+            members = set((round_new.get(nm) or {}).get("tables") or [])
+            for tbl in list(binds.keys()):
+                if nm in binds[tbl] and tbl not in members:
+                    binds[tbl] = [x for x in binds[tbl] if x != nm]
+            for tbl in members:
+                lst = binds.setdefault(tbl, [])
+                if nm not in lst:
+                    lst.append(nm)
+        removed = 0
+        for nm in [n for n, v in list(lib.items()) if v.get("status") == "confirmed" and n not in keep]:
+            del lib[nm]
+            removed += 1
+        for nm in [n for n, v in list(lib.items()) if v.get("status") == "draft" and n not in set(adopt_new)]:
+            del lib[nm]
+        for tbl in list(binds.keys()):
+            binds[tbl] = [t for t in binds[tbl] if t in lib]
+        if save_conn_fn:
+            save_conn_fn(conn_id)
+        return {"adopted": len(adopt_new), "kept_old": len([k for k in keep_old if k in lib]), "removed": removed}
 
     # ---------- 自动抽取 ----------
     @staticmethod
@@ -111,44 +193,13 @@ class SemanticStore:
                 if cname not in alive:
                     del tk.columns[cname]
 
-    # ---------- 一表一 chunk（spec §4 向量合一） ----------
-    def _synthesize_table_text(self, conn_id: str, tk: Any) -> str:
-        """合成可读表描述（embedding 文本，spec §4 格式）。
+    # ---------- 一表一 chunk（spec §4 向量合一；文本零代码拼接） ----------
+    def table_vector_text(self, conn_id: str, tk: Any) -> str:
+        """表向量文本（embedding 唯一来源）：人工覆盖 > AI 画像 > 空。
 
-        - confirmed 列知识（comment/values/example）优先入文；
-        - 未确认仅结构壳（类型 + 库注释兜底）；未授权构建天然无 values/example；
-        - 表注释取 confirmed 的 AI 注释，否则回退 db_comment。
-        例：orders，订单表。字段有：id：主键，订单ID，示例为123；status：订单状态，可选值：S=已发货、R=已退货
+        空 = 无向量文本（画像未生成且无人工覆盖）：调用方跳过嵌入、保留旧向量。
         """
-        # 人工覆盖优先：编辑过向量化片段 → 直接用它（空串视为清空覆盖回落到合成）
-        if tk.vector_override:
-            return tk.vector_override
-        header = tk.comment if tk.status == "confirmed" else tk.db_comment
-        rows: list[str] = []
-        for ci in tk.columns.values():
-            parts = [ci.name]
-            marks = []
-            if ci.pk:
-                marks.append("主键")
-            if ci.fk:
-                marks.append("外键")
-            if marks:
-                parts.append("、".join(marks))
-            if ci.status == "confirmed":
-                if ci.comment:
-                    parts.append(ci.comment)
-                if ci.values:
-                    parts.append(f"可选值：{ci.values}")
-                if ci.example:
-                    parts.append(f"示例为{ci.example}")
-            else:
-                if ci.type:
-                    parts.append(ci.type)
-                if ci.db_comment:
-                    parts.append(ci.db_comment)
-            rows.append(f"{parts[0]}：" + "，".join(parts[1:]) if len(parts) > 1 else parts[0])
-        head = f"{tk.name}，{header}" if header else tk.name
-        return f"{head}。字段有：{'；'.join(rows) or '无'}"
+        return tk.vector_override or tk.vector_profile or ""
 
     def _table_payload(self, conn_id: str, tk: Any, synced_at: str = "") -> dict[str, Any]:
         """表级 chunk payload（spec §4）：结构化信息（渲染在 T4，此处仅存储透传）。"""
@@ -168,8 +219,8 @@ class SemanticStore:
     def annotate_drafts(self, conn_id: str, items: list[dict[str, Any]], save_conn_fn: Any = None) -> int:
         """AI 注释提案入库（2026-09 修订：写 proposed_*，当前生效值不动）。
 
-        items: [{table, column|None, comment, values?, example?}]。
-        - 列项 -> ColumnInfo.proposed_*；表级 -> TableKnowledge.proposed_comment；
+        items: [{table, column|None, comment, values?, example?, profile?}]。
+        - 列项 -> ColumnInfo.proposed_*；表级 -> TableKnowledge.proposed_comment / proposed_profile；
         - 当前 comment/status 完全不受影响（对比按钮/保持当前的基础）；
         - 表/列不在库中（敏感过滤/已删除）忽略。
         """
@@ -189,6 +240,8 @@ class SemanticStore:
                 if ci is None:
                     continue
                 ci.proposed_comment = comment
+                if it.get("core"):
+                    ci.core = True  # AI 提名关键列（保留到确认后；重提案按当轮输出刷新）
                 new_values = str(it.get("values") or "").strip()
                 new_example = str(it.get("example") or "").strip()[:60]
                 # 只在有产出时覆盖提案；无产出保留空（apply 时空项不动当前值）
@@ -198,20 +251,24 @@ class SemanticStore:
                     ci.proposed_example = new_example
             else:
                 tk.proposed_comment = comment
-                new_values = str(it.get("values") or "").strip()
-                if new_values:
-                    tk_proposed_values = new_values  # noqa: F841 - 表级暂无 values 字段，保留扩展位
+                new_profile = str(it.get("profile") or "").strip()
+                if new_profile:
+                    tk.proposed_profile = new_profile  # AI 表画像提案（confirm 时提升为 vector_profile）
             applied += 1
         if applied and save_conn_fn:
             save_conn_fn(conn_id)
         return applied
 
     async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None,
-                      save_conn_fn: Any = None, reembed_fn: Any = None) -> int:
+                      save_conn_fn: Any = None, reembed_fn: Any = None,
+                      table_only: bool = False,
+                      collect_affected: list[str] | None = None) -> int:
         """确认（2026-09 修订：有提案 -> 提案提升为当前；无提案 -> 当前定稿）。
 
         column 指定 -> 单列；只给 table -> 该表及其全部列；都不给 -> 全库。
+        table_only=true -> 仅表级提案（审核页表描述 radio 独立裁决，列提案不动）。
         提案提升改变合成文本 -> 收集受影响表一次性重嵌。
+        collect_affected：调用方传入 list，就地填充实际发生变化的表名（按需嵌入用）。
         """
         tabs = self._tables.get(conn_id, {})
         targets = [tabs[table]] if table and table in tabs else (
@@ -248,6 +305,11 @@ class SemanticStore:
             if tk.status != "confirmed":
                 tk.status = "confirmed"
                 changed = True
+            if table_only:
+                # 仅表级（列提案留给字段逐项裁决）
+                if changed:
+                    affected.append(tk.name)
+                continue
             for ci in tk.columns.values():
                 if ci.has_proposal:
                     ci.apply_proposal()
@@ -265,6 +327,8 @@ class SemanticStore:
             save_conn_fn(conn_id)
         if affected and reembed_fn:
             await reembed_fn(conn_id, affected)
+        if collect_affected is not None:
+            collect_affected.extend(affected)
         return n
 
     def clear(self, conn_id: str) -> None:
@@ -272,6 +336,24 @@ class SemanticStore:
         for d in (self._user, self._samples, self._tags,
                   self._table_tags, self._tables, self._schema):
             d.pop(conn_id, None)
+
+    def clear_round_proposals(self, conn_id: str, tables: set[str] | None = None) -> int:
+        """清空上轮字段提案（重建/增量前调用，防上轮提案残留被误确认）。
+
+        只清 proposed_*（当前 comment/values 不动）；tables=None = 全部表。
+        返回清掉的提案数（表级 + 列级）。
+        """
+        tabs = self._tables.get(conn_id, {})
+        names = [t for t in tabs if tables is None or t in tables]
+        n = 0
+        for name in names:
+            tk = tabs[name]
+            if tk.clear_proposal():
+                n += 1
+            for ci in tk.columns.values():
+                if ci.clear_proposal():
+                    n += 1
+        return n
 
     # ---------- 领域标签（每库一套，draft→人工确认） ----------
     def clear_tags(self, conn_id: str, save_conn_fn: Any = None) -> int:
@@ -340,7 +422,7 @@ class SemanticStore:
                           save_conn_fn: Any = None, merge: bool = False) -> int:
         """把标签绑定到表（去重保序）；库中不存在的标签自动补为 draft。
 
-        merge=True（2026-09：AI 重建提案用）：与既有绑定**并集**（已确认标签的
+        merge=True（AI 重建提案用）：与既有绑定**并集**（已确认标签的
         绑定保留，新的提案标签追加）——重建不冲掉当前生效的标签绑定。
         merge=False（用户手动调整）：整体替换。
         """
@@ -499,7 +581,7 @@ class SemanticStore:
             return None
         return {
             "table": table,
-            "text": self._synthesize_table_text(conn_id, tk),
+            "text": self.table_vector_text(conn_id, tk),
             "payload": self._table_payload(conn_id, tk, synced_at),
         }
 
@@ -565,9 +647,9 @@ class SemanticStore:
         - table_comment：表级注释（人工写入 → 权威 confirmed）；
         - column_comments：[{name, comment?, values?, example?}] 每列仅改给定字段，
           列不存在即报错（避免静默丢字段）；多字段任一改动即列 confirmed；
-        - vector_text：向量化片段覆盖（'' 清空覆盖回落合成文本）。
+        - vector_text：向量化片段覆盖（'' 清空覆盖，回落 AI 画像）。
         schema 镜像字段（列类型/PK/FK/DDL/表名）不可改写，type 恒 table_schema。
-        编辑改变合成文本/向量 → 该表即时重嵌。
+        编辑改变向量文本 → 该表即时重嵌（无文本表跳过、保留旧向量）。
         """
         tk = self._tables.get(conn_id, {}).get(table)
         if tk is None:
@@ -578,8 +660,9 @@ class SemanticStore:
             if tk.comment != table_comment:
                 changed = True
             tk.comment = table_comment
-            # 人工写入 = 权威（覆盖提案 -> 清提案防"编辑后还挂一个旧提案"）
-            tk.clear_proposal()
+            # 人工写入 = 权威（覆盖注释提案 -> 清提案防"编辑后还挂一个旧提案"）；
+            # 画像提案（proposed_profile）不动——注释编辑不代表否决画像
+            tk.proposed_comment = ""
             tk.status = "confirmed" if table_comment else "none"
 
         if column_comments:
@@ -609,8 +692,10 @@ class SemanticStore:
         return {
             "changed": changed,
             "table": table,
-            "vector_text": self._synthesize_table_text(conn_id, tk),
+            "vector_text": self.table_vector_text(conn_id, tk),
             "vector_override": tk.vector_override or None,
+            "vector_profile": tk.vector_profile or None,
+            "proposed_profile": tk.proposed_profile or None,
         }
 
     async def reject(self, conn_id: str, table: str, column: str | None = None,

@@ -26,10 +26,6 @@ def reset_workspace(token):
     _WS.reset(token)
 
 
-def get_workspace() -> str | None:
-    return _WS.get()
-
-
 def _candidate_path():
     ws = _WS.get()
     if not ws:

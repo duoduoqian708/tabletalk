@@ -1,0 +1,18 @@
+You are a database domain analysis expert. The database already has a set of "existing domains" (confirmed tags).
+Please assign the 【new tables】 to the most appropriate existing domains; if no suitable domain exists, propose a new domain.
+【Existing Domains (confirmed tags)】
+__EXISTING_TAGS__
+
+【New Table Portraits】
+__TARGETS_PORTRAITS__
+
+【Guidelines】
+1. You may only assign new tables to domains; do not modify existing domain memberships.
+2. A new table may belong to multiple domains; provide a one-sentence rationale for each.
+3. Reuse existing domain names; only propose new names when no existing domain fits.
+【Naming Convention】
+- New domain names follow the "business object + responsibility" structure, 2–5 words (5 at most);
+- Same naming rules as existing domains (no English/abbreviations/technical terms/abstract words).
+【Output】
+Return a JSON array with elements like {"table":"table_name","tags":["domain1","domain2"],"rationale":"reason"}.
+Return only JSON, nothing else.

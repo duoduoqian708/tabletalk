@@ -5,7 +5,6 @@ import sqlite3
 import threading
 from app.core.timeutil import utcnow_iso, utcnow_minus_days
 from pathlib import Path
-from typing import Any
 
 
 class CostTracker:
@@ -103,25 +102,5 @@ class CostTracker:
                 cur = con.execute("DELETE FROM cost_log WHERE ts < ?", (cutoff,))
                 con.commit()
                 return cur.rowcount
-            finally:
-                con.close()
-
-    def get_daily(self, from_ts: str | None = None, to_ts: str | None = None) -> list[dict]:
-        where, params = [], []
-        if from_ts:
-            where.append("ts >= ?")
-            params.append(from_ts)
-        if to_ts:
-            where.append("ts <= ?")
-            params.append(to_ts)
-        where_clause = (" WHERE " + " AND ".join(where)) if where else ""
-        with self._lock:
-            con = self._conn()
-            try:
-                rows = con.execute(
-                    f"SELECT substr(ts, 1, 10) as date, COUNT(*) as calls, SUM(total_tokens) as tokens, SUM(estimated_cost_usd) as cost FROM cost_log{where_clause} GROUP BY date ORDER BY date DESC LIMIT 90",
-                    params,
-                ).fetchall()
-                return [dict(r) for r in rows]
             finally:
                 con.close()

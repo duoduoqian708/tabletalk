@@ -1,4 +1,4 @@
-"""播种 data_dir/jobs/：SDK lib.py + 系统保留脚本。幂等（缺失才写）。
+"""播种 data_dir/jobs/：SDK lib.py + 系统保留脚本。模板变更时覆盖（幂等+版本同步）。
 
 调度器扫描时跳过无 `# name:`+`# cron:` 声明的文件——lib.py 是辅助模块不是任务。
 保留时长 = 改系统脚本顶部 RETENTION 常量（或让 AI 会话帮忙改）。
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-LIB_PY = '''"""TableTalk 定时任务 SDK —— 脚本经此访问平台（闸门 + 审计）。
+LIB_PY = r'''"""TableTalk 定时任务 SDK —— 脚本经此访问平台（闸门 + 审计）。
 
 用法:
     from lib import query, insert, write, retain_logs, log, summary
@@ -28,6 +28,7 @@ _URL = os.environ.get("TABLETALK_URL", "http://127.0.0.1:8777")
 _TOKEN = os.environ.get("TABLETALK_TOKEN", "")
 _JOB = os.environ.get("TABLETALK_JOB", "job")
 _CONNECTION = os.environ.get("TABLETALK_JOB_CONNECTION", "")
+_TEST = os.environ.get("TABLETALK_TEST") == "1"
 
 _conn_id = None
 
@@ -61,25 +62,34 @@ def _resolve_conn():
         data = []
     items = data if isinstance(data, list) else data.get("connections") or data.get("items") or []
     name = _CONNECTION or ""
-    for c in items:
-        if c.get("id"):
-            if not name or c.get("name") == name:
+    if name:
+        for c in items:
+            if c.get("name") == name:
                 _conn_id = c["id"]
                 break
-    if not _conn_id and items:
+        # 指定了连接但匹配不上 → 明确报错（绝不静默用别的库，防止测错库/写错库）
+        if not _conn_id:
+            raise RuntimeError(f"未找到连接: {name}，请检查脚本头 # connection: 或连接是否已改名/删除")
+    elif items:
         _conn_id = items[0]["id"]
     if not _conn_id:
-        raise RuntimeError(f"未找到连接: {name or '(默认)'}，请检查脚本头 # connection:")
+        raise RuntimeError("未找到任何连接，请先在平台添加连接")
     return _conn_id
 
 
 def _query(sql):
     conn = _resolve_conn()
-    status, raw = _request("/api/v1/query", {"connection_id": conn, "sql": sql, "origin": "scheduled"})
+    payload = {"connection_id": conn, "sql": sql, "origin": "scheduled"}
+    if _TEST:
+        payload["dry_run"] = True
+    status, raw = _request("/api/v1/query", payload)
     try:
         data = json.loads(raw or "{}")
     except ValueError:
         raise RuntimeError(f"查询失败({status}): {raw[:200]}")
+    # dry-run 响应：不抛错，原样返回（含 dry_run 标记）
+    if data.get("dry_run"):
+        return data
     verdict = data.get("verdict")
     if verdict != "allow" and verdict != "executed":
         msg = data.get("reason") or (data.get("detail") or {}).get("message") if isinstance(data.get("detail"), dict) else data.get("detail")
@@ -90,6 +100,9 @@ def _query(sql):
 def query(sql):
     """只读/统计查询，返回行列表（每行 dict 由列名键）。"""
     data = _query(sql)
+    if data.get("dry_run"):
+        print(f"TT-LOG: [测试模式·未真实写入] 读查询正常通过: {sql[:120]}", flush=True)
+        return []
     cols = data.get("columns") or []
     rows = data.get("rows") or []
     return [dict(zip(cols, r)) if r is not None else {} for r in rows]
@@ -97,7 +110,13 @@ def query(sql):
 
 def write(sql):
     """执行 INSERT（scheduled 身份放行）。其余 DML/DDL 被闸门拒（抛 RuntimeError）。"""
-    _query(sql)
+    data = _query(sql)
+    if data.get("dry_run"):
+        table = data.get("table") or "?"
+        rows = data.get("affected_rows")
+        hint = f"将插入 {rows} 行到 {table}" if rows is not None else f"将写入 {table}"
+        print(f"TT-LOG: [测试模式·未真实写入] {hint}", flush=True)
+        return
 
 
 def _sql_val(v):
@@ -134,6 +153,15 @@ def retain_logs(kinds):
         return json.loads(raw or "{}")
     except ValueError:
         raise RuntimeError(f"保留清理失败({status}): {raw[:200]}")
+
+
+def retain_results(keep_n):
+    """报告结果按总数保留最新 keep_n 条（results 库；平台拥有删除权并审计）。"""
+    status, raw = _request("/api/v1/system/retain", {"results": int(keep_n)})
+    try:
+        return json.loads(raw or "{}")
+    except ValueError:
+        raise RuntimeError(f"报告保留清理失败({status}): {raw[:200]}")
 
 
 def log(msg):
@@ -189,14 +217,33 @@ if __name__ == "__main__":
     summary("日志保留清理: " + ("；".join(parts) if parts else "无过期日志"))
 '''
 
+RESULTS_RETENTION_SCRIPT = '''# name: 报告保留清理
+# cron: 0 4 * * *
+# enabled: false
+# system: true
+# 平台内置：报告结果（results 库）按总数保留清理。默认停用——改下面 RETAIN_N 并启用即生效。
+# 报告来源：定时任务产出 + AI 对话报告（正文存 results.db，reports/ 目录文件为副本）。
+from lib import retain_results, summary
+
+RETAIN_N = 500  # 保留最新 500 份，超出清理最旧的
+
+if __name__ == "__main__":
+    result = retain_results(RETAIN_N)
+    deleted = (result.get("deleted") or {}).get("results", 0)
+    summary(f"报告保留清理: 保留最新 {RETAIN_N} 份，清理 {deleted} 份")
+'''
+
 
 def seed_jobs_dir(data_dir) -> Path:
     jobs = Path(data_dir) / "jobs"
     jobs.mkdir(parents=True, exist_ok=True)
     lib = jobs / "lib.py"
-    if not lib.exists():
+    if not lib.exists() or lib.read_text(encoding="utf-8") != LIB_PY:
         lib.write_text(LIB_PY, encoding="utf-8")
     ret = jobs / "_system_log_retention.py"
     if not ret.exists():
         ret.write_text(RETENTION_SCRIPT, encoding="utf-8")
+    res_ret = jobs / "_system_results_retention.py"
+    if not res_ret.exists():
+        res_ret.write_text(RESULTS_RETENTION_SCRIPT, encoding="utf-8")
     return jobs

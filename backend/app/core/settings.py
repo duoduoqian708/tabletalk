@@ -25,7 +25,7 @@ class ModelConfig:
     """一个已配置的文本模型。"""
     id: str
     name: str
-    provider: str = "mock"       # mock | cloud | local
+    provider: str = "mock"       # 供应商名（如 deepseek / glm / 火山方舟 / qwen）；mock = 内置模拟
     base_url: str = ""
     api_key: str = ""
     model: str = ""
@@ -42,7 +42,7 @@ class EmbeddingModelConfig:
     """一个已配置的嵌入模型。"""
     id: str
     name: str
-    provider: str = "hash"       # hash | api
+    provider: str = ""            # 向量模型供应商（自由文本，如 openai/deepseek/…）；空 = 未配置
     base_url: str = ""
     api_key: str = ""
     model: str = "bge-m3"
@@ -66,17 +66,16 @@ class RuntimeSettings:
     default_ai_model: str = ""
     embedding_models: list[EmbeddingModelConfig] = field(default_factory=list)
     default_embedding_model: str = ""
-    gate_review_threshold: int = 1000
     gate_rules: dict[str, bool] = field(default_factory=dict)
     policy: Policy = field(default_factory=Policy)
     kb_sample_rows: int = 15
     kb_ai_annotation_samples: bool = False
-    kb_build_self_check: bool = True   # 阶段2/3 审校式自检开关（默认开，可运行时关）
     kb_build_reasoning_effort: str = "low"  # KB 阶段3 推理档位（off/low/medium/high；默认浅推理 low，不搞深度）
     kb_sync_minutes: int = 30
     privacy_mode: str = "standard"
     query_max_rows: int = 1000
     pool_size: int = 3
+    default_connection: str = ""   # 默认数据源（连接 id）：后端持久化，跨浏览器/origin 一致；空=未设置
 
     @property
     def ai_provider(self) -> str:
@@ -124,7 +123,7 @@ class RuntimeSettings:
                 if m.id == self.default_ai_model:
                     return m
             return self.ai_models[0]
-        return ModelConfig(id="default-mock", name="Mock", provider="mock")
+        return ModelConfig(id="", name="未配置", provider="")  # 未配置 → AI 不可用
 
     def _default_embedding(self) -> EmbeddingModelConfig:
         if self.embedding_models:
@@ -132,7 +131,7 @@ class RuntimeSettings:
                 if m.id == self.default_embedding_model:
                     return m
             return self.embedding_models[0]
-        return EmbeddingModelConfig(id="default-hash", name="Hash（离线）", provider="hash")
+        return EmbeddingModelConfig(id="default-embedding", name="向量模型（未配置）", provider="")
 
     def public(self) -> dict[str, Any]:
         d = {
@@ -146,17 +145,16 @@ class RuntimeSettings:
                 for m in self.embedding_models
             ],
             "default_embedding_model": self.default_embedding_model,
-            "gate_review_threshold": self.gate_review_threshold,
             "gate_rules": self.gate_rules,
             "policy": asdict(self.policy),
             "kb_sample_rows": self.kb_sample_rows,
             "kb_ai_annotation_samples": self.kb_ai_annotation_samples,
-            "kb_build_self_check": self.kb_build_self_check,
             "kb_build_reasoning_effort": self.kb_build_reasoning_effort,
             "kb_sync_minutes": self.kb_sync_minutes,
             "privacy_mode": self.privacy_mode,
             "query_max_rows": self.query_max_rows,
             "pool_size": self.pool_size,
+            "default_connection": self.default_connection,
             "runtime": {
                 "data_dir": str(get_env().data_dir),
                 "port": get_env().port,
@@ -203,16 +201,15 @@ _PERSISTED_KEYS = {
     "default_ai_model",
     "embedding_models",
     "default_embedding_model",
-    "gate_review_threshold",
     "gate_rules",
     "policy",
     "kb_sample_rows",
     "kb_ai_annotation_samples",
-    "kb_build_self_check",
     "kb_build_reasoning_effort",
     "privacy_mode",
     "query_max_rows",
     "pool_size",
+    "default_connection",
     "ai_provider", "ai_base_url", "ai_api_key", "ai_model",
     "ai_temperature", "ai_timeout",
     "embedding_provider", "embedding_base_url", "embedding_api_key", "embedding_model",
@@ -228,7 +225,7 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
         m = ModelConfig(
             id=_new_id("llm"),
             name="默认模型",
-            provider=data.get("ai_provider", "mock"),
+            provider=data.get("ai_provider", ""),
             base_url=data.get("ai_base_url", ""),
             api_key=data.get("ai_api_key", ""),
             model=data.get("ai_model", ""),
@@ -242,7 +239,7 @@ def _migrate_from_legacy(data: dict[str, Any]) -> None:
         m = EmbeddingModelConfig(
             id=_new_id("emb"),
             name="默认嵌入",
-            provider=data.get("embedding_provider", "hash"),
+            provider=data.get("embedding_provider", ""),
             base_url=data.get("embedding_base_url", ""),
             api_key=data.get("embedding_api_key", ""),
             model=data.get("embedding_model", "bge-m3"),
@@ -306,18 +303,16 @@ class SettingsStore:
         self._path = self._data_dir / "settings.json"  # 旧文件，仅迁移
         env = get_env()
         self._data: dict[str, Any] = {
-            "gate_review_threshold": env.gate_review_threshold,
             "gate_rules": {},
             "policy": asdict(Policy()),
             "kb_sample_rows": env.kb_sample_rows,
             "kb_ai_annotation_samples": env.kb_ai_annotation_samples,
-            "kb_build_self_check": True,
             "kb_build_reasoning_effort": "low",
             "privacy_mode": "standard",
             "query_max_rows": env.query_max_rows,
             "pool_size": env.pool_size,
         }
-        if env.ai_provider != "mock" and env.ai_model:
+        if env.ai_provider and env.ai_model:
             env_ai = ModelConfig(
                 id=_new_id("llm"),
                 name="环境配置模型",
@@ -335,7 +330,7 @@ class SettingsStore:
             self._data["ai_models"] = []
             self._data["default_ai_model"] = ""
 
-        if env.embedding_provider != "hash":
+        if env.embedding_provider:
             env_emb = EmbeddingModelConfig(
                 id=_new_id("emb"),
                 name="环境配置嵌入",
@@ -398,7 +393,7 @@ class SettingsStore:
             removed = True
         self._data["ai_models"] = kept
         emb = self._data.get("embedding_models", [])
-        emb_kept = [m for m in emb if m.get("provider") != "hash"]
+        emb_kept = [m for m in emb if m.get("provider") or m.get("base_url")]  # 保留有真实配置的
         if len(emb_kept) != len(emb):
             removed = True
         self._data["embedding_models"] = emb_kept
@@ -448,8 +443,10 @@ class SettingsStore:
             EmbeddingModelConfig(**{k: v for k, v in m.items() if k in EmbeddingModelConfig.__dataclass_fields__})
             for m in data.get("embedding_models", [])
         ]
+        # 清理已废弃的 hash 嵌入模型（离线哈希已移除，向量模型只能通过 API 接入）
+        emb_models = [m for m in emb_models if m.provider != "hash"]
         pm = data.get("privacy_mode", "standard")
-        if pm not in ("strict", "standard", "open"):
+        if pm not in ("strict", "standard", "open", "custom"):
             pm = "standard"
         pol_data = data.get("policy", {})
         if isinstance(pol_data, dict):
@@ -464,16 +461,15 @@ class SettingsStore:
             default_ai_model=data.get("default_ai_model", ""),
             embedding_models=emb_models,
             default_embedding_model=data.get("default_embedding_model", ""),
-            gate_review_threshold=data.get("gate_review_threshold", 1000),
             gate_rules=data.get("gate_rules", {}),
             policy=policy,
             kb_sample_rows=data.get("kb_sample_rows", 15),
             kb_ai_annotation_samples=data.get("kb_ai_annotation_samples", False),
-            kb_build_self_check=data.get("kb_build_self_check", True),
             kb_build_reasoning_effort=data.get("kb_build_reasoning_effort", "low"),
             privacy_mode=pm,
             query_max_rows=data.get("query_max_rows", 1000),
             pool_size=data.get("pool_size", 3),
+            default_connection=data.get("default_connection", ""),
         )
 
     def update(self, patch: dict[str, Any]) -> RuntimeSettings:
@@ -519,26 +515,31 @@ class SettingsStore:
                 for legacy_k, model_k in emb_legacy_fields.items():
                     if legacy_k in patch:
                         target[model_k] = patch[legacy_k]
-            for k in ("gate_review_threshold", "gate_rules",
-                      "kb_sample_rows", "kb_ai_annotation_samples", "kb_build_self_check",
+            for k in ("gate_rules",
+                      "kb_sample_rows", "kb_ai_annotation_samples",
                       "kb_build_reasoning_effort",
+                      "kb_sync_minutes",
                       "privacy_mode",
-                      "query_max_rows", "pool_size"):
+                      "query_max_rows", "pool_size",
+                      "default_connection"):
                 if k in patch:
                     v = patch[k]
                     if k == "privacy_mode":
-                        if v not in ("strict", "standard", "open"):
+                        if v not in ("strict", "standard", "open", "custom"):
                             continue
                     if k == "kb_build_reasoning_effort":
                         if v not in ("off", "low", "medium", "high"):
                             continue
                         v = str(v)
-                    if k in ("query_max_rows", "pool_size"):
+                    if k == "default_connection":
+                        v = str(v or "").strip()  # 空=清除默认
+                    if k in ("query_max_rows", "pool_size", "kb_sync_minutes"):
                         try:
                             vi = int(v)
                         except (TypeError, ValueError):
                             continue
-                        if vi < 1:
+                        # kb_sync_minutes=0 允许（关闭自动同步）；其余 ≥1
+                        if vi < 1 and not (k == "kb_sync_minutes" and vi == 0):
                             continue
                         v = vi
                     if k == "gate_rules":
@@ -556,13 +557,6 @@ class SettingsStore:
                     pol["updated_at"] = __import__("time").strftime("%Y-%m-%dT%H:%M:%S")
                     if "updated_by" not in pol or not pol["updated_by"]:
                         pol["updated_by"] = "api"
-                    if "threshold" in pol:
-                        try:
-                            thr = int(pol["threshold"])
-                            if thr >= 1:
-                                self._data["gate_review_threshold"] = thr
-                        except (TypeError, ValueError):
-                            pass
                     self._data["policy"] = pol
         self._ensure_builtins()
         self.save()

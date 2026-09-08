@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ class BehaviorService:
 
             schema = facade.semantic_store._schema.get(conn_id, {})
             drafts = [
-                {**_e_to_draft(e), "kind": "query_log", "provenance": "query_log"}
+                {**_e_to_draft(e), "source": "query_log", "provenance": "query_log"}
                 for e in build_query_log_edges(audit_rows, schema=schema)
             ]
             added = facade.graph_store.merge_draft_edges(conn_id, drafts)
@@ -84,6 +83,7 @@ def _e_to_draft(e) -> dict:
     return {
         "from_table": e.source_table, "from_col": first[0],
         "to_table": e.target_table, "to_col": first[1],
-        "cardinality": e.cardinality, "reason": e.reason, "guard": e.guard,
+        "source": e.source, "cardinality": e.cardinality,
+        "reason": e.reason, "guard": e.guard,
         "confidence": e.confidence, "cols": [list(p) for p in e.cols],
     }

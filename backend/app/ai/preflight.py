@@ -1,10 +1,9 @@
 """Preflight 准备层（2026-09 改版）：plan 级辅助字段 + 脱敏/清单/审计。
 
-意图识别**不再在本层做**（关键词与 LLM 都已移除）——意图统一由 decompose 的 LLM
-产出 TaskPlan。本层负责：
+意图识别不在本层做——意图统一由上层 LLM 循环产出。本层负责：
 - 追问轮检测（is_followup/followup_tables）、已确认标签匹配（tags，检索种子）
 - skip_retrieval：结构问答/审计类跳过向量检索管线（提示优化，非意图分类）
-- 单次脱敏 + 清单 + 审计准备，供 decompose 的 LLM 调用复用（全链路 LLM 出网用脱敏原文）
+- 单次脱敏 + 清单 + 审计准备（全链路 LLM 出网用脱敏原文）
 """
 from __future__ import annotations
 
@@ -20,14 +19,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class PreflightResult:
-    intent: str = ""  # 2026-09：意图归 decompose 产出；本层不填（loop 用 plan 回填供事件/度量）
+    intent: str = ""  # 意图字段由上层循环产出；本层不填
     tags: list[str] = field(default_factory=list)
-    degraded: bool = False  # 本层不再调 LLM，恒 False（意图降级由 decompose 的 degraded 表达）
+    degraded: bool = False  # 本层不调 LLM，恒 False
     is_followup: bool = False
     followup_tables: list[str] = field(default_factory=list)
     skip_retrieval: bool = False  # True = 结构问答/审计类，跳过向量检索管线
-    redacted_q: str = ""          # 2026-09：脱敏后原文（decompose 的 LLM 调用复用）
-    manifest: dict[str, Any] | None = None  # 2026-09：出网清单（decompose 复用）
+    redacted_q: str = ""          # 脱敏后原文
+    manifest: dict[str, Any] | None = None  # 出网清单
 
 
 def _get_confirmed_tags(state: "AppState", conn_id: str) -> list[str]:
@@ -128,14 +127,14 @@ async def preflight(
     confirmed = _get_confirmed_tags(state, conn_id)
     is_followup, followup_tables = _detect_followup(q, confirmed, history_tail)
 
-    # 解析 provider_cfg（复用 gateway 的 B4 strict 强制 mock 逻辑）
+    # 解析 provider_cfg（供 manifest 清单构建）
     provider_cfg: dict[str, Any] = {}
     try:
         from app.ai.provider_cfg import resolve_provider_cfg as _resolve
         class _Req:
             pass
         _req = _Req()
-        # 让 resolve 能读到 privacy_mode（严格档强制 mock）
+        # 让 resolve 能读到 privacy_mode
         provider_cfg = _resolve(state, _req)
     except Exception:
         try:
@@ -174,8 +173,8 @@ async def preflight(
     except Exception:
         manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "include_data": False, "redactions": redactions, "mode": "standard", "ts": utcnow_iso(), "model": provider_cfg.get("model",""), "provider": provider_cfg.get("provider","mock")}
 
-    # 2026-09：意图识别归 decompose（LLM TaskPlan），本层不再做关键词/LLM 意图分类。
-    # 只产出 plan 级字段 + 脱敏原文 + 清单，供 loop/decompose 复用。
+    # 本层不做意图分类（由上层循环产出）。
+    # 只产出 plan 级字段 + 脱敏原文 + 清单，供 loop 复用。
     _skip = bool(re.search(
         r"有哪些表|什么结构|表结构|schema|describe|show\s+tables|审计|我刚才|操作记录|被拦|被.*拦截|audit|审查|安全",
         q, re.IGNORECASE)) if q else False

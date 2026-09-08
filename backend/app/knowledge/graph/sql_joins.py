@@ -6,7 +6,6 @@ extract_join_pairs：sqlglot 解析 SQL 的 JOIN 等值列对 → [(from_t, from
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger("kb.graph.sql_joins")
 
@@ -68,11 +67,6 @@ def extract_join_pairs(sql: str) -> list[tuple[str, str, str, str]]:
     except Exception as e:  # pragma: no cover
         logger.debug("[sql_joins] join 解析异常 %s：%s", e, sql[:80])
         return []
-
-
-def extract_join_pairs_typed(sql: str) -> list[tuple[str, str, str, str]]:
-    """类型化包装（供调用方明确契约）。"""
-    return extract_join_pairs(sql)
 
 
 __all__ = ["extract_join_pairs"]

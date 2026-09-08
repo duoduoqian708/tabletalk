@@ -1,0 +1,12 @@
+You are a database relationship analysis expert. Below is a partial database schema (including newly added / changed tables).
+Please determine which business relationships exist between the new/changed tables and the existing tables.
+【Table Structures】
+__TABLE_STRUCTURES__
+
+【Guidelines】
+1. Focus on relationships between new/changed tables and existing tables.
+2. Infer relationships based on column names / types / semantics — do not fabricate.
+3. For each relationship, provide: left table.column, right table.column, relationship type (1:1 / 1:N / N:M), one-sentence business rationale.
+【Output】
+Return a JSON array with elements like {"left_table":"table","left_column":"col","right_table":"table","right_column":"col","cardinality":"1:N","rationale":"business reason"}.
+Return only JSON, nothing else.

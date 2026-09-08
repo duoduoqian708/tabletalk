@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -71,12 +72,6 @@ def truncate_samples(
     }
 
 
-async def generate_ddl(state: "AppState", conn_id: str, table: str) -> str:
-    """实时生成单表 DDL（字符串），供逐表 AI 注释 prompt 使用。"""
-    result = await _generate_ddls_batch(state, conn_id, [table])
-    return result.get(table, "")
-
-
 async def generate_ddls_all(state: "AppState", conn_id: str) -> dict[str, str]:
     """一次性生成所有表的 DDL，返回 {table_name: ddl_string}。"""
     from app.core.schema import get_schema
@@ -121,13 +116,22 @@ async def _generate_ddls_batch(state: "AppState", conn_id: str, tables: list[str
 
     def _work(adapter, conn):
         async def inner():
+            _t0 = time.monotonic()
             quote = adapter.quote_ident
             literal = adapter.quote_literal
             all_tables = await adapter.list_tables(conn)
+            _t1 = time.monotonic()
             all_columns = []
             for t in all_tables:
                 all_columns += await adapter.list_columns(conn, t.name)
+            _t2 = time.monotonic()
             all_fks = await adapter.list_foreign_keys(conn)
+            _t3 = time.monotonic()
+            logger.info(
+                "[kb.ddl] conn=%s 重复反射 表数=%d 列数=%d 耗时 %.2fs（list_tables %.2fs + list_columns %.2fs(串行×%d) + list_fks %.2fs）",
+                conn_id, len(all_tables), len(all_columns), _t3 - _t0,
+                _t1 - _t0, _t2 - _t1, len(all_tables), _t3 - _t2,
+            )
 
             table_map = {t.name: t for t in all_tables}
             fks_by_table: dict[str, list] = {}

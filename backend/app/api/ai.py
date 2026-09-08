@@ -1,18 +1,24 @@
 """AI 相关路由：聊天 SSE、模型测试、选择分析。"""
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import time
 from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+import httpx
 
 from app.ai import gateway as gw
 from app.ai.loop import stream
 from app.ai.dto import ChatRequest
+from app.ai.providers import builtin_embedding_providers, builtin_providers, get_adapter
 from app.state import get_state
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["ai"])
 
@@ -24,6 +30,54 @@ _SELECTION_REPLIES: dict[str, str] = {
 }
 
 
+@router.get("/ai/providers")
+async def ai_providers() -> dict:
+    """内置供应商下拉清单（含 base_url 预设与推荐模型候选）。"""
+    return {"providers": builtin_providers()}
+
+
+@router.get("/ai/embedding/providers")
+async def ai_embedding_providers() -> dict:
+    """内置向量供应商下拉清单（三家 + 火山双路 + 自定义，含默认维度预填）。"""
+    return {"providers": builtin_embedding_providers()}
+
+
+@router.get("/ai/upstream/models")
+async def ai_upstream_models(
+    base_url: str = "",
+    api_key: str | None = None,
+    model_id: str | None = None,
+) -> dict:
+    """代理拉取上游 OpenAI 兼容 GET {base_url}/models。
+
+    key 服务端持有：优先 api_key 参数；为空且给 model_id 时回退用已存模型配置的 key
+    （掩码 key 永不出后端）。上游不支持 /models → ok=false（前端回退自由输入，零阻断）。
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="base_url 必须是 http(s) 地址")
+    key = api_key or ""
+    if not key and model_id:
+        for m in get_state().runtime.get().ai_models:
+            if m.id == model_id:
+                key = m.api_key
+                break
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as ac:
+            r = await ac.get(f"{base}/models", headers=headers)
+    except httpx.HTTPError as e:
+        return {"ok": False, "supported": False, "error": f"拉取失败：{e.__class__.__name__}"}
+    if r.status_code != 200:
+        return {"ok": False, "supported": False, "error": f"HTTP {r.status_code}"}
+    try:
+        data = r.json().get("data") or []
+    except ValueError:
+        return {"ok": False, "supported": False, "error": "响应非 JSON，端点不支持 /models"}
+    models = sorted({str(d.get("id")) for d in data if isinstance(d, dict) and d.get("id")})
+    return {"ok": True, "models": models}
+
+
 @router.post("/ai/test")
 async def ai_test(
     model_id: str | None = None,
@@ -31,77 +85,109 @@ async def ai_test(
     base_url: str | None = None,
     api_key: str | None = None,
     model: str | None = None,
-) -> dict:
-    """文本模型连通性 + 能力探测。
-    优先级：model_id（从 ai_models 里找） > 传参覆盖 > 当前默认模型。"""
+):
+    """文本模型连通性 + 能力探测（SSE 流式：每完成一步推一个事件）。"""
     state = get_state()
     cfg = _resolve_ai_cfg(state, model_id, provider, base_url, api_key, model)
 
     if cfg["provider"] == "mock":
         return {
-            "ok": True,
-            "provider": "mock",
-            "latency_ms": 0,
-            "reply": "mock 网关正常",
+            "ok": True, "provider": "mock", "latency_ms": 0, "reply": "mock 网关正常",
             "capabilities": {
-                "connectivity": True,
-                "function_calling": True,
-                "streaming": True,
-                "reasoning": False,
-                "context_window": None,
-                "reason": "mock 模式，能力为内置模拟",
+                "connectivity": True, "function_calling": True, "streaming": True,
+                "reasoning": False, "context_window": None, "reason": "mock 模式，能力为内置模拟",
             },
         }
 
     if not cfg["base_url"]:
-        return {"ok": False, "error": "缺少 base_url", "capabilities": {}}
+        return {"ok": False, "error": "缺少 base_url，请在设置中配置向量模型接入点", "capabilities": {}}
 
-    caps: dict[str, Any] = {}
-    t0 = time.monotonic()
-    try:
-        # 1. 连通性 + 基础聊天
-        provider_inst = gw.build_provider(cfg)
-        resp = await provider_inst.chat([{"role": "user", "content": "ping"}], tools=None, allow_fallback=False)
-        latency_ms = round((time.monotonic() - t0) * 1000, 1)
-        if not resp.content and not resp.tool_calls:
-            return {"ok": False, "error": "网关返回空响应", "latency_ms": latency_ms, "capabilities": caps}
-        caps["connectivity"] = True
-        caps["latency_ms"] = latency_ms
-
-        # 2. function calling 探测
+    async def _gen():
+        caps: dict[str, Any] = {}
+        t0 = time.monotonic()
         try:
-            fc_resp = await provider_inst.chat(
-                [{"role": "user", "content": "hi"}],
-                tools=[{"type": "function", "function": {"name": "noop", "description": "ping", "parameters": {"type": "object", "properties": {}}}}],
-                allow_fallback=False,
-            )
-            caps["function_calling"] = True
-            _ = fc_resp  # 能成功回来就说明支持
-        except Exception:
-            caps["function_calling"] = False
+            # 1. 连通性（串行）
+            provider_inst = gw.build_provider(cfg)
+            resp = await provider_inst.chat([{"role": "user", "content": "ping"}], tools=None, allow_fallback=False)
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            if not resp.content and not resp.tool_calls:
+                yield f"data: {json.dumps({'step': 'ping', 'ok': False, 'error': '网关返回空响应'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'step': 'done', 'ok': False, 'error': '网关返回空响应', 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
+                return
+            caps["connectivity"] = True
+            caps["latency_ms"] = latency_ms
+            yield f"data: {json.dumps({'step': 'ping', 'ok': True, 'latency_ms': latency_ms}, ensure_ascii=False)}\n\n"
 
-        # 3. 推理能力探测（关键词硬覆盖 + 流式实测）+ 深度档位 + 落库到模型配置
-        caps["reasoning"] = await _detect_reasoning(cfg)
-        caps["reasoning_effort"] = await _detect_reasoning_effort(cfg) if caps.get("reasoning") else None
-        _persist_capabilities(state, model_id, caps)
+            # 2-5. 并行探测
+            from app.ai.providers import resolve_adapter_name
+            adapter_name = resolve_adapter_name(cfg.get("provider"))
+            caps["adapter"] = adapter_name
 
-        # 4. 流式输出探测（SSE）
-        caps["streaming"] = await _detect_streaming(cfg)
+            async def _probe_fc() -> bool:
+                try:
+                    await provider_inst.chat(
+                        [{"role": "user", "content": "hi"}],
+                        tools=[{"type": "function", "function": {"name": "noop", "description": "ping", "parameters": {"type": "object", "properties": {}}}}],
+                        allow_fallback=False,
+                    )
+                    return True
+                except Exception:
+                    return False
 
-        # 5. 上下文窗口（模型名推断 + /models 端点兜底）
-        caps["context_window"] = await _resolve_context_window(cfg)
+            async def _probe_reasoning() -> tuple[bool, str | None]:
+                if adapter_name != "custom":
+                    return True, "low"
+                r = await _detect_reasoning(cfg)
+                e = await _detect_reasoning_effort(cfg) if r else None
+                return r, e
 
-        return {
-            "ok": True,
-            "provider": cfg["provider"],
-            "model": cfg.get("model"),
-            "latency_ms": latency_ms,
-            "reply": (resp.content or "")[:80],
-            "capabilities": caps,
-        }
-    except Exception as e:  # noqa: BLE001
-        latency_ms = round((time.monotonic() - t0) * 1000, 1)
-        return {"ok": False, "error": str(e), "latency_ms": latency_ms, "capabilities": caps}
+            async def _probe_streaming() -> bool:
+                return await _detect_streaming(cfg)
+
+            async def _probe_context() -> int | None:
+                return await _resolve_context_window(cfg)
+
+            # 用 Queue 逐个推送（并行，谁先完成谁先推）
+            import asyncio as _aio
+            _queue: _aio.Queue[tuple[str, Any]] = _aio.Queue()
+
+            async def _put(name: str, fn):
+                try:
+                    await _queue.put((name, await fn()))
+                except Exception:
+                    await _queue.put((name, None))
+
+            probe_tasks = [
+                _aio.create_task(_put("fc", _probe_fc)),
+                _aio.create_task(_put("reasoning", _probe_reasoning)),
+                _aio.create_task(_put("streaming", _probe_streaming)),
+                _aio.create_task(_put("context_window", _probe_context)),
+            ]
+            for _ in range(4):
+                name, result = await _queue.get()
+                if name == "fc":
+                    caps["function_calling"] = result
+                    yield f"data: {json.dumps({'step': 'fc', 'ok': result}, ensure_ascii=False)}\n\n"
+                elif name == "reasoning":
+                    caps["reasoning"] = result[0]
+                    caps["reasoning_effort"] = result[1]
+                    if adapter_name != "custom":
+                        caps["effort_effective"] = None
+                elif name == "streaming":
+                    caps["streaming"] = result
+                    yield f"data: {json.dumps({'step': 'streaming', 'ok': result}, ensure_ascii=False)}\n\n"
+                elif name == "context_window":
+                    caps["context_window"] = result
+                    yield f"data: {json.dumps({'step': 'context_window', 'ok': result is not None, 'value': result}, ensure_ascii=False)}\n\n"
+            await _aio.gather(*probe_tasks)
+
+            _persist_capabilities(state, model_id, caps)
+            yield f"data: {json.dumps({'step': 'done', 'ok': True, 'provider': cfg['provider'], 'model': cfg.get('model'), 'latency_ms': latency_ms, 'reply': (resp.content or '')[:80], 'capabilities': caps}, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            latency_ms = round((time.monotonic() - t0) * 1000, 1)
+            yield f"data: {json.dumps({'step': 'done', 'ok': False, 'error': str(e), 'latency_ms': latency_ms, 'capabilities': caps}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @router.post("/ai/embedding/test")
@@ -116,17 +202,8 @@ async def embedding_test(
     state = get_state()
     cfg = _resolve_emb_cfg(state, model_id, provider, base_url, api_key, model)
 
-    if cfg["provider"] == "hash":
-        return {
-            "ok": True,
-            "provider": "hash",
-            "dimensions": 64,
-            "latency_ms": 0,
-            "note": "哈希嵌入，离线可用",
-        }
-
     if not cfg["base_url"]:
-        return {"ok": False, "error": "缺少 base_url"}
+        return {"ok": False, "error": "缺少 base_url，请在设置中配置向量模型接入点"}
 
     t0 = time.monotonic()
     try:
@@ -177,7 +254,7 @@ def _resolve_ai_cfg(state, model_id, provider, base_url, api_key, model) -> dict
         cfg["provider"] = provider
     if base_url is not None:
         cfg["base_url"] = base_url
-    if api_key is not None and "•••" not in (api_key or ""):
+    if api_key is not None and api_key and "•••" not in api_key:
         cfg["api_key"] = api_key
     if model is not None:
         cfg["model"] = model
@@ -189,7 +266,7 @@ def _resolve_emb_cfg(state, model_id, provider, base_url, api_key, model) -> dic
     if model_id:
         target = next((m for m in rs.embedding_models if m.id == model_id), None)
         if target is None:
-            raise HTTPException(status_code=404, detail=f"embedding model {model_id} not found")
+            raise HTTPException(status_code=404, detail=f"model {model_id} not found")
         cfg = {
             "provider": target.provider,
             "base_url": target.base_url,
@@ -202,7 +279,7 @@ def _resolve_emb_cfg(state, model_id, provider, base_url, api_key, model) -> dic
         cfg["provider"] = provider
     if base_url is not None:
         cfg["base_url"] = base_url
-    if api_key is not None and "•••" not in (api_key or ""):
+    if api_key is not None and api_key and "•••" not in api_key:
         cfg["api_key"] = api_key
     if model is not None:
         cfg["model"] = model
@@ -246,9 +323,12 @@ def _persist_capabilities(state, model_id: str | None, caps: dict[str, Any]) -> 
         for m in rs.ai_models:
             d = asdict(m)
             if m.id == target_id:
+                # 全量 caps 落库（含 adapter 归属 / effort 生效性校准），前端与校准直接可用
                 d["capabilities"] = {
                     "reasoning": bool(caps.get("reasoning")),
                     "reasoning_effort": caps.get("reasoning_effort"),
+                    "adapter": caps.get("adapter"),
+                    "effort_effective": caps.get("effort_effective"),
                 }
             models.append(d)
         if not any(m.id == target_id for m in rs.ai_models):
@@ -292,12 +372,9 @@ async def _detect_reasoning_streaming(cfg: dict) -> bool:
             "max_tokens": 32,
         }
         # 对已知支持推理参数的端点，显式开启推理以提高命中率
-        gw_inst = gw.build_provider(cfg)
-        if gw_inst.reasoning_supports_param():
-            if any(k in (cfg.get("model", "").lower()) for k in ("o1", "o3", "o4")):
-                payload["reasoning_effort"] = "low"
-            else:
-                payload["thinking"] = {"type": "enabled"}
+        # （探测请求的思考参数统一走适配器：各家字段/枚举差异不再关键词硬编码）
+        adapter = get_adapter(cfg.get("provider"), cfg.get("model", ""))
+        adapter.apply_thinking(payload, "low", cfg.get("model", ""), False)
         async with httpx.AsyncClient(timeout=20.0) as client:
             found = False
             async with client.stream("POST", url, json=payload, headers=headers) as r:
@@ -374,8 +451,10 @@ def _infer_context_window(model_name: str) -> int | None:
         ("qwen3", 128000),
         ("glm-4", 128000),
         ("deepseek-v3", 128000),
+        ("deepseek-v4", 128000),
         ("deepseek-r1", 64000),
         ("bge-m3", 8192),
+        ("mimo", 128000),
     ]
     for kw, size in table:
         if kw in name:
@@ -443,24 +522,98 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
         return StreamingResponse(gen_err(), media_type="text/event-stream")
 
     async def gen():
-        events: list[dict] = []
+        _completed = False  # 正常走完（含内部 error 事件）置 True；断连/异常保持 False → carry-over
+        _user_committed = False  # 当前 user 问句随首次 _commit 落库（必须晚于 stream() 内的历史加载）
         try:
+            _last_q = next(
+                (m.content if hasattr(m, "content") else m.get("content", "")
+                 for m in reversed(req.messages)
+                 if (m.role if hasattr(m, "role") else m.get("role", "")) == "user"),
+                None,
+            )
+
+            def _commit_msgs(msgs: list[dict]) -> list[dict]:
+                nonlocal _user_committed
+                if _last_q and not _user_committed:
+                    msgs = [{"role": "user", "kind": "text", "content": _last_q}] + list(msgs)
+                    _user_committed = True
+                return msgs
+
             async for ev in stream(state, req):
-                events.append(ev)
+                if ev.get("type") == "_commit":
+                    # committed-turn：循环在每轮边界提交已产出事件（断连只丢当前轮）
+                    try:
+                        msgs = _commit_msgs(ev.get("messages") or [])
+                        if msgs:
+                            state.chats.append_messages(session_id, msgs)
+                    except Exception:
+                        pass
+                    continue  # 内部事件不下发前端
+                if ev.get("type") == "sql_card":
+                    # sql_card 工件即时落库（本地；行数已由 query._auto_cap 封顶，truncated 随存）
+                    try:
+                        card = ev.get("card") or {}
+                        rid = card.get("result_id")
+                        res = card.get("result")
+                        if rid and isinstance(res, dict):
+                            _persist_card_artifact(state, session_id, rid, res)
+                    except Exception:
+                        pass
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            _completed = True
         except Exception as e:  # noqa: BLE001
+            # 已向用户明示错误；本轮未提交部分视为中断 → carry-over 供续答
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-        # [DONE] 之前落消息（SSE client 收到 DONE 后立即断开，后面的代码可能不执行）
-        try:
-            # WS3 T3.2：sql_card 工件按 result_id 落库（本地，行数已由 query._auto_cap 封顶，truncated 随存）
-            _persist_artifacts(state, session_id, events)
-            msgs = _events_to_messages(events, req.messages)
-            state.chats.append_messages(session_id, msgs)
-        except Exception:
-            pass
+        finally:
+            if not _completed:
+                # 断连/超时（GeneratorExit）→ 取消在飞查询 + 记录中断摘要（下次请求注入续答）
+                try:
+                    from app.core.query import cancel as _qcancel
+
+                    _qcancel(req.connection_id)
+                except Exception:
+                    pass
+                # 本轮完全未提交 → 至少把用户问句落库（否则续答时问题丢失）
+                if not _user_committed:
+                    try:
+                        _last_q2 = next(
+                            (m.content if hasattr(m, "content") else m.get("content", "")
+                             for m in reversed(req.messages)
+                             if (m.role if hasattr(m, "role") else m.get("role", "")) == "user"),
+                            None,
+                        )
+                        if _last_q2:
+                            state.chats.append_messages(session_id, [{"role": "user", "kind": "text", "content": _last_q2}])
+                    except Exception:
+                        pass
+                try:
+                    from app.ai.loop import _save_carryover
+
+                    _save_carryover(state, session_id, req.connection_id)
+                except Exception:
+                    pass
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _persist_card_artifact(state, session_id: str, result_id: str, res: dict) -> None:
+    """单张 sql_card 工件即时落库（committed-turn：卡产生即存，断连不丢结果集）。"""
+    try:
+        max_rows = state.runtime.get().query_max_rows or 1000
+    except Exception:
+        max_rows = 1000
+    data = {k: v for k, v in res.items() if k != "rows"}
+    rows = res.get("rows")
+    if rows is not None:
+        capped = (rows or [])[: max_rows or len(rows or [])]
+        data["rows"] = capped
+        if len(rows or []) > len(capped):
+            data["truncated"] = True
+    try:
+        state.chats.save_artifact(session_id, result_id, data)
+    except Exception:
+        pass
 
 
 def _persist_artifacts(state, session_id: str, events: list[dict]) -> None:
@@ -469,11 +622,8 @@ def _persist_artifacts(state, session_id: str, events: list[dict]) -> None:
     行数上限与 run_query 一致（query._auto_cap 已封顶）；此处再防御性截断一次，
     保证超大异常数据也不会膨胀会话存储（acceptance：行数超过上限时截断存储）。
     本地落盘（chat.db）非出网，不受铁律1 的出网管道约束；load_result 回喂时才过脱敏。
+    （committed-turn 后 gen() 已改为单卡即时落库 _persist_card_artifact；本函数保留供测试/工具复用。）
     """
-    try:
-        max_rows = state.runtime.get().query_max_rows or 1000
-    except Exception:
-        max_rows = 1000
     for ev in events:
         if ev.get("type") != "sql_card":
             continue
@@ -482,86 +632,8 @@ def _persist_artifacts(state, session_id: str, events: list[dict]) -> None:
         res = card.get("result")
         if not rid or not isinstance(res, dict):
             continue
-        data = {k: v for k, v in res.items() if k != "rows"}
-        rows = res.get("rows")
-        if rows is not None:
-            capped = (rows or [])[: max_rows or len(rows or [])]
-            data["rows"] = capped
-            if len(rows or []) > len(capped):
-                data["truncated"] = True
-        try:
-            state.chats.save_artifact(session_id, rid, data)
-        except Exception:
-            continue
+        _persist_card_artifact(state, session_id, rid, res)
 
-
-def _events_to_messages(events: list[dict], request_messages: list) -> list[dict]:
-    """从 SSE events + 请求消息转换为落库的 message 列表。"""
-    out: list[dict] = []
-    # user 消息（ChatMessage pydantic 对象或 dict 都支持）
-    for m in request_messages:
-        role = m.role if hasattr(m, 'role') else m.get("role", "")
-        content = m.content if hasattr(m, 'content') else m.get("content", "")
-        if role == "user":
-            out.append({"role": "user", "kind": "text", "content": content})
-    # AI 消息
-    text_parts: list[str] = []
-    for ev in events:
-        t = ev.get("type")
-        if t == "text":
-            text_parts.append(ev.get("content", ""))
-        elif t == "think":
-            # T3.1 落库侧补齐：think 进 kind（时间线可重建；喂模型历史时按非对话跳过）
-            if text_parts:
-                out.append({"role": "assistant", "kind": "text", "content": "".join(text_parts)})
-                text_parts = []
-            out.append({"role": "assistant", "kind": "think", "content": ev.get("text", "")})
-        elif t == "stage":
-            # T3.1 落库侧补齐：stage 元数据进 kind（gate 无独立事件，verdict 已随 sql_card 落库）
-            out.append({"role": "assistant", "kind": "stage", "content": json.dumps(ev, ensure_ascii=False)})
-        elif t == "sql_card":
-            # 先把累计 text 作为一条
-            if text_parts:
-                out.append({"role": "assistant", "kind": "text", "content": "".join(text_parts)})
-                text_parts = []
-            card = ev.get("card", {})
-            out.append({
-                "role": "assistant",
-                "kind": "sql_card",
-                "content": json.dumps(card, ensure_ascii=False),
-                "sql": card.get("sql", ""),
-                "verdict": card.get("verdict", ""),
-            })
-        elif t == "plan":
-            out.append({
-                "role": "assistant",
-                "kind": "report",
-                "content": json.dumps(ev, ensure_ascii=False),
-            })
-        elif t == "section":
-            out.append({
-                "role": "assistant",
-                "kind": "report",
-                "content": json.dumps(ev, ensure_ascii=False),
-            })
-        elif t == "narration":
-            out.append({
-                "role": "assistant",
-                "kind": "report",
-                "content": json.dumps(ev, ensure_ascii=False),
-            })
-        elif t == "clarify":
-            out.append({
-                "role": "assistant",
-                "kind": "clarify",
-                "content": ev.get("question", ""),
-            })
-    if text_parts:
-        out.append({"role": "assistant", "kind": "text", "content": "".join(text_parts)})
-    return out
-
-
-# ---- chat sessions ----
 
 @router.post("/ai/dml/cancel")
 async def dml_cancel(body: dict) -> dict:
@@ -611,7 +683,7 @@ async def ai_continuation(body: dict) -> Any:
     """§19.5 continuation gate：统一"用户对 AI 回合的反应"入口。
 
     四 type 分发到既有处理器（不重写引擎执行）：
-    - new_question：完整意图流程（decompose→plan→execute），复用 /ai/chat SSE 链
+    - new_question：完整意图流程（harness 单循环），复用 /ai/chat SSE 链
     - clarify_report：续当前报告流（clarify 上下文 + 回答），复用 /ai/chat SSE 链
     - sql_option：轻量改写 SQL 重跑（不进意图分解/检索），复用 /ai/sql-option
     - confirm_write：DML 确认执行（preview 已给，confirm_token 闭环），复用 /api/v1/query
@@ -722,18 +794,8 @@ async def ai_sql_option(body: dict) -> dict:
     except Exception:
         rules_txt = ""
 
-    prompt = (
-        f"你是 SQL 改写助手。请对用户提供的 SQL 仅做一项修改：{label}\n"
-        + (f"背景提示：{hint}\n" if hint else "")
-        + (f"该表知识库记录的一般过滤规则（参考，用户可纠正）：\n{rules_txt}\n" if rules_txt else "")
-        + f"""要求：
-1. 仅做请求的该项修改；SQL 其余部分逐字保留（包括换行/大小写风格），不要顺手优化别处
-2. 如需引用运行时值，用会话变量占位符（如 :current_tenant），不要写具体值
-3. 如果 SQL 已经满足该项（无需修改），原样返回
-4. 只输出改写后的完整 SQL 文本，不要任何解释或标记
-用户 SQL（方言 {dialect}）：
-{sql}"""
-    )
+    from app.ai.prompts import render
+    prompt = render("sql_rewrite", label=label, hint=hint or "", filter_rules=rules_txt or "", dialect=dialect, sql=sql)
 
     req = type("_SqlOptReq", (), {"model_id": body.get("model_id")})()
     pc = _resolve_cfg(state, req)

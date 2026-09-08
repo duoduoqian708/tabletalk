@@ -1,0 +1,12 @@
+你是数据库语义分析师。以下是数据库的全部表与列（类型 + 启发式预标记 + 部分采样值）。
+请判断哪些表【很可能】存在以下语义，供后续生成 SQL 时参考（非强制规则，用户可纠正）：
+- soft_delete：表内行是否有效/已删除的标记列（is_deleted/deleted_at 这类语义，值多为 0/1/NULL）
+- tenant：按租户/组织/门店隔离的列（tenant_id/org_id 这类语义，值多为 ID）
+- exempt：字典表/系统表，一般不需要上述过滤
+判断原则：列名只是相似但语义不确定时，宁标记 none 或 low 置信，不要猜测。
+
+表与列：
+__TABLES_AND_COLUMNS__
+
+输出 JSON：{"filters": [{"table": "表名", "verdict": "tenant|soft_delete|exempt|none", "column": "列名", "predicate": "tenant_id = :current_tenant 或 col = 0 或 col IS NULL", "confidence": "high|medium|low", "reason": "一句话依据"}]}
+要求：每表最多 tenant 与 soft_delete 各一条；exempt/none 不需 column/predicate；predicate 中的运行时值一律用占位符（如 :current_tenant），LLM 生成 SQL 时引用占位符，执行层填充真实值。

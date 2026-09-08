@@ -4,11 +4,14 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from app.core.dialects.base import ColumnRef, FKRef, TableRef
+from app.core.dialects.base import ColumnRef
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -20,12 +23,30 @@ _schema_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 async def _discover(state: "AppState", conn_id: str):
     def _work(adapter, conn):
         async def inner():
+            _t0 = time.monotonic()
             tables = await adapter.list_tables(conn)
+            _t_list_tables = time.monotonic() - _t0
+
+            _t1 = time.monotonic()
             columns: list[ColumnRef] = []
             for t in tables:
                 columns += await adapter.list_columns(conn, t.name)
+            _t_list_columns = time.monotonic() - _t1
+
+            _t2 = time.monotonic()
             fks = await adapter.list_foreign_keys(conn)
+            _t_list_fks = time.monotonic() - _t2
+
+            _t3 = time.monotonic()
             row_counts = {t.name: await adapter.count_rows(conn, t.name) for t in tables}
+            _t_count_rows = time.monotonic() - _t3
+
+            logger.info(
+                "[kb.discover] conn=%s 表数=%d 列数=%d 耗时 %.2fs（list_tables %.2fs + list_columns %.2fs(串行×%d) + list_fks %.2fs + count_rows %.2fs(串行×%d)）",
+                conn_id, len(tables), len(columns), time.monotonic() - _t0,
+                _t_list_tables, _t_list_columns, len(tables), _t_list_fks,
+                _t_count_rows, len(tables),
+            )
             return tables, columns, fks, row_counts
 
         return inner()
@@ -67,10 +88,6 @@ async def get_schema(state: "AppState", conn_id: str, refresh: bool = False) -> 
     }
     _schema_cache[conn_id] = (time.monotonic(), result)
     return result
-
-
-def invalidate_schema(conn_id: str) -> None:
-    _schema_cache.pop(conn_id, None)
 
 
 async def describe_table(state: "AppState", conn_id: str, table: str) -> dict[str, Any]:

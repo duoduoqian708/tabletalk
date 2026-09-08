@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -22,6 +23,7 @@ import httpx
 
 from app.ai import gateway as gw
 from app.core.schema import get_schema, sample_values
+from app.core.timeutil import utcnow_iso
 from app.knowledge.ddl_context import is_noise_column
 
 if TYPE_CHECKING:
@@ -31,52 +33,34 @@ logger = logging.getLogger(__name__)
 
 # KB 阶段2/3 推理调用专用读超时（秒）：推理/plan 模式一次生成可达 2~5 分钟，
 # 默认 120s 容易被 106 限流/慢推理撞爆 → 单独放宽，别拖垮普通 chat 的默认目标。
-_KB_REASONING_TIMEOUT = 300.0
+_KB_REASONING_TIMEOUT = 480.0
 
-# 只支持 thinking（无 reasoning_effort 档位）的模型：用 budget_tokens 压思考链深浅。
-# 实测 deepseek-v4-flash：thinking 全开≈4256 字思考链/10s，budget 1024≈2173 字/7s。
-_KB_THINKING_BUDGET = {"low": 1024, "medium": 4096, "high": 8192}
+# 阶段一逐表注释读超时：单表一次 LLM 不该跑 8 分钟（480s 是图谱全局扫描的放宽值）。
+# 实测单表最长成功 ≈270s，180s 超时的表快速失败跳过（单表失败不影响其余表）。
+_KB_ANNOTATE_TIMEOUT = 180.0
 
-# 自检/裁决（第二轮"审校"型调用）：失败可安全降级保留首轮成果，
-# 因此不需要推理满时（实测 selfcheck 曾 ReadTimeout 300s），给普通等待即可，超时即降级。
-_KB_SELFCHECK_TIMEOUT = 60.0
-_KB_VERIFY_TIMEOUT = 90.0
+# 注释缓存版本：prompt 模板 / 解析契约 / 缓存键组成变更时手动 bump（防旧缓存污染新输出）。
+# v2：表级新增 profile 字段（AI 表画像 = 唯一向量文本来源，取代代码拼接）。
+# v3：注释/画像风格专业化——书面精炼、术语准确，口语叫法只进「又称」（2026-09 用户裁定）。
+PROMPT_VERSION = "v3"
 
 
-def _kb_reason_provider_cfg(rt, reasoning: bool = True) -> dict[str, Any]:
-    """KB 阶段2/3 专用 provider cfg：
-    - reasoning=False（阶段2 领域划分：归类命名任务用普通生成，秒级）→ 显式关思考；
-    - reasoning=True（阶段3 图谱）：按运行时 kb_build_reasoning_effort 档位开推理
-      （默认 low 浅推理，不搞深度）：
-        模型能力带 reasoning_effort（档位随心切）→ 直接传该档位；
-        只支持 thinking（如 DeepSeek）→ cfg["thinking_budget"] 由网关附加
-        budget_tokens 预算压浅推理（low=1024，deep 全开≈4k+ 字思考链）。
-    - 档位 off → 显式关思考（阶段3 也走普通生成）。
-    无 capabilities（旧数据/mock）→ 保持原全局 reasoning 设置。
-    推理/浅推理调用读超时统一放宽到 _KB_REASONING_TIMEOUT（不被 120s 默认掐断）。"""
+def _kb_reason_provider_cfg(rt, reasoning: bool = True, timeout: float | None = None) -> dict[str, Any]:
+    """KB 构建专用 provider cfg：统一思考方言直传，协议映射/降级全在 providers 适配层。
+
+    - reasoning=False（阶段2 领域划分：归类命名任务，秒级）→ off 显式关思考；
+    - reasoning=True → 运行时 kb_build_reasoning_effort 档位（off/low/medium/high）直传。
+      适配层按供应商映射（方舟 effort 全档直传 / DeepSeek medium→high 服务端映射 /
+      GLM-5.3 强制思考降级等），KB 不感知协议差异，亦无 thinking_budget 特判
+      （历史问题：budget 在方舟 deepseek-v4 上被静默忽略 → 单表 1.3 万 reasoning tokens）。
+    timeout：调用方可覆盖读超时下限（如逐表注释 180s；缺省用 _KB_REASONING_TIMEOUT=480s）。"""
     cfg = rt.provider_config()
-    cfg["timeout"] = max(float(cfg.get("timeout") or 120), _KB_REASONING_TIMEOUT)
+    cfg["timeout"] = max(float(cfg.get("timeout") or 120), timeout or _KB_REASONING_TIMEOUT)
     effort = (getattr(rt, "kb_build_reasoning_effort", "low") or "low").strip().lower()
     if not reasoning or effort == "off":
-        # 显式 off：网关 self.reasoning == "off" → 不发 thinking/reasoning_effort 参数
         cfg["reasoning"] = "off"
         return cfg
-    try:
-        default_id = getattr(rt, "default_ai_model", "")
-        pool = rt.ai_models if hasattr(rt, "ai_models") else []
-        default = next((m for m in pool if m.id == default_id), None) or (pool[0] if pool else None)
-        cap = getattr(default, "capabilities", None) if default else None
-        if cap and cap.get("reasoning"):
-            if cap.get("reasoning_effort"):
-                # 模型支持档位随心切 → 用构建档位（off/low/medium/high→thinking 兜底）
-                cfg["reasoning"] = effort if effort in ("low", "medium", "high") else "thinking"
-            else:
-                # 只支持 thinking → 预算压浅推理
-                cfg["reasoning"] = "thinking"
-                if effort in _KB_THINKING_BUDGET:
-                    cfg["thinking_budget"] = _KB_THINKING_BUDGET[effort]
-    except Exception:  # noqa: BLE001
-        pass
+    cfg["reasoning"] = effort if effort in ("low", "medium", "high") else "auto"
     return cfg
 
 
@@ -126,6 +110,12 @@ def _parse_items(text: str) -> list[dict[str, Any]]:
         values = str(it.get("values") or "").strip()  # 取值对照（可选，"P=待付款；S=已发货"）
         if values:
             item["values"] = values
+        if item["column"] is None:
+            profile = str(it.get("profile") or "").strip()  # 表画像（向量文本唯一 AI 来源）
+            if profile:
+                item["profile"] = profile[:600]  # 提示词要求 150~300 字，代码只兜超长上限
+        if item["column"] and it.get("core") is True:
+            item["core"] = True  # AI 关键列提名（合成器选材信号）
         out.append(item)
     return out
 
@@ -160,51 +150,24 @@ ENUM_MAX_VALUES = 50  # 单列去重取值数超过此数视为非枚举（长�
 
 
 def _annotation_prompt_sampled(
-    table_ddl: str, samples_ref: str
+    table_ddl: str, samples_ref: str, db_tables: str = ""
 ) -> str:
     """有采样版 prompt：样本取值段 + values 对照指令 + 含 values 的 JSON 契约。
 
     已有注释内嵌在 DDL 的 /* comment */ 里，随 DDL 发给模型；准则里声明其仅供参考。
+    db_tables：库内全部表清单（含表注释），帮模型理解该表在整体业务中的位置。
     """
-    return (
-        "你是数据库语义分析专家。请为下表每一列生成准确的中文业务注释"
-        "（一句话说清业务用途，不要复述列名或类型）。\n"
-        "【建表 DDL】\n"
-        f"{table_ddl}\n\n"
-        f"{samples_ref}\n"
-        "【准则】\n"
-        "1. DDL 中的 COMMENT 注释可能过时或不准确，仅供参考，以你的独立复核为准。\n"
-        "2. 每列产出一条注释。有样本值时：若该列值形态可辨识（编号/代码/标识/枚举/状态等，"
-        "如订单编号形如 o_123），请在注释中附真实取值示例（如「订单编号，示例 o_123」），"
-        "便于今后识别同类值；示例一律取自样本，不要编造。\n"
-        "3. 低基数离散取值（状态/类型/标志位等）另附加 values=「代码=含义」分号分隔"
-        "（如 P=待付款；S=已发货）。\n"
-        "4. 额外为整张表写一条表级描述。\n"
-        "【输出】\n"
-        "返回 JSON 数组，字段级 {\"table\":\"表名\",\"column\":\"列名\","
-        "\"comment\":\"一句话（可含取值示例）\",\"values\":\"可选\"}，"
-        "表级 {\"table\":\"表名\",\"comment\":\"整表定位一句话\"}。\n"
-        "只返回 JSON，不要多余文字。"
+    from app.ai.prompts import render
+    return render(
+        "annotator_column_sampled",
+        table_ddl=table_ddl, samples_ref=samples_ref, db_tables=db_tables,
     )
 
 
-def _annotation_prompt_unsampled(table_ddl: str) -> str:
+def _annotation_prompt_unsampled(table_ddl: str, db_tables: str = "") -> str:
     """无采样版 prompt：纯结构，不提 values（不诱导编造取值含义）。"""
-    return (
-        "你是数据库语义分析专家。请为下表每一列生成准确的中文业务注释"
-        "（一句话说清业务用途，不要复述列名或类型）。\n"
-        "【建表 DDL】\n"
-        f"{table_ddl}\n\n"
-        "【准则】\n"
-        "1. DDL 中的 COMMENT 注释可能过时或不准确，仅供参考，以你的独立复核为准。\n"
-        "2. 每列产出一条注释；对低基数离散字段（状态/标志位等）仅当能从字段名/类型/"
-        "注释可靠推断时才简述取值含义，否则保守描述，不编造具体取值。\n"
-        "3. 额外为整张表写一条表级描述。\n"
-        "【输出】\n"
-        "返回 JSON 数组，字段级 {\"table\":\"表名\",\"column\":\"列名\",\"comment\":\"一句话\"}，"
-        "表级 {\"table\":\"表名\",\"comment\":\"整表定位一句话\"}。\n"
-        "只返回 JSON，不要多余文字。"
-    )
+    from app.ai.prompts import render
+    return render("annotator_column_unsampled", table_ddl=table_ddl, db_tables=db_tables)
 
 
 def _first_example(samples: dict[str, list[Any]] | None, column: str) -> str:
@@ -299,16 +262,18 @@ def _mock_table_comments_from_ddl(
 ) -> list[dict[str, Any]]:
     """mock：为单表生成伪注释（无 LLM 时的 fallback）；低基数列附 values/example。
 
-    表级描述草案：仅当无库注释时产出（库注释视为权威，不产竞争草案）。
-    values 来源：有样本 → 去重值占位对照；无样本 → 结构显式枚举（CHECK/ENUM）。
-    example 仅在授权样本时产生。
+    表级：始终产出 {comment 提案, profile 画像}（mock 扮演 LLM，与真实模型输出契约一致；
+    提案不覆盖当前值，库注释权威性不受影响）。values 来源：有样本 → 去重值占位对照；
+    无样本 → 结构显式枚举（CHECK/ENUM）。example 仅在授权样本时产生。
     """
     items: list[dict[str, Any]] = []
-    if not table_comment:
-        items.append({
-            "table": table_name, "column": None,
-            "comment": f"{table_name} 表：{len(columns)} 列的业务实体。",
-        })
+    biz_cols = [c["name"] for c in columns if not is_noise_column(c["name"])][:8]
+    profile = f"{table_name} 表。关键字段：{'、'.join(biz_cols)}。" if biz_cols else f"{table_name} 表。"
+    items.append({
+        "table": table_name, "column": None,
+        "comment": table_comment or f"{table_name} 表：{len(columns)} 列的业务实体。",
+        "profile": profile[:300],
+    })
     for c in columns:
         extra = ""
         if samples:
@@ -333,6 +298,70 @@ def _mock_table_comments_from_ddl(
     return items
 
 
+def annotation_input_hash(
+    table_name: str,
+    table_ddl: str,
+    samples: dict[str, list[Any]] | None,
+    model: str,
+) -> str:
+    """注释缓存键：表名 + DDL + 规范化样本 + PROMPT_VERSION + 模型名。
+
+    规范化：样本列排序、值序列化后排序（采样顺序抖动不产生新键）。
+    采样与否已体现在样本内容里（未授权 → 空 dict → 不同键）。
+    """
+    norm_samples = {
+        col: sorted(str(v) for v in (vals or []) if v is not None)
+        for col, vals in sorted((samples or {}).items())
+    }
+    canon = json.dumps({
+        "pv": PROMPT_VERSION,
+        "table": table_name,
+        "ddl": table_ddl,
+        "samples": norm_samples,
+        "model": model or "",
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(canon.encode()).hexdigest()
+
+
+def _cache_put(cache: Any, table_name: str, input_hash: str, items: list[dict[str, Any]]) -> None:
+    """注释缓存写入：仅成功产出非空 items（后处理后的最终形态）才缓存；
+    失败/空解析不缓存 → 重试/单表重注自然重新调 LLM。"""
+    if cache is None or not input_hash or not items:
+        return
+    cache[table_name] = {
+        "input_hash": input_hash,
+        "items": json.loads(json.dumps(items, ensure_ascii=False)),
+        "created_at": utcnow_iso(),
+    }
+
+
+def _related_tables(schema: dict[str, Any], table_name: str, cap: int = 30) -> list[str]:
+    """逐表注释的业务上下文表清单：FK 邻表 + 同前缀表（大库 token 治理）。
+
+    小库（≤cap）返回全部表（行为与历史一致）；大库只给相关表——
+    每表 prompt 附带全库清单的 token 成本随表数平方增长，裁剪后线性。
+    无任何关联信号时回退字母序前 cap 张。
+    """
+    tables = sorted(t["name"] for t in schema.get("tables", []))
+    if len(tables) <= cap:
+        return tables
+    related: set[str] = set()
+    for f in schema.get("foreign_keys", []):
+        if f["table"] == table_name:
+            related.add(f["ref_table"])
+        if f["ref_table"] == table_name:
+            related.add(f["table"])
+    prefix = table_name.split("_")[0]
+    related |= {t for t in tables if t.split("_")[0] == prefix}
+    related.discard(table_name)
+    if not related:
+        return tables[:cap]
+    ordered = sorted(related)
+    if len(ordered) > cap:
+        ordered = ordered[:cap]
+    return ordered
+
+
 async def annotate_table(
     state: "AppState",
     conn_id: str,
@@ -340,6 +369,7 @@ async def annotate_table(
     table_ddl: str,
     schema: dict[str, Any],
     samples: dict[str, dict[str, list[Any]]] | None = None,
+    cache: Any = None,
 ) -> list[dict[str, Any]]:
     """为单张表生成列级注释（DDL 做上下文，可选样本值）。
 
@@ -347,6 +377,12 @@ async def annotate_table(
     返回 items 列表（未落库，由调用方统一 annotate_drafts）：
     [{table, column, comment, values?, example?}]。
     values/example 仅在授权样本（include_samples）时产生——天然门控。
+
+    cache：注释缓存访问器（facade 注入，见 KnowledgeBase.annotation_cache）。
+    None = 不走缓存。命中（input_hash 一致）直接返回缓存 items，跳过 LLM；
+    仅成功产出非空 items 后才写缓存（失败不缓存，重试自然重新调用）。
+
+    返回 (items, source)：source ∈ cache|llm|mock|empty（成本可观测）。
     """
     rt = state.runtime.get()
     columns = [c for c in schema.get("columns", []) if c["table"] == table_name]
@@ -355,10 +391,21 @@ async def annotate_table(
     )
     table_samples = samples.get(table_name) if samples else None
 
-    provider_cfg = _kb_reason_provider_cfg(rt)  # 阶段一也走构建档位（默认浅推理，不深推）
+    provider_cfg = _kb_reason_provider_cfg(rt, timeout=_KB_ANNOTATE_TIMEOUT)  # 阶段一逐表注释：独立读超时（180s），不被图谱档位的 480s 拖累
+
+    input_hash = ""
+    if cache is not None:
+        input_hash = annotation_input_hash(table_name, table_ddl, table_samples, provider_cfg.get("model", ""))
+        cached = cache.get(table_name)
+        if cached and cached.get("input_hash") == input_hash:
+            items = json.loads(json.dumps(cached.get("items") or []))  # 深拷贝，调用方可自由改写
+            logger.debug("[kb.annotate] conn=%s 注释缓存命中 table=%s", conn_id, table_name)
+            return items, "cache"
     if gw.is_effective_mock(provider_cfg):
         logger.debug("[kb.annotate] conn=%s mock 伪注释 table=%s", conn_id, table_name)
-        return _mock_table_comments_from_ddl(table_name, columns, table_samples, table_comment, table_ddl)
+        items = _mock_table_comments_from_ddl(table_name, columns, table_samples, table_comment, table_ddl)
+        _cache_put(cache, table_name, input_hash, items)
+        return items, ("mock" if items else "empty")
 
     # 样本值段（授权才有样本 → values/example 的天然门控）；已有注释内嵌在 DDL，不单独重复
     samples_ref = "【样本取值（真实数据；用于辅助理解字段含义）】\n"
@@ -379,10 +426,17 @@ async def annotate_table(
 
     # 两套模板（段4）：有采样版（样本段+values 指令+含 values 契约）/
     # 无采样版（纯结构，不提 values）。按是否有授权样本分流，绝不共用。
+    # 库内相关表清单（FK 邻表 + 同前缀，大库裁剪）作为业务上下文
+    related = _related_tables(schema, table_name)
+    tables_idx = {t["name"]: t for t in schema.get("tables", [])}
+    db_tables = "\n".join(
+        f"- {t}" + (f"（{tables_idx[t]['comment']}）" if tables_idx[t].get("comment") else "")
+        for t in related
+    )
     prompt = (
-        _annotation_prompt_sampled(table_ddl, samples_ref)
+        _annotation_prompt_sampled(table_ddl, samples_ref, db_tables)
         if table_samples
-        else _annotation_prompt_unsampled(table_ddl)
+        else _annotation_prompt_unsampled(table_ddl, db_tables)
     )
     provider = gw.build_provider(provider_cfg)
     # 中央记账拦截器 ctx：一次请求/响应一组（llm_log + cost_tracker + egress 清单）
@@ -395,9 +449,35 @@ async def annotate_table(
         },
     )
     items = _parse_items(resp.content or "")
-    # 表级项（column 省略）只保留无库注释的表：库注释视为权威，不产竞争草案
-    if table_comment:
-        items = [it for it in items if it.get("column") is not None]
+    # 表级定位必填闸（prompt 任务一）：缺失视为格式错误 → 追加纠偏消息重试一次；
+    # 重试仍缺不硬造（表头由合成端兜底链补齐），只留 warning 便于观察模型遵循度。
+    if not any(it.get("column") is None for it in items):
+        try:
+            fix = await provider.chat(
+                [
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": (resp.content or "")[:2000]},
+                    {"role": "user", "content": "你的输出缺少表级定位项（无 column 字段的 {\"table\",...} 条目，40~60 字，可含「又称：…」）。请重新返回完整 JSON 数组：表级项在最前，再跟全部列级项。"},
+                ],
+                tools=None,
+                ctx={
+                    "conn_id": conn_id, "connection": conn_id, "skill": "kb-annotation",
+                    "source": "kb_build", "status": "egress-annotation-retry",
+                    "context_meta": {"candidate_tables": [table_name]},
+                },
+            )
+            items_retry = _parse_items(fix.content or "")
+            if any(it.get("column") is None for it in items_retry):
+                items = items_retry
+                logger.info("[kb.annotate] conn=%s 表级缺失纠偏成功 table=%s", conn_id, table_name)
+            else:
+                logger.warning("[kb.annotate] conn=%s 表级定位仍缺失 table=%s（交合成端兜底）", conn_id, table_name)
+        except Exception as e:  # noqa: BLE001 —— 纠偏重试失败不致命，走兜底
+            logger.warning("[kb.annotate] conn=%s 表级纠偏重试失败 table=%s：%s", conn_id, table_name, e)
+    # 表级项（column 省略）保留：AI 表级语义描述作为补充写入 proposed_comment，
+    # 与库注释（db_comment）共存——库注释权威存 db_comment，AI 描述存 comment，
+    # 两者不竞争（confirm 提升 proposed_comment 到 comment；向量文本取 vector_profile）。
+    # 表级 profile（AI 表画像）随 items 落 proposed_profile，confirm 后成为向量文本唯一 AI 来源。
     # 无采样硬闸（段4）：无授权样本 → 丢弃 LLM 可能硬凑的 example；
     # values 回退到结构显式枚举（CHECK/ENUM），没有则不带键——不编造数据知识。
     if not table_samples:
@@ -417,7 +497,9 @@ async def annotate_table(
                 example = _first_example(table_samples, it["column"])
                 if example:
                     it["example"] = example
-    return items
+    # 缓存写入（统一走 _cache_put：失败/空解析不缓存）
+    _cache_put(cache, table_name, input_hash, items)
+    return items, ("llm" if items else "empty")
 
 
 async def annotate_tables(
@@ -430,26 +512,38 @@ async def annotate_tables(
     p0: int = 15,
     p1: int = 40,
     concurrency: int | None = None,
-) -> int:
-    """逐表 DDL annotation 批量入口：返回新增 draft 数量。
+    limiter: "_AdaptiveLimiter | None" = None,  # 共享全局限流（构建期各阶段共用一个实例）
+    cache: Any = None,
+) -> dict[str, Any]:
+    """逐表 DDL annotation 批量入口：注释落库 + 结构化结果。
 
     ddl_map: {table_name: ddl_string}，由 ddl_context.generate_ddls_all 生成。
     on_progress(stage, percent, detail, phase) 用于构建进度回调（阶段一「AI 正在处理」）。
+    cache: 注释缓存访问器（透传给 annotate_table；None = 不缓存）。
+
+    返回 {added, failed_tables, cached_tables, llm_tables}：
+    - failed_tables：重试耗尽仍失败的表（审核镜头展示 + 单表重试入口的数据源）；
+    - cached_tables / llm_tables：缓存命中 / 实际调 LLM 的表（成本可观测）。
 
     并发：每表独立 LLM 调用并与 provider 并发上限自适应——撞 429/瞬断则指数退避重试 +
     并发额度减半（最低 1）；连续成功再温和回升。避免硬顶 N 并发把低配额 provider 打爆。
-    concurrency 缺省取环境变量 TABLETALK_KB_ANNOTATION_CONCURRENCY（默认 10）。
+    concurrency 缺省取环境变量 TABLETALK_KB_ANNOTATION_CONCURRENCY（默认 10）；
+    limiter 传入时忽略 concurrency（构建期与阶段二~四共享同一自适应实例）。
     """
     items_all: list[dict[str, Any]] = []
+    failed_tables: list[str] = []
+    cached_tables: list[str] = []
+    llm_tables: list[str] = []
     _t0ai = time.monotonic()
     table_names = [t["name"] for t in schema.get("tables", []) if t["name"] in ddl_map]
     n = max(1, len(table_names))
     if not table_names:
-        return 0
-    cap = concurrency if concurrency else int(
-        os.environ.get("TABLETALK_KB_ANNOTATION_CONCURRENCY", "10")
-    )
-    limiter = _AdaptiveLimiter(cap)
+        return {"added": 0, "failed_tables": [], "cached_tables": [], "llm_tables": []}
+    if limiter is None:
+        cap = concurrency if concurrency else int(
+            os.environ.get("TABLETALK_KB_ANNOTATION_CONCURRENCY", "10")
+        )
+        limiter = _AdaptiveLimiter(cap)
     done = {"n": 0}
     logger.info("[kb.annotate] conn=%s 开始逐表注释（并发 ≤ %s）：tables=%s", conn_id, limiter.cap, len(table_names))
 
@@ -458,13 +552,19 @@ async def annotate_tables(
         _t_tbl = time.monotonic()
         try:
             try:
-                tbl_items = await _retry_chat(
-                    lambda: annotate_table(state, conn_id, name, ddl_map[name], schema, samples),
+                tbl_items, src = await _retry_chat(
+                    lambda: annotate_table(state, conn_id, name, ddl_map[name], schema, samples, cache=cache),
                     limiter,
                 )
             except Exception as e:  # noqa: BLE001 —— 重试耗尽后单表失败不影响其余表
                 logger.warning("[kb.annotate] conn=%s 单表注释失败 table=%s：%s", conn_id, name, e)
-                tbl_items = []
+                tbl_items, src = [], "failed"
+                failed_tables.append(name)
+            if tbl_items:
+                (cached_tables if src == "cache" else llm_tables).append(name)
+            elif src == "empty":
+                # 空产出：不算失败（AI 可能确实无话可说），记录便于观察
+                logger.info("[kb.annotate] conn=%s 单表零产出 table=%s", conn_id, name)
             done["n"] += 1
             _tbl_el = time.monotonic() - _t_tbl
             if _tbl_el > 30:
@@ -480,18 +580,25 @@ async def annotate_tables(
             await limiter.release()
 
     results = await asyncio.gather(*(_one(t) for t in table_names), return_exceptions=True)
-    for name, tbl_items in results:
-        if isinstance(tbl_items, Exception):
-            logger.warning("[kb.annotate] conn=%s 单表注释任务异常 table=%s：%s", conn_id, name, tbl_items)
+    for r in results:
+        # 裸异常元素（如 on_progress 抛出的协作取消）不是二元组——先判型再解包，
+        # 否则 TypeError 打穿整批，破坏"单表失败不影响其余表"的隔离契约。
+        if isinstance(r, asyncio.CancelledError):
+            raise r  # 协作取消必须向上传播（except Exception 拦不住 BaseException）
+        if isinstance(r, BaseException):
+            logger.warning("[kb.annotate] conn=%s 单表注释任务异常：%s", conn_id, r)
             continue
+        name, tbl_items = r
         if tbl_items:
             items_all.extend(tbl_items)
     if not items_all and table_names:
         logger.warning("[kb.annotate] conn=%s LLM 返回解析为空：处理了 %s 张表但零产出", conn_id, len(table_names))
-    added = state.knowledge.annotate_drafts(conn_id, items_all)
-    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s（总耗时 %.1fs）",
-                conn_id, len(items_all), added, time.monotonic() - _t0ai)
-    return added
+    added = await state.knowledge.annotate_drafts_async(conn_id, items_all)
+    logger.info("[kb.annotate] conn=%s 逐表注释完成：items=%s added=%s cached=%s llm=%s failed=%s（总耗时 %.1fs）",
+                conn_id, len(items_all), added, len(cached_tables), len(llm_tables),
+                len(failed_tables), time.monotonic() - _t0ai)
+    return {"added": added, "failed_tables": failed_tables,
+            "cached_tables": cached_tables, "llm_tables": llm_tables}
 
 
 # ---------- 并发自适应（阶段一逐表注释用） ----------
@@ -553,6 +660,9 @@ def _retryable(e: Exception) -> tuple[bool, bool]:
     if isinstance(e, httpx.HTTPStatusError):
         code = e.response.status_code
         return code in _REQUEUABLE_HTTP_CODES, code == 429
+    # 读超时（ReadTimeout）= 模型本身慢/推理过久，重试无意义且耗时翻倍 → 不重试，交由上层降级
+    if isinstance(e, httpx.ReadTimeout):
+        return False, False
     if isinstance(e, httpx.RequestError):
         return True, False
     return False, False
@@ -617,17 +727,13 @@ async def annotate_knowledge(
     from app.knowledge.ddl_context import truncate_samples  # noqa: PLC0415
     samples = truncate_samples(samples) if samples else samples
 
-    provider_cfg = _kb_reason_provider_cfg(rt)  # 知识库注释统一走构建档位（默认浅推理）
+    provider_cfg = _kb_reason_provider_cfg(rt, timeout=_KB_ANNOTATE_TIMEOUT)  # 单表注释 API 同样用逐表档位（180s）
     if gw.is_effective_mock(provider_cfg):
         items = _mock_comments(schema, samples)
     else:
         # 独立 API 时无 DDL，使用旧 schema 格式
-        prompt = (
-            "你是数据库知识构建助手。为下面 schema 中的表和列生成简短中文注释。\n"
-            "已有注释仅供参考，可能过时或不准确，请结合字段名和上下文独立判断。\n"
-            "返回 JSON 数组，元素形如 {\"table\": \"表名\", \"column\": \"列名，表级注释则省略\", \"comment\": \"一句话中文注释\"}。\n"
-            "只返回 JSON，不要多余文字。\n" + _prompt_schema(schema, samples)
-        )
+        from app.ai.prompts import render
+        prompt = render("annotator_kb_comment", schema_block=_prompt_schema(schema, samples))
         provider = gw.build_provider(provider_cfg)
         resp = await provider.chat(
             [{"role": "user", "content": prompt}], tools=None,
@@ -638,18 +744,79 @@ async def annotate_knowledge(
             },
         )
         items = _parse_items(resp.content or "")
+    # API 版走 annotator_kb_comment 旧 prompt（表级为附带任务），不强制表级闸
 
-    added = state.knowledge.annotate_drafts(conn_id, items)
+    added = await state.knowledge.annotate_drafts_async(conn_id, items)
     return {"items": len(items), "added": added, "samples_used": include_samples}
 
 
-# ---------- 领域划分（KC2·段6：画像打包 → 一轮划分 → 一轮自检） ----------
+# ---------- 领域划分（KC2·段6：画像打包 → 单轮划分） ----------
 
 _MOCK_TAG_HINTS = {
     "order": "订单", "product": "商品", "customer": "客户", "return": "退货",
     "pay": "支付", "ship": "物流", "inventory": "库存", "review": "评价",
     "categor": "分类", "supplier": "供应商", "campaign": "营销", "address": "地址",
 }
+
+
+def _climb_pct(elapsed: float, p_from: int, p_to: int, climb_seconds: float) -> int:
+    """两段式时间爬坡（纯函数）：前 20s 爬完窗口一半（保留快速反馈），
+    剩余一半在 climb_seconds 内匀速走完——长推理（数分钟级）期间条持续缓慢移动、
+    永不提前封顶，只有真实完成才由调用方打满。恒 ≤ p_to-1 且单调不减。"""
+    span = max(1, p_to - p_from)
+    if climb_seconds <= 0:
+        return min(p_to - 1, p_from + span // 2)
+    fast = min(elapsed, 20.0)
+    pct = p_from + span // 2 * (fast / 20.0)
+    if elapsed > 20.0:
+        slow = min(elapsed - 20.0, climb_seconds)
+        pct += (span - span // 2) * (slow / climb_seconds)
+    return max(p_from, min(p_to - 1, int(pct)))
+
+
+def _count_json_items(text: str, array_keys: tuple[str, ...] = ("[",)) -> int:
+    """容忍式部分 JSON 计数：从流式累积文本里数"已完整的顶层对象"。
+
+    数组元素判定：跟踪字符串/转义与括号深度，深度回到 1（在数组内）即计一个完整对象。
+    解析不了（模型还没吐出数组开括号 / 文本非 JSON）→ 0，静默——只喂进度，不参与权威解析。
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    in_array = False
+    count = 0
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+            if depth == 1:
+                in_array = True
+        elif ch == "]":
+            depth = max(0, depth - 1)
+            if depth == 0:
+                in_array = False
+        elif ch == "{":
+            depth += 1
+            if in_array and depth == 2:
+                count += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+    return count
+
+
+def _live_tail(buf: str, max_chars: int = 240) -> str:
+    """滚动缓冲 → 单行尾文：压换行/多空白，保末 max_chars 字符。"""
+    flat = " ".join((buf or "").split())
+    return flat[-max_chars:]
 
 
 async def _chat_with_beat(
@@ -663,49 +830,139 @@ async def _chat_with_beat(
     step_index: int, step_total: int, percent: int,
     interval: float = 2.0,
     p_to: int | None = None,
+    limiter: "_AdaptiveLimiter | None" = None,
+    climb_seconds: float = 0.0,
+    stream: bool = False,
+    count_detail: str | None = None,
 ) -> Any:
-    """LLM 调用期间心跳：每 interval 秒推一帧 busy 帧，让构建阶段条保持动画
-    （阶段2/3 一次调用可达 10~90s，纯干等会像卡死）。
+    """LLM 调用期间进度驱动（阶段2/3 长推理专用）。
 
     - p_to 缺省 → 心跳帧 percent 恒为传入值（老语义，纯动画）；
-    - p_to 给定 → **时间爬坡**：percent 从传入值（p_from）随心跳递增，上限 p_to-1，
-      调用完成瞬间才由调用方 report 跳到 p_to。消除"百分比水平线"的假死观感，
-      也让阶段条进度与真实 LLM 耗时成正比（慢调用爬得高，快调用停在低位即完成）。
-      pacing = span//20拍 ≈ 40s 爬满区间，慢调用封顶段界下沿等待真实完成。
+    - p_to 给定 → **两段式时间爬坡**（_climb_pct）：前 20s 爬窗口一半，剩余在
+      climb_seconds 内匀速，长推理期间条持续走、永不提前封顶，完成瞬间打满。
+    - stream=True → 消费 provider.chat_stream：边收边累积全文 + 容忍式部分 JSON
+      计数（count_detail 模板如"已识别 {n} 条关系"）→ detail 出**真实条目计数**；
+      权威解析仍由调用方对返回的完整文本做（流式只喂进度，正确性零风险）。
+      流式无 tool_calls 场景（阶段2/3 均无工具）；mock provider 走非流式直连。
     - busy 帧不校验取消（协作式取消仍只在真实 report 点收尾，语义不变）；
-    - on_progress=None（独立 API 场景）→ 不启心跳，直连调用。
+    - on_progress=None（独立 API 场景）→ 不启心跳，直连调用；
+    - limiter 给定 → 本次调用按次占坑。
     """
+    if limiter is not None:
+        await limiter.acquire()
+    try:
+        return await _chat_with_beat_inner(
+            provider, messages, tools, ctx,
+            on_progress=on_progress, stage=stage, phase=phase, step=step,
+            step_index=step_index, step_total=step_total, percent=percent,
+            interval=interval, p_to=p_to, climb_seconds=climb_seconds,
+            stream=stream, count_detail=count_detail,
+        )
+    finally:
+        if limiter is not None:
+            await limiter.release()
+
+
+async def _chat_with_beat_inner(
+    provider: Any,
+    messages: list[dict[str, Any]],
+    tools: Any,
+    ctx: dict[str, Any] | None,
+    *,
+    on_progress: Any | None,
+    stage: str, phase: str, step: str,
+    step_index: int, step_total: int, percent: int,
+    interval: float = 2.0,
+    p_to: int | None = None,
+    climb_seconds: float = 0.0,
+    stream: bool = False,
+    count_detail: str | None = None,
+) -> Any:
+    """主体：流式累积/心跳爬坡 + provider 调用。返回 LLMResponse（content 为完整文本）。"""
     if on_progress is None:
+        if stream and hasattr(provider, "chat_stream"):
+            text_parts: list[str] = []
+            async for chunk in provider.chat_stream(messages, tools=tools, ctx=ctx):
+                if chunk.delta:
+                    text_parts.append(chunk.delta)
+                elif chunk.content:
+                    text_parts.append(chunk.content)
+            return gw.ChatResponse(content="".join(text_parts))
         return await provider.chat(messages, tools=tools, ctx=ctx)
+
     conn_id = (ctx or {}).get("conn_id", "?")
     _t0 = time.monotonic()
-    logger.info("[kb.llm] conn=%s 调用开始 stage=%s step=%s", conn_id, stage, step)
+    logger.info("[kb.llm] conn=%s 调用开始 stage=%s step=%s stream=%s",
+                conn_id, stage, step, stream)
     stop = asyncio.Event()
-    pace = max(1, (p_to - percent) // 20) if p_to is not None else 0
     _warned = 0.0
+    state = {"n": 0, "reasoning_tail": "", "content_tail": ""}
+
+    def _report(elapsed: float) -> None:
+        nonlocal _warned
+        # 超长告警：等待 ≥60s 未返回 → warning 一次，此后每 30s 复报
+        if elapsed >= 60 and elapsed - _warned >= 30:
+            _warned = elapsed
+            logger.warning("[kb.llm] conn=%s 调用超长：stage=%s step=%s 已等待 %.0fs（仍在等待）",
+                           conn_id, stage, step, elapsed)
+        detail = f"AI 思考中 {int(elapsed)}s"
+        if state["n"] > 0 and count_detail:
+            detail = count_detail.format(n=state["n"]) + f" · {int(elapsed)}s"
+        # 生成尾巴：正式内容开始输出后切内容尾，否则思考链尾（单行，浮卡"在输出"证据）
+        tail = state["content_tail"] or state["reasoning_tail"]
+        live = _live_tail(tail) if tail else None
+        pct = _climb_pct(elapsed, percent, p_to, climb_seconds) if p_to is not None else percent
+        on_progress(
+            stage, pct, detail,
+            phase=phase, step=step, step_index=step_index, step_total=step_total,
+            busy=True, check_cancel=False, live=live,
+        )
 
     async def _beat() -> None:
-        nonlocal _warned
-        n = 0.0
         while not stop.is_set():
             await asyncio.sleep(interval)
-            n += interval
-            # 超长告警：单次 LLM 调用等待 ≥60s 仍未返回 → warning 一次，此后每 30s 复报
-            if n >= 60 and n - _warned >= 30:
-                _warned = n
-                logger.warning("[kb.llm] conn=%s 调用超长：stage=%s step=%s 已等待 %.0fs（仍在等待）",
-                               conn_id, stage, step, n)
-            pct = percent
-            if p_to is not None and pace:
-                pct = min(percent + int(n / interval) * pace, p_to - 1)
-            on_progress(
-                stage, pct, f"AI 思考中 {int(n)}s",
-                phase=phase, step=step, step_index=step_index, step_total=step_total,
-                busy=True, check_cancel=False,
-            )
+            _report(time.monotonic() - _t0)
 
+    use_stream = stream and hasattr(provider, "chat_stream")
     beat = asyncio.create_task(_beat())
     try:
+        if use_stream:
+            parts: list[str] = []
+            pushed_src = ""  # "" | reasoning | content（来源切换立即推帧）
+            last_push_t = 0.0
+            try:
+                async for chunk in provider.chat_stream(messages, tools=tools, ctx=ctx):
+                    if chunk.reasoning:
+                        state["reasoning_tail"] = (state["reasoning_tail"] + chunk.reasoning)[-400:]
+                    if chunk.delta:
+                        parts.append(chunk.delta)
+                        state["content_tail"] = (state["content_tail"] + chunk.delta)[-400:]
+                    elif chunk.content:
+                        parts.append(chunk.content)
+                        state["content_tail"] = (state["content_tail"] + chunk.content)[-400:]
+                        break  # 非流式回退 chunk（mock 等）：content 即全文
+                    if count_detail:
+                        n = _count_json_items("".join(parts))
+                        if n > 0 and n != state["n"]:
+                            state["n"] = n
+                            _report(time.monotonic() - _t0)
+                    # 尾巴推帧：来源切换（思考→正文）立即推 + 0.5s 节流（chunk 级别太密，手机渲染扛不住）
+                    tail_now = state["content_tail"] or state["reasoning_tail"]
+                    src = "content" if state["content_tail"] else "reasoning"
+                    now = time.monotonic()
+                    if tail_now and (src != pushed_src or now - last_push_t >= 0.5):
+                        pushed_src = src
+                        last_push_t = now
+                        _report(now - _t0)
+            except TypeError:
+                # provider 不支持流式签名 → 回退非流式
+                resp = await provider.chat(messages, tools=tools, ctx=ctx)
+                logger.info("[kb.llm] conn=%s 调用完成 stage=%s step=%s（非流式回退）耗时 %.1fs",
+                            conn_id, stage, step, time.monotonic() - _t0)
+                return resp
+            logger.info("[kb.llm] conn=%s 调用完成 stage=%s step=%s 耗时 %.1fs（流式 %d 字）",
+                        conn_id, stage, step, time.monotonic() - _t0, len("".join(parts)))
+            return gw.ChatResponse(content="".join(parts))
         resp = await provider.chat(messages, tools=tools, ctx=ctx)
         logger.info("[kb.llm] conn=%s 调用完成 stage=%s step=%s 耗时 %.1fs",
                     conn_id, stage, step, time.monotonic() - _t0)
@@ -865,6 +1122,31 @@ def _build_ddl_portraits(
     return "\n\n".join(parts)
 
 
+def _deterministic_candidates_block(schema: dict[str, Any], cap: int = 120) -> str:
+    """代码已发现的关系候选块（喂给阶段三 prompt 做参考）。
+
+    来源 = build_draft_edges（FK confidence 1.0 + 命名推断 0.6），纯函数零成本。
+    表对级紧凑清单，去重；超出 cap 截断（FK 优先于 naming 排前）。
+    LLM 职责引导：不必复述无争议候选，注意力放到候选之外（语义关联/多态/无命名规律）。
+    """
+    from app.knowledge.graph.builder import build_draft_edges  # noqa: PLC0415 - 延迟导入避免循环
+
+    edges = build_draft_edges(schema)
+    if not edges:
+        return ""
+    lines: list[str] = []
+    for e in edges[:cap]:
+        src = "FK" if e.get("source") == "fk" else "命名"
+        lines.append(
+            f"- {e['from_table']}.{e['from_col']} → {e['to_table']}.{e['to_col']}"
+            f"（{src}，{e.get('cardinality', 'n:1')}）"
+        )
+    more = len(edges) - min(len(edges), cap)
+    if more > 0:
+        lines.append(f"- ……另有 {more} 条候选略")
+    return "\n".join(lines)
+
+
 # 阶段二领域概述：每表最多列出的主要业务列数（超出省略）
 _DOMAIN_OVERVIEW_MAX_COLS = 8
 
@@ -902,7 +1184,7 @@ def _build_domain_overview(
 
 
 def _parse_domain_payload(text: str) -> tuple[bool, list[dict[str, Any]]]:
-    """解析领域/自检响应：{"unchanged": true} → (True, [])；JSON 数组 → (False, 领域条目)。
+    """解析领域划分响应：JSON 数组 → (False, 领域条目)；其余 → (True, [])。
 
     条目 {name, description, tables[], reason}。表名校验/兜底在 _normalize_domains。
     """
@@ -938,6 +1220,11 @@ def _parse_domain_payload(text: str) -> tuple[bool, list[dict[str, Any]]]:
             "description": str(it.get("description") or "").strip(),
             "tables": [str(x).strip() for x in tbls if str(x).strip()],
             "reason": str(it.get("reason") or "").strip(),
+            # 锚点模式：AI 提议的改名/合并映射（审核层展示"新名（原：旧名）"并批准）
+            **({"renamed_from": str(it["renamed_from"]).strip()}
+               if str(it.get("renamed_from") or "").strip() else {}),
+            **({"merged_from": [str(x).strip() for x in it["merged_from"] if str(x).strip()]}
+               if isinstance(it.get("merged_from"), list) else {}),
         })
     return False, out
 
@@ -1009,53 +1296,17 @@ def _mock_domains(schema: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _domain_partition_prompt(
     portraits: str, lo: int, hi: int, n_tables: int,
+    existing_tags: str = "", allow_rename: bool = False,
 ) -> str:
-    return (
-        "你是数据库领域分析专家。请将下列表按业务语义划分为若干领域。\n"
-        "【表画像】\n" + portraits + "\n\n"
-        "【准则】\n"
-        f"1. 领域数量目标约 {lo}~{hi} 个（库共 {n_tables} 张表；目标可小幅浮动，不要为凑数硬拆）。\n"
-        "2. 每张表至少归入 1 个领域；可挂多个（复合实体同时属于多个域）。\n"
-        "3. 领域名简短、语义清晰、互不重叠；领域内表业务高度相关。\n"
-        "4. 每个领域给一句话「依据」（为什么这些表同属一域）。\n"
-        "【命名规范】\n"
-        "- 领域名采用「业务对象 + 职责」结构，2~6 个汉字；\n"
-        "  示例：用户管理、订单数据、商品服务、支付结算、日志审计、系统配置\n"
-        "- 禁止使用：纯英文/缩写（如 CRUD、ETL）、纯技术术语（如 API 网关、中间件）、\n"
-        "  过于抽象的词（如「其他」「辅助」「通用」「基础数据」）\n"
-        "- description 描述该域包含的核心业务实体和职责，一句话，15~30 字；\n"
-        "  示例：「管理注册用户信息、认证凭证与权限角色」\n"
-        "【输出】\n"
-        "返回 JSON 数组，元素形如 "
-        '{"name":"领域名","description":"一句话描述","tables":["表1","表2"],"reason":"依据"}。\n'
-        "只返回 JSON，不要多余文字。"
-    )
-
-
-def _domain_selfcheck_prompt(
-    portraits: str, domains: list[dict[str, Any]], lo: int, hi: int,
-) -> str:
-    domain_lines = "\n".join(
-        f"- {d['name']}（{d.get('description','')}）: {', '.join(d['tables'])}"
-        for d in domains
-    )
-    return (
-        "你是数据库领域划分审校专家。请审查以下初版划分，指出需修正之处并给出修正版。\n"
-        "【表画像】\n" + portraits + "\n\n【初版划分】\n" + domain_lines + "\n\n"
-        "【准则】\n"
-        "1. 孤表：任何表都必须至少属于一个域（否则补齐归属）。\n"
-        "2. 单表成域：某域只有 1 张表且与相邻域语义可合并 → 合并。\n"
-        "3. 语义重叠：两域边界不清 → 理清边界或合并。\n"
-        "4. 命名：域名简短、语义清晰、互不重叠。\n"
-        f"5. 领域数量保持约 {lo}~{hi} 个（可小幅浮动）。\n"
-        "【命名审查】\n"
-        "- 检查每个域名是否符合「业务对象 + 职责」结构（如：用户管理、订单数据）；\n"
-        "- 将纯英文/缩写/技术术语/过于抽象的域名替换为中文业务名称；\n"
-        "- description 是否清晰说明了该域的实体和职责，15~30 字为宜。\n"
-        "【输出】\n"
-        "若初版已合理，返回 {\"unchanged\": true}；\n"
-        "若有改进，返回完整修正后的领域 JSON 数组（格式、字段同第一轮）。\n"
-        "只返回 JSON，不要多余文字。"
+    from app.ai.prompts import render
+    return render(
+        "annotator_domain_partition",
+        portraits=portraits, lo=str(lo), hi=str(hi), n_tables=str(n_tables),
+        existing_tags=existing_tags or "", rename_rule=(
+            "\n【改名/合并提议】\n"
+            "若你判断某既有领域划分不合理，可提议改名或合并，条目中用 "
+            "renamed_from / merged_from 字段标明原域名并说明理由；未提议的既有域请原样沿用其名称。\n"
+        ) if allow_rename else "",
     )
 
 
@@ -1069,26 +1320,8 @@ def _incremental_tag_absorb_prompt(
     - 输出 JSON：每表挂到最多领域 → [{table, tags[], reason}]；
       命名：命中候选域用其名；无合适候选 → 提议新域名（一个或多个，自动成为 draft 候选）。
     """
-    return (
-        "你是数据库领域分析专家。以下数据库已有一部分『既有领域』（已确认标签）。\n"
-        "请把【新增表】归入最合适的既有领域；若无合适领域，则提议新的领域。\n"
-        "【既有领域（已确认标签）】\n"
-        f"{existing_tags or '（暂无）'}\n\n"
-        "【新增表画像】\n"
-        f"{targets_portraits}\n\n"
-        "【准则】\n"
-        "1. 只能为新增表指定归属；不得改动既有领域已有的成员表。\n"
-        "2. 一张新增表可归多个领域；每项给出一句「依据」。\n"
-        "3. 领域名复用既有领域名；确实无法归入时才提议新名。\n"
-        "【命名规范】\n"
-        "- 新域名采用「业务对象 + 职责」结构，2~6 个汉字；\n"
-        "  示例：用户管理、订单数据、商品服务、支付结算\n"
-        "- 禁止使用：纯英文/缩写、技术术语、过于抽象的词（如「其他」「通用」）\n"
-        "【输出】\n"
-        "返回 JSON 数组，元素形如 "
-        '{"table":"表名","tags":["领域名","可选新域名"],"reason":"依据"}。\n'
-        "只返回 JSON，不要多余文字。"
-    )
+    from app.ai.prompts import render
+    return render("annotator_domain_incremental", existing_tags=existing_tags or "（暂无）", targets_portraits=targets_portraits)
 
 
 async def annotate_domain(
@@ -1097,18 +1330,17 @@ async def annotate_domain(
     schema: dict[str, Any] | None = None,
     mode: str = "full",                  # full=全量空库划分；incremental=增量吸收新表（D1 收紧）
     target_tables: list[str] | None = None,  # incremental 模式：只处理这些表（新增/变化表）
-    self_check: bool | None = None,    # 构建期覆盖（None=运行时 kb_build_self_check）
-    on_progress: Any | None = None,    # 构建进度（阶段二子步：划分 → 自检）
+    on_progress: Any | None = None,    # 构建进度（阶段二子步：划分）
+    limiter: "_AdaptiveLimiter | None" = None,  # 共享全局限流（构建期各阶段共用一个实例）
+    existing_tags: str | None = None,   # 既有 confirmed 域清单文本（锚点：参考而非服从）
+    allow_rename: bool = False,         # 锚点模式下允许 AI 提议改名/合并（renamed_from/merged_from）
 ) -> dict[str, Any]:
-    """AI 领域划分（KC2 v2）：一轮画像打包划分 + 一轮审校式自检。写入知识库。
+    """AI 领域划分（KC2 v2）：单轮画像打包划分（深度思考），写入知识库。
 
     产物：领域列表 [{name, 描述, 成员表[], 依据}] → 落库为标签草案 + 表→域多打标。
     段6：不再写 desc_drafts（表描述由阶段一列注释 + 库注释承担，领域调用只产出标签）。
-    自检（kb_build_self_check 开时）：拿初版划分回去审校，仅在有改进时输出修正版，
-    否则 {"unchanged":true} 保留初版——不重跑生成。
-
-    mode="incremental"（增量标签吸收，D1 收紧）：
-      只把 target_tables 归入既有 confirmed 域或提议新域；不改已有绑定表、不清标签库。
+    existing_tags/allow_rename：标签锚点（tag_mode=keep/anchor）——把既有 confirmed 域
+    作为参考注入 prompt，抑制跨轮命名漂移；allow_rename 时可提议改名/合并并在审核层批准。
     """
     if mode == "incremental":
         return await _annotate_domain_incremental(
@@ -1127,30 +1359,11 @@ async def annotate_domain(
     lo, hi = max(2, target - 1), target + 1
 
     rt = state.runtime.get()
-    if self_check is None:
-        self_check = bool(getattr(rt, "kb_build_self_check", True))
-    logger.info("[kb.tags] conn=%s 领域划分：tables=%s target=%s~%s self_check=%s",
-                conn_id, n, lo, hi, self_check)
-    _tag_cfg = _kb_reason_provider_cfg(rt, reasoning=False)  # 阶段2 归类任务：关思考，秒级
+    logger.info("[kb.tags] conn=%s 领域划分：tables=%s target=%s~%s anchor=%s",
+                conn_id, n, lo, hi, bool(existing_tags))
+    _tag_cfg = _kb_reason_provider_cfg(rt, reasoning=True)
+    _tag_cfg["reasoning"] = "high"  # 单轮深度思考
     new_tags = 0
-
-    def _persist(domains: list[dict[str, Any]]) -> int:
-        """域 → 标签草案 + 表→域多打标（幂等：同名不复存、表绑定覆盖重写）。返回新增标签数。"""
-        tag_props: list[dict[str, str]] = []
-        seen: set[str] = set()
-        for d in domains:
-            tg = d["name"]
-            if tg and tg not in seen:
-                seen.add(tg)
-                tag_props.append({"name": tg, "description": d.get("description") or f"{tg} 领域"})
-        added = state.knowledge.upsert_tags(conn_id, tag_props)
-        table_tags: dict[str, list[str]] = {}
-        for d in domains:
-            for t in d["tables"]:
-                table_tags.setdefault(t, []).append(d["name"])
-        for t, tags in table_tags.items():
-            state.knowledge.assign_table_tags(conn_id, t, tags, merge=True)
-        return added
 
     if gw.is_effective_mock(_tag_cfg):
         logger.debug("[kb.tags] conn=%s mock 领域划分", conn_id)
@@ -1158,18 +1371,18 @@ async def annotate_domain(
             on_progress("AI 标签提取", 0, "领域划分", phase="tags",
                         step="partition", step_index=1, step_total=1)
         domains = _normalize_domains(_mock_domains(schema), table_names)
-        new_tags += _persist(domains)
     else:
         provider = gw.build_provider(_tag_cfg)
         # 第一轮：打包划分（N 条画像一次调用）
         _t_part = time.monotonic()
         if on_progress:
             on_progress("AI 标签提取", 0, "领域划分", phase="tags",
-                        step="partition", step_index=1,
-                        step_total=2 if self_check else 1)
+                        step="partition", step_index=1, step_total=1)
         resp = await _chat_with_beat(
             provider,
-            [{"role": "user", "content": _domain_partition_prompt(overview, lo, hi, n)}],
+            [{"role": "user", "content": _domain_partition_prompt(
+                overview, lo, hi, n,
+                existing_tags=existing_tags or "", allow_rename=allow_rename)}],
             None,
             ctx={
                 "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
@@ -1177,58 +1390,19 @@ async def annotate_domain(
                 "context_meta": {"candidate_tables": table_names},
             },
             on_progress=on_progress, stage="AI 标签提取", phase="tags",
-            step="partition", step_index=1, step_total=2 if self_check else 1, percent=0,
+            step="partition", step_index=1, step_total=1, percent=0,
             p_to=49,
+            limiter=limiter,
+            climb_seconds=_KB_REASONING_TIMEOUT * 0.8,
+            stream=True, count_detail="已划分出 {n} 个领域",
         )
         _unchanged, raw_domains = _parse_domain_payload(resp.content or "")
         logger.info("[kb.tags] conn=%s 划分耗时 %.1fs（raw domains=%s）",
                     conn_id, time.monotonic() - _t_part, len(raw_domains))
         if not raw_domains:
             logger.warning("[kb.tags] conn=%s LLM 划分返回解析为空（兜底单「业务」域）", conn_id)
-        # 兜底空输入 → 单「业务」域；真实划分才进自检
+        # 兜底空输入 → 单「业务」域
         domains = _normalize_domains(raw_domains, table_names)
-        # 关键：第一轮先落库——即便第二轮自检失败/超时，标签也不会丢
-        # （原实现自检异常会把首轮结果一起弄丢 → tags=0）
-        new_tags += _persist(domains)
-        # 第二轮：审校式自检（不重跑生成；unchanged 保留初版；失败降级保留初版——不致命）
-        if self_check and raw_domains:
-            _t_chk = time.monotonic()
-            if on_progress:
-                on_progress("AI 标签提取", 50, "审校自检", phase="tags",
-                            step="selfcheck", step_index=2, step_total=2)
-            _chk_cfg = dict(_tag_cfg)
-            _chk_cfg["timeout"] = min(float(_tag_cfg.get("timeout") or 120), _KB_SELFCHECK_TIMEOUT)
-            try:
-                chk = await _chat_with_beat(
-                    gw.build_provider(_chk_cfg),
-                    [{"role": "user", "content": _domain_selfcheck_prompt(overview, domains, lo, hi)}],
-                    None,
-                    ctx={
-                        "conn_id": conn_id, "connection": conn_id, "skill": "kb-tags",
-                        "source": "kb_build", "status": "egress-tags-selfcheck",
-                        "context_meta": {"candidate_tables": table_names},
-                    },
-                    on_progress=on_progress, stage="AI 标签提取", phase="tags",
-                    step="selfcheck", step_index=2, step_total=2, percent=50,
-                    p_to=99,
-                )
-                unchanged, revised = _parse_domain_payload(chk.content or "")
-                logger.info("[kb.tags] conn=%s 自检耗时 %.1fs（%s）", conn_id,
-                            time.monotonic() - _t_chk,
-                            "unchanged 保留初版" if unchanged else f"采纳修正版 domains={len(revised)}")
-                if not unchanged and revised:
-                    nd = _normalize_domains(revised, table_names)
-                    if nd:
-                        domains = nd
-                        new_tags += _persist(domains)  # 修正版覆盖式重落（表绑定覆盖）
-                        logger.debug("[kb.tags] conn=%s 自检采纳修正版：domains=%s", conn_id, len(domains))
-                else:
-                    logger.debug("[kb.tags] conn=%s 自检 unchanged，保留初版", conn_id)
-            except Exception as _se:  # noqa: BLE001 - 自检失败不致命，保留第一轮划分
-                logger.warning("[kb.tags] conn=%s 自检调用失败（%.1fs）：%s —— 保留第一轮划分（domains=%s）",
-                               conn_id, time.monotonic() - _t_chk,
-                               str(_se) or type(_se).__name__, len(domains))
-
     # 阶段二完成：tags 条打满（窗口 45→60），真实收尾由 graph 条尾段承接（见 store.build）
     if on_progress:
         on_progress("AI 标签提取", 100, None, phase="tags")
@@ -1239,6 +1413,12 @@ async def annotate_domain(
         "domains": len(domains),
         "new_tags": new_tags,
         "library_size": len(state.knowledge.tags(conn_id)["library"]),
+        # 标签全集（审核页"新版标签集合"数据源；mock/全量划分路径均产出；版本制不落库）
+        "domain_list": [{"name": d.get("name", ""), "description": d.get("description", ""),
+                         "tables": list(d.get("tables") or []),
+                         **({"renamed_from": d["renamed_from"]} if d.get("renamed_from") else {}),
+                         **({"merged_from": list(d["merged_from"])} if d.get("merged_from") else {})}
+                        for d in domains],
     }
 
 
@@ -1333,33 +1513,6 @@ async def _annotate_domain_incremental(
 # ---------- LLM 图谱识别（两轮：全局扫描 + 候选验证） ----------
 
 
-# 命名推断唯一实现迁至 T4 建边管线（graph.builder），此处 re-export 保持调用方/测试兼容
-from app.knowledge.graph.builder import (  # noqa: E402
-    _REF_SUFFIXES,
-    _table_name_variants,
-    _type_family,
-)
-
-
-def _generate_candidate_pairs(schema: dict[str, Any]) -> list[dict[str, str]]:
-    """程序启发式：引用列名（_id/_code/... 后缀）+ 类型族生成关联候选。
-
-    委托 T4 建边管线的命名推断（graph.builder.build_naming_edges，去 LLM 化后
-    的单一实现）。产出仅供第 2 步 LLM 裁决（可修正/拒绝），不直接上线。
-    """
-    from app.knowledge.graph.builder import build_naming_edges
-
-    return [
-        {
-            "from_table": e.source_table, "from_col": e.cols[0][0],
-            "to_table": e.target_table, "to_col": e.cols[0][1],
-            "cardinality": e.cardinality,
-            "reason": e.reason,
-        }
-        for e in build_naming_edges(schema)
-    ]
-
-
 def _parse_graph_edges(text: str, schema: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """解析 LLM 返回的关系 JSON 数组（边 v2：四元组 + cardinality + reason）。
 
@@ -1442,14 +1595,13 @@ async def annotate_graph(
     mode: str = "full",                    # full=全库扫描；incremental=局部补边（D3）
     target_tables: list[str] | None = None,  # incremental：只补这些表关联的边
     on_progress: Any | None = None,
-    self_check: bool | None = None,   # 构建期覆盖（None=运行时 kb_build_self_check）
+    limiter: "_AdaptiveLimiter | None" = None,  # 共享全局限流（构建期各阶段共用一个实例）
 ) -> list[dict[str, Any]]:
-    """LLM 图谱识别：两轮调用（全局扫描 → 候选裁决+自检），返回 draft 边列表。
+    """LLM 图谱识别：单轮全局扫描（深度思考），返回 draft 边列表。
 
     全局扫描上下文 = 精简 DDL 画像（_build_ddl_portraits，描述回填 + FK 内联）。
     schema: 完整 schema，用于生成候选对与画像。
-    on_progress: 阶段三「AI 关系识别」进度回调（第一轮全局扫描 0→50，第二轮候选裁决 50→100）。
-    kb_build_self_check 开时：第二轮待裁决池 = 程序候选 ∪ 首轮低置信（confidence≠high）LLM 边，
+    on_progress: 阶段三「AI 关系识别」进度回调（全局扫描 0→100）。
     即低置信边就地审校（confirmed/rejected/修正字段），不再重跑全局生成；关时池内只含程序候选。
     返回值未落库，由调用方统一写入图谱 draft。
 
@@ -1461,8 +1613,9 @@ async def annotate_graph(
             state, conn_id, schema, target_tables or [], on_progress,
         )
     rt = state.runtime.get()
-    # 阶段3（图谱）：支持推理则开最大深度（能力探测落库 → _kb_reason_provider_cfg）
+    # 阶段3（图谱）：单轮深度思考
     provider_cfg = _kb_reason_provider_cfg(rt)
+    provider_cfg["reasoning"] = "high"
     logger.info(
         "[kb.graph] conn=%s 开始关系识别：tables=%s fks=%s",
         conn_id, len(schema.get("tables", [])), len(schema.get("foreign_keys", [])),
@@ -1480,43 +1633,59 @@ async def annotate_graph(
     # 上下文：精简 DDL 画像（描述回填 + 取值示例 + FK 内联），与阶段二统一
     _samples = state.knowledge._samples.get(conn_id, {}) if state.knowledge._samples.get(conn_id) else {}
     graph_overview = _build_ddl_portraits(state, conn_id, schema, _samples)
+    # 确定性候选参考（FK+命名）：引导 LLM 注意力放到候选之外，不逐条复述已知事实
+    candidates = _deterministic_candidates_block(schema)
+    candidates_block = f"\n【代码已发现的候选（确定性规则产出）】\n{candidates}\n" if candidates else ""
 
     # ---- 第一轮：全局扫描（广度优先） ----
-    global_prompt = (
-        "你是数据库关系分析专家。请判断下表结构之间存在哪些业务关联。\n"
-        "【表结构】\n" + graph_overview + "\n\n"
-        "【准则】\n"
-        "1. 关联不限同名列；结合字段名与语义判断（如 status 枚举、xxx_id 引用）。\n"
-        "2. 区分真实业务关联与单纯同名字段；中间表（junction）拆成两条边，禁止 n:m 直连。\n"
-        "3. 方向：from_table 是多侧（明细/子表，持有引用字段），to_table 是一侧（主表/父表）。\n"
-        "4. 基数：n:1（多对一）或 1:1（外键兼主键）；from_col 是 from_table 主键时只能 1:1；"
-        "不确定默认 n:1。\n"
-        "5. 每条边给 confidence（high/medium/low）与一句 reason 依据。\n"
-        "6. 多态关联（S2-4）：若关联只在特定条件下成立（如 X.type=1 时 code 指向表1），"
-        "在 guard 字段写明条件（如 \"X.type = 1\"）；普通关联 guard 省略。\n"
-        "【输出】\n"
-        "返回 JSON 数组，元素形如 "
-        '{"from_table":"A","from_col":"a_id","to_table":"B","to_col":"id",'
-        '"cardinality":"n:1","confidence":"high/medium/low","reason":"依据",'
-        '"guard":"可选条件"}。\n'
-        "只返回 JSON，不要多余文字。"
-    )
-    global_resp = await _chat_with_beat(
-        provider,
-        [{"role": "user", "content": global_prompt}],
-        None,
-        ctx={
-            "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
-            "source": "kb_build", "status": "egress-graph-global",
-            "context_meta": {"candidate_tables": [t["name"] for t in schema.get("tables", [])]},
-        },
-        on_progress=on_progress, stage="AI 关系识别", phase="graph",
-        step="global", step_index=1, step_total=2, percent=0,
-        p_to=49,
-    )
+    from app.ai.prompts import render
+    global_prompt = render("annotator_relation_global", graph_overview=graph_overview,
+                           candidates_block=candidates_block)
+    _graph_ctx = {
+        "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
+        "source": "kb_build", "status": "egress-graph-global",
+        "context_meta": {"candidate_tables": [t["name"] for t in schema.get("tables", [])]},
+    }
+    async def _global_scan(provider_: Any) -> Any:
+        return await _chat_with_beat(
+            provider_,
+            [{"role": "user", "content": global_prompt}],
+            None,
+            ctx=_graph_ctx,
+            on_progress=on_progress, stage="AI 关系识别", phase="graph",
+            step="global", step_index=1, step_total=1, percent=0,
+            p_to=49,
+            limiter=limiter,
+            climb_seconds=_KB_REASONING_TIMEOUT * 0.8,
+            stream=True, count_detail="已识别 {n} 条关系",
+        )
+
+    global_resp = None
+    try:
+        global_resp = await _global_scan(provider)
+    except httpx.ReadTimeout:
+        # 推理模型超时 → 降级关思考重试一次（图谱关系识别结构化强，普通生成兜底够用；
+        # FK+命名确定性边已在 builder 产出，LLM 只是补充非 FK 关系）
+        # 流式下 ReadTimeout 语义 = 连续 480s 无任何字节（卡顿），非总时长
+        logger.warning("[kb.graph] conn=%s 全局扫描推理超时，降级关思考重试", conn_id)
+        if on_progress:
+            on_progress("AI 关系识别", 5, "推理超时·降级普通生成", phase="graph",
+                        step="global", step_index=1, step_total=1)
+        provider = gw.build_provider(_kb_reason_provider_cfg(rt, reasoning=False))
+        global_resp = await _global_scan(provider)
+
     global_edges = _parse_graph_edges(global_resp.content or "", schema)
     if not global_edges:
-        logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·全局扫描）", conn_id)
+        # 修复（2026-09）：解析为空（空内容/散文/坏 JSON）此前只告警即放弃——
+        # 现复用超时同款"降级关思考重试"兜底路径，仍空才认输（确定性通道兜底）
+        logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·全局扫描），降级关思考重试", conn_id)
+        if on_progress:
+            on_progress("AI 关系识别", 5, "解析为空·降级普通生成重试", phase="graph",
+                        step="global", step_index=1, step_total=1)
+        retry_resp = await _global_scan(gw.build_provider(_kb_reason_provider_cfg(rt, reasoning=False)))
+        global_edges = _parse_graph_edges(retry_resp.content or "", schema)
+        if not global_edges:
+            logger.warning("[kb.graph] conn=%s 降级重试后仍解析为空（关系识别·全局扫描）", conn_id)
     logger.debug("[kb.graph] conn=%s 全局扫描边数=%s", conn_id, len(global_edges))
     logger.info("[kb.graph] conn=%s 全局扫描耗时 %.1fs（LLM 边 %s）",
                 conn_id, time.monotonic() - _t_g, len(global_edges))
@@ -1525,133 +1694,10 @@ async def annotate_graph(
         e["source"] = "llm_global"
     if on_progress:
         on_progress("AI 关系识别", 50, None, phase="graph",
-                    step="global", step_index=1, step_total=2)
+                    step="global", step_index=1, step_total=1)
 
-    # ---- 第二轮：候选验证 + 自检（程序候选 ∪ 首轮低置信 LLM 边；只裁决不新增） ----
-    if self_check is None:
-        self_check = bool(getattr(rt, "kb_build_self_check", True))
-    candidates = _generate_candidate_pairs(schema)
-    global_keys = {
-        (e["from_table"], e["to_table"], e.get("from_col"), e.get("to_col"))
-        for e in global_edges
-    }
-    rev_global_keys = {
-        (e["to_table"], e["from_table"], e.get("to_col"), e.get("from_col"))
-        for e in global_edges
-    }
-
-    # 待裁决池 = 未被全局扫描覆盖的程序候选 ∪ 首轮 confidence≠high 的 LLM 边（自检开时）
-    pool: list[dict[str, Any]] = []
-    seen_keys: set[tuple[str, str, str, str]] = set()
-
-    def _push(item: dict[str, Any]) -> None:
-        key = (item["from_table"], item.get("from_col"), item["to_table"], item.get("to_col"))
-        if key not in seen_keys:
-            seen_keys.add(key)
-            pool.append(item)
-
-    for c in candidates:
-        key = (c["from_table"], c["to_table"], c["from_col"], c["to_col"])
-        if key not in global_keys and key not in rev_global_keys:
-            _push(c)
-    if self_check:
-        for e in global_edges:
-            if e.get("confidence") != "high":
-                _push(e)
-
-    if not pool:
-        logger.info(
-            "[kb.graph] conn=%s 无可复验候选（程序候选均已覆盖 + 无低置信 LLM 边），边 %s 条",
-            conn_id, len(global_edges),
-        )
-        return global_edges
-
-    # 构建待裁决候选的上下文（只给相关表的结构）
-    related_tables = set()
-    for c in pool:
-        related_tables.add(c["from_table"])
-        related_tables.add(c["to_table"])
-
-    verify_lines: list[str] = []
-    for c in pool:
-        src = "全局扫描低置信" if c.get("source") == "llm_global" else "程序列名匹配"
-        verify_lines.append(
-            f"- {c['from_table']}.{c['from_col']} → {c['to_table']}.{c['to_col']}"
-            f"  （{c.get('cardinality', 'n:1')}，来源：{src}，依据：{c.get('reason', '')}）"
-        )
-
-    # 相关表的精简结构（供 LLM 判断字段语义；类型/长度对裁决是噪音，只留主键标记）
-    rel_schema_lines: list[str] = []
-    for t in schema.get("tables", []):
-        if t["name"] not in related_tables:
-            continue
-        cols = [cc for cc in schema.get("columns", []) if cc["table"] == t["name"]]
-        col_txt = ", ".join(
-            f"{cc['name']}{' PK' if cc.get('pk') else ''}"
-            for cc in cols
-        )
-        rel_schema_lines.append(f"- {t['name']}: {col_txt}")
-
-    verify_prompt = (
-        "你是数据库关系分析专家。请对下列候选关系逐项裁决其是否成立。\n"
-        "【准则】\n"
-        "1. 只裁决候选项，不得新增列表之外的关系。\n"
-        "2. 成立 → status=confirmed（可修正关联字段/基数）；不成立 → status=rejected。\n"
-        "3. 拒绝无实际业务关联的候选（如仅仅命名巧合）。\n"
-        "4. 方向：from_table 是多侧（明细/子表），to_table 是一侧（主表/父表）。\n"
-        "5. 基数：n:1 或 1:1（from_col 是 from_table 主键时只能 1:1）。\n"
-        "【相关表结构】\n" + "\n".join(rel_schema_lines) + "\n\n"
-        "【待裁决候选关系】\n" + "\n".join(verify_lines) + "\n\n"
-        "【输出】\n"
-        "返回 JSON 数组，元素形如 "
-        '{"from_table":"A","from_col":"a_id","to_table":"B","to_col":"id",'
-        '"cardinality":"n:1","confidence":"high/medium/low","reason":"说明","status":"confirmed/rejected"}。\n'
-        "只返回 JSON，不要多余文字。"
-    )
-    _t_v = time.monotonic()  # 候选裁决耗时打点
-    verified_edges: list[dict[str, Any]] = []
-    try:
-        # 裁决失败可安全降级（回退全局高置信边），不必吃满推理超时
-        _v_cfg = dict(provider_cfg)
-        _v_cfg["timeout"] = min(float(provider_cfg.get("timeout") or 120), _KB_VERIFY_TIMEOUT)
-        verify_resp = await _chat_with_beat(
-            gw.build_provider(_v_cfg),
-            [{"role": "user", "content": verify_prompt}],
-            None,
-            ctx={
-                "conn_id": conn_id, "connection": conn_id, "skill": "kb-graph",
-                "source": "kb_build", "status": "egress-graph-verify",
-                "context_meta": {"candidate_tables": list(related_tables)},
-            },
-            on_progress=on_progress, stage="AI 关系识别", phase="graph",
-            step="verify", step_index=2, step_total=2, percent=50,
-            p_to=74,
-        )
-        verified_edges = _parse_graph_edges(verify_resp.content or "", schema)
-        for e in verified_edges:
-            e["source"] = "llm_verify"
-        logger.info("[kb.graph] conn=%s 候选裁决耗时 %.1fs（pool=%s verified=%s）",
-                    conn_id, time.monotonic() - _t_v, len(pool), len(verified_edges))
-    except Exception as _ve:  # noqa: BLE001 - 裁决失败不致命：回退全局高置信边
-        logger.warning("[kb.graph] conn=%s 候选裁决失败（%.1fs）：%s —— 回退全局高置信边（%s 条）",
-                       conn_id, time.monotonic() - _t_v,
-                       str(_ve) or type(_ve).__name__,
-                       sum(1 for e in global_edges if e.get("confidence") == "high"))
-    if not verified_edges:
-        logger.warning("[kb.graph] conn=%s LLM 返回解析为空（关系识别·候选验证 %s 条）", conn_id, len(pool))
-    confirmed_verified = [e for e in verified_edges if e.get("status") != "rejected"]
-    # graph 条 AI 段止步 74（窗口 60→100 映射 89.6）：其后 FK 构图 + 落盘瞬时完成，
-    # 由 run_build_job 置 done 时统一全满——graph 条打满 = 构建完成（无"条满而未完"）
-    if on_progress:
-        on_progress("AI 关系识别", 74, None, phase="graph",
-                    step="verify", step_index=2, step_total=2)
-
-    # 合并：全局边中高置信的保留直用（自检关时全部保留）；第二轮通过项并入
-    base_global = (
-        [e for e in global_edges if e.get("confidence") == "high"] if self_check
-        else list(global_edges)
-    )
-    all_edges = base_global + confirmed_verified
+    # 单轮直达：global 全量边直用（原合并逻辑见上方注释）
+    all_edges = list(global_edges)
 
     # 最终去重（同一四元组只留一条；方向键视作同一对）
     seen_final: set[tuple[str, str, str, str]] = set()
@@ -1665,8 +1711,8 @@ async def annotate_graph(
         deduped.append(e)
 
     logger.info(
-        "[kb.graph] conn=%s 关系识别完成：global=%s(高置信%s) verify=%s total=%s",
-        conn_id, len(global_edges), len(base_global), len(confirmed_verified), len(deduped),
+        "[kb.graph] conn=%s 关系识别完成：llm_edges=%s total=%s",
+        conn_id, len(global_edges), len(deduped),
     )
     return deduped
 
@@ -1715,23 +1761,15 @@ async def _annotate_graph_incremental(
     if on_progress:
         on_progress("AI 关系识别", 0, None, phase="graph",
                     step="incr_global", step_index=1, step_total=1)
-    prompt = (
-        "你是数据库关系分析专家。以下是一个数据库的局部表结构（含本次新增/变化的表）。\n"
-        "请判断这些表之间存在哪些业务关联，**尤其标出【新增/变化表】与其它们的关联**。\n"
-        "【新增/变化表】: " + ", ".join(targets) + "\n"
-        "【表结构】\n" + overview + "\n\n"
-        "【准则】\n"
-        "1. 关联不限同名列；结合字段名与语义判断（如 xxx_id 引用、status 枚举）。\n"
-        "2. 区分真实关联与单纯同名字段；禁止 n:m 直连（junction 拆两条 n:1）。\n"
-        "3. 方向：from_table 是多侧（明细/子表，持有引用字段），to_table 是一侧。\n"
-        "4. 基数：n:1 或 1:1（from_col 为 from_table 主键时只能 1:1）；不确定默认 n:1。\n"
-        "5. 每条边给 confidence（high/medium/low）与一句 reason。\n"
-        "【输出】\n"
-        "返回 JSON 数组，元素形如 "
-        '{"from_table":"A","from_col":"a_id","to_table":"B","to_col":"id",'
-        '"cardinality":"n:1","confidence":"high/medium/low","reason":"依据"}。\n'
-        "只返回 JSON，不要多余文字。"
-    )
+    from app.ai.prompts import render
+    # 候选参考只保留涉及目标表的（增量颗粒 = 目标表关联）
+    sub_candidates = [
+        ln for ln in _deterministic_candidates_block(sub_schema).splitlines()
+        if any(t in ln for t in targets)
+    ]
+    candidates_block = f"\n【代码已发现的候选（确定性规则产出）】\n" + "\n".join(sub_candidates) + "\n" if sub_candidates else ""
+    prompt = render("annotator_relation_incremental", targets=", ".join(targets),
+                    overview=overview, candidates_block=candidates_block)
     resp = await provider.chat(
         [{"role": "user", "content": prompt}], tools=None,
         ctx={
@@ -1767,16 +1805,7 @@ def _filters_candidates_prompt(schema: dict[str, Any], candidates: list[dict[str
                                samples: dict[str, dict[str, list[Any]]]) -> str:
     """AI 过滤器裁决提示词（柔和措辞：很可能/大概率/一般，供 LLM 生成 SQL 时参考，
     不是强制规则——用户明确说明特殊情况时以用户为准）。"""
-    lines = [
-        "你是数据库语义分析师。以下是数据库的全部表与列（类型 + 启发式预标记 + 部分采样值）。",
-        "请判断哪些表【很可能】存在以下语义，供后续生成 SQL 时参考（非强制规则，用户可纠正）：",
-        "- soft_delete：表内行是否有效/已删除的标记列（is_deleted/deleted_at 这类语义，值多为 0/1/NULL）",
-        "- tenant：按租户/组织/门店隔离的列（tenant_id/org_id 这类语义，值多为 ID）",
-        "- exempt：字典表/系统表，一般不需要上述过滤",
-        "判断原则：列名只是相似但语义不确定时，宁标记 none 或 low 置信，不要猜测。",
-        "",
-        "表与列：",
-    ]
+    lines = []
     for t in schema.get("tables", []):
         name = t["name"]
         lines.append(f"- {name}")
@@ -1791,13 +1820,9 @@ def _filters_candidates_prompt(schema: dict[str, Any], candidates: list[dict[str
             vals = (samples.get(name) or {}).get(c["name"]) or []
             sample_txt = f"  样例: {vals[:5]}" if vals else ""
             lines.append(f"    {c['name']} ({c.get('type','')}){mark}{sample_txt}")
-    lines.append("")
-    lines.append('输出 JSON：{"filters": [{"table": "表名", "verdict": "tenant|soft_delete|exempt|none", '
-                 '"column": "列名", "predicate": "tenant_id = :current_tenant 或 col = 0 或 col IS NULL", '
-                 '"confidence": "high|medium|low", "reason": "一句话依据"}]}')
-    lines.append("要求：每表最多 tenant 与 soft_delete 各一条；exempt/none 不需 column/predicate；"
-                 "predicate 中的运行时值一律用占位符（如 :current_tenant），LLM 生成 SQL 时引用占位符，执行层填充真实值。")
-    return "\n".join(lines)
+    tables_and_columns = "\n".join(lines)
+    from app.ai.prompts import render
+    return render("annotator_filters", tables_and_columns=tables_and_columns)
 
 
 def _normalize_filter_verdicts(text: str, table_names: list[str]) -> list[dict[str, Any]]:
@@ -1869,13 +1894,15 @@ async def annotate_filters(
     conn_id: str,
     schema: dict[str, Any],
     on_progress: Any | None = None,
+    limiter: "_AdaptiveLimiter | None" = None,
 ) -> dict[str, Any]:
     """表级过滤器 AI 语义确认（S2-1）：逐表裁决租户/软删除/豁免。
 
     - 启发式检测（detect_candidates）只作预标记提示，AI 看全部表/列自行裁决（特例适配）
     - soft_delete（值域 0/1/NULL + high 置信）→ 自动 confirmed（低风险）
     - tenant / exempt → draft（ai_suggested）→ 人工确认（误判代价高）
-    - 失败静默：异常不影响构建（filter 是参考知识，非构建关键路径）
+    - 失败静默：异常不影响构建（filter 是参考知识，非构建关键路径）；
+      AI 异常时启发式不再转正（零写入，待人工），仅 mock 路径产确定性裁决
     """
     from app.knowledge.filters import FilterStore
 
@@ -1904,12 +1931,15 @@ async def annotate_filters(
                      "context_meta": {"candidate_tables": table_names}},
                 on_progress=on_progress, stage="filters", phase="filters",
                 step="adjudicate", step_index=1, step_total=1, percent=0,
+                limiter=limiter,
             )
             text = resp.content if hasattr(resp, "content") else str(resp)
             verdicts = _normalize_filter_verdicts(text or "", table_names)
         except Exception as e:
-            logger.warning("[kb.filters] conn=%s AI 裁决异常，回退启发式预标记：%s", conn_id, e)
-            verdicts = _mock_filter_verdicts(schema, candidates)
+            # 兜底收紧（先审后动）：AI 裁决失败时启发式预标记不再转正为 verdict，
+            # 保持零写入待人工处理（用户可在过滤器审查页手动确认/跳过）。
+            logger.warning("[kb.filters] conn=%s AI 裁决异常，本轮跳过（启发式仅预标记不落盘）：%s", conn_id, e)
+            return {"filtered": 0, "auto_confirmed": 0, "draft": 0, "error": str(e) or type(e).__name__}
 
     # FilterStore 一表一条：先按表聚合（软删+租户 AND 合并；存在 tenant 则整表 draft，
     # 只有 soft_delete 且值域/置信通过才自动 confirmed）
@@ -1955,21 +1985,8 @@ async def annotate_filters(
 # ---------------------------------------------------------------------------
 
 def _constants_prompt(tables_desc: str) -> str:
-    return (
-        "你是数据库语义分析师。以下是数据库各表/列的中文注释与采样取值。\n"
-        "请识别其中【很可能】属于『静态业务常量』的项——不随时间变化的业务参数\n"
-        "（税率、折扣率、审批阈值、库存警戒线、积分倍率、最大/最小限额等），\n"
-        "供后续生成 SQL 时直接引用其值（如税率 0.13、阈值 10000）。\n"
-        "注意：\n"
-        "- 只识别明确为常量语义的项；普通业务列（订单金额、用户ID等）不算；不确定的宁可不列\n"
-        "- 运行时变量（当前用户/租户/时间）不是常量，不要识别\n"
-        "输出 JSON：{\"constants\": [{\"name\": \"tax_rate\", \"value\": \"0.13\", "
-        "\"unit\": \"%或空\", \"source_table\": \"system_config\", "
-        "\"source_column\": \"value\", \"reason\": \"一句话依据\"}]}\n"
-        "name 用英文小写下划线命名（LLM 引用名），value 保留原文，最多 10 条。\n"
-        "以下是表/列注释与取值：\n"
-        + tables_desc
-    )
+    from app.ai.prompts import render
+    return render("annotator_constants", tables_desc=tables_desc)
 
 
 def _tables_desc_for_constants(schema: dict[str, Any],
@@ -2023,6 +2040,7 @@ async def annotate_constants(
     conn_id: str,
     schema: dict[str, Any],
     on_progress: Any | None = None,
+    limiter: "_AdaptiveLimiter | None" = None,  # 共享全局限流（构建期各阶段共用一个实例）
 ) -> int:
     """静态业务常量识别（S2-2）：LLM 从表/列注释 + 取值识别常量 → kind=constant 候选。
 
@@ -2051,6 +2069,7 @@ async def annotate_constants(
                  "context_meta": {"candidate_tables": [t["name"] for t in schema.get("tables", [])]}},
             on_progress=on_progress, stage="constants", phase="constants",
             step="identify", step_index=1, step_total=1, percent=0,
+            limiter=limiter,
         )
         text = resp.content if hasattr(resp, "content") else str(resp)
         items = _normalize_constants(text or "")

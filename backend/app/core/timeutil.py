@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import datetime as _dt
 
-UTC_ISO = "%Y-%m-%dT%H:%M:%S+00:00"
 
 
 def utcnow_iso() -> str:

@@ -396,17 +396,6 @@ class AuditLogger:
             finally:
                 con.close()
 
-    def ack_state(self, audit_id: int) -> str:
-        """查询某条审计的处理状态，无记录视为未读。"""
-        with self._lock:
-            con = sqlite3.connect(self.db_path)
-            try:
-                cur = con.execute("SELECT state FROM audit_ack WHERE audit_id=?", (int(audit_id),))
-                row = cur.fetchone()
-                return row[0] if row else "unread"
-            finally:
-                con.close()
-
     def unread_exception_count(self, connection: str | None = None) -> int:
         """未读异常数 = verdict∈{block,review} 且无 ack 记录。"""
         sql = (

@@ -5,28 +5,13 @@
 喂给 AI 上下文。
 
 隐私：采样只存本地；发送给模型的注释 prompt 是否含样本值由 `kb_ai_annotation_samples`
-门控（未授权 → 无样本 → values/example 为空）；嵌入默认离线哈希，真语义嵌入由设置选择。
+门控（未授权 → 无样本 → values/example 为空）；嵌入需通过 OpenAI 兼容 API 接入。
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import re
-import threading
-import time
-from app.core.timeutil import utcnow_iso
-import uuid
 from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-from app.knowledge.docs import KnowledgeDoc
-from app.knowledge.embedding import Embedder, HashingEmbedder, cosine, make_embedder
-from app.knowledge.vectorstore import NumpyVectorStore, VectorChunk, VectorStore
-
-if TYPE_CHECKING:
-    from app.core.settings import SettingsStore
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +29,14 @@ class ColumnInfo:
     example: str = ""      # 示例值（首个非空样本，截断 60 字符）
     status: str = "none"   # 当前内容状态：none | confirmed（comment+values 整体）
 
-    # ---- 2026-09 修订：当前生效版 + 本轮提案并行 ----
+    # ---- 当前生效版与本轮提案并行 ----
     # proposed_* 是本轮 AI 提案（重建产生，与当前值并存）：
     # 确认 = 提案提升为当前（proposal -> comment, status=confirmed）；
     # 保持当前/拒绝 = 清除提案，当前值不动。审查页对比按钮读两组字段。
     proposed_comment: str = ""   # 本轮提案（空 = AI 无提案）
     proposed_values: str = ""
     proposed_example: str = ""
+    core: bool = False   # AI 关键列提名（合成器向量化选材信号，非用户内容）
 
     @property
     def has_proposal(self) -> bool:
@@ -103,23 +89,31 @@ class TableKnowledge:
     ddl: str = ""
     excluded: bool = False
     layout: dict[str, Any] = field(default_factory=dict)  # 2D 图布局坐标（透传存储，渲染在 T4）
-    vector_override: str = ""  # 人工覆盖的向量化片段文本；空 = 用构建合成文本
+    vector_override: str = ""  # 人工覆盖的向量化片段文本；空 = 用 AI 画像
+    vector_profile: str = ""   # AI 表画像（审核确认后的向量化文本；无代码拼接）
     proposed_comment: str = ""  # 本轮 AI 提案（表级，与当前 comment 并存）
+    proposed_profile: str = ""  # 本轮 AI 画像提案（confirm 时与 proposed_comment 一起提升）
 
     @property
     def has_proposal(self) -> bool:
-        return bool(self.proposed_comment)
+        return bool(self.proposed_comment or self.proposed_profile)
 
     def apply_proposal(self) -> bool:
+        changed = False
         if self.proposed_comment:
             self.comment = self.proposed_comment
             self.proposed_comment = ""
-            return True
-        return False
+            changed = True
+        if self.proposed_profile:
+            self.vector_profile = self.proposed_profile
+            self.proposed_profile = ""
+            changed = True
+        return changed
 
     def clear_proposal(self) -> bool:
-        if self.proposed_comment:
+        if self.has_proposal:
             self.proposed_comment = ""
+            self.proposed_profile = ""
             return True
         return False
 
@@ -135,7 +129,9 @@ class TableKnowledge:
             "excluded": self.excluded,
             "layout": self.layout,
             "vector_override": self.vector_override,
+            "vector_profile": self.vector_profile,
             "proposed_comment": self.proposed_comment,
+            "proposed_profile": self.proposed_profile,
         }
 
     @classmethod
@@ -152,6 +148,9 @@ class TableKnowledge:
             excluded=bool(d.get("excluded")),
             layout=dict(d.get("layout") or {}),
             vector_override=d.get("vector_override", ""),
+            vector_profile=d.get("vector_profile", ""),
+            proposed_comment=d.get("proposed_comment", ""),
+            proposed_profile=d.get("proposed_profile", ""),
         )
 
 
@@ -171,6 +170,3 @@ class TableCard:
             "score": self.score,
         }
 
-# 向后兼容重导出：T1 拆分后 store.py 只保留数据类，
-# KnowledgeBase 新实现在 facade.py（门面，委托 graph/semantic/retrieval/build 子模块）
-from app.knowledge.facade import KnowledgeBase  # noqa: E402,F401

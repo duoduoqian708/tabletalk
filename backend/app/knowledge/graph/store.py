@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.knowledge.graph.model import GraphEdge, derive_edge_types, primary_edge_type
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,10 +20,10 @@ class GraphStore:
         self._diff_base: dict[str, set[tuple]] = {}  # conn -> 本轮重建提案键集合（图 diff 三色基线）
         self._diff_active: dict[str, bool] = {}  # conn -> diff 是否激活（重建后~确认/放弃止）
 
-    # ---------- 图谱构建（2026-08-31 修订：一切边经人工确认才生效） ----------
+    # ---------- 图谱构建：一切边经人工确认才生效 ----------
     @staticmethod
     def _graph_edge_key(e: Any) -> tuple:
-        """GraphEdge 的跨来源去重键：无序列对 + guard（kind 不进键，T4 §4#9）。"""
+        """GraphEdge 的跨来源去重键：无序列对 + guard（source 不进键，T4 §4#9）。"""
         return tuple(sorted((e.source_table, sc, e.target_table, tc)
                             for sc, tc in e.cols)) + (e.guard or "",)
 
@@ -105,6 +107,22 @@ class GraphStore:
         """待确认 draft 边列表（fk/naming/llm/query_log 来源统一，供审查页展示）。"""
         return list(self._llm_graph_edges.get(conn_id, []))
 
+    def rename_table(self, conn_id: str, old: str, new: str) -> None:
+        """表重命名（增量同步）：正式图边 + draft 边的端点表名就地改写。
+
+        列名未变（rename 判定前提），from_col/to_col 无需调整。
+        """
+        for e in self._graph.get(conn_id, {}).get("edges", []):
+            if e.get("from") == old:
+                e["from"] = new
+            if e.get("to") == old:
+                e["to"] = new
+        for e in self._llm_graph_edges.get(conn_id, []):
+            if e.get("from_table") == old:
+                e["from_table"] = new
+            if e.get("to_table") == old:
+                e["to_table"] = new
+
     @staticmethod
     def _llm_edge_key(e: dict[str, Any]) -> tuple[str, str, str | None, str | None]:
         """边的去重/对比键（字段对，方向无关）。
@@ -172,7 +190,7 @@ class GraphStore:
         self._llm_graph_edges[conn_id] = [
             e for e in pending if self._llm_edge_key(e) not in confirmed_keys
         ]
-        # 写入正式图谱（边 v2：kind=llm + cardinality + reason）
+        # 写入正式图谱（边 v2：source + cardinality + reason）
         edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
         existing = {(e["from"], e["to"], e.get("from_col"), e.get("to_col")) for e in edges}
         added = 0
@@ -187,7 +205,7 @@ class GraphStore:
             edges.append({
                 "from": e["from_table"], "from_col": e.get("from_col"),
                 "to": e["to_table"], "to_col": e.get("to_col"),
-                "kind": e.get("kind") or "llm", "weight": 1.0,
+                "source": e.get("source") or "llm", "weight": 1.0,
                 "cardinality": e.get("cardinality") or "n:1",
                 "reason": e.get("reason", ""),
                 "guard": guard,
@@ -275,14 +293,21 @@ class GraphStore:
             return self._llm_edge_key(e)
 
         confirmed_keys = {key_of(e) for e in edges}
+
+        def _with_kinds(e: dict, diff: str | None) -> dict:
+            # 形态字段三份输出：kinds/kind（新命名）+ type（旧名兼容），前端任取其一
+            kinds = derive_edge_types(e)
+            return {**e, "diff": diff,
+                    "type": kinds, "kinds": kinds, "kind": primary_edge_type(kinds)}
+
         out_edges = []
         for e in edges:
-            red = (diff_active and not e.get("pinned") and e.get("kind") != "user"
+            red = (diff_active and not e.get("pinned") and e.get("source") != "user"
                    and endpoints_alive(e)
                    and key_of(e) not in draft_keys and key_of(e) not in base)
-            out_edges.append({**e, "diff": "removed" if red else None})
+            out_edges.append(_with_kinds(e, "removed" if red else None))
         out_drafts = [
-            {**d, "diff": "modified" if key_of(d) in confirmed_keys else "new"}
+            _with_kinds(d, "modified" if key_of(d) in confirmed_keys else "new")
             for d in drafts
         ]
         return {"edges": out_edges, "llm_draft_edges": out_drafts}
@@ -329,46 +354,65 @@ class GraphStore:
             save_conn_fn(conn_id)
         return n
 
-    def add_graph_edge(self, conn_id: str, frm: str, to: str, kind: str,
+    def add_graph_edge(self, conn_id: str, frm: str, to: str, source: str,
                        frm_col: str | None = None, to_col: str | None = None,
                        weight: float | None = None,
                        cardinality: str = "n:1",
                        schema: dict[str, Any] | None = None,
-                       save_conn_fn: Any = None) -> dict[str, Any]:
-        """新增一条图谱边（边 v2：字段级端点 + 基数；from 恒为多侧）。
+                       save_conn_fn: Any = None,
+                       guard: str | None = None,
+                       cols: list[list[str]] | None = None) -> dict[str, Any]:
+        """新增一条图谱边（边 v2：字段级端点 + 基数 + 守卫 + 复合列对）。
 
-        kind ∈ fk|overlap|user（user=手动连线）；cardinality ∈ n:1|1:1（默认 n:1）。
-        去重按字段对（from/from_col/to/to_col/kind）全量匹配。
+        source ∈ fk|user（user=手动连线）；cardinality ∈ n:1|1:1|1:N|N:M（默认 n:1）。
+        guard：多态关联守卫谓词（如 "X.type = 1"），普通关联省略。
+        cols：复合边完整列对 [[from,to],...]；缺省用 from_col/to_col 单列。
+        去重按 (from/to/source/from_col/to_col/guard) 全量匹配。
         """
-        if kind not in ("fk", "overlap", "user"):
-            raise ValueError("kind 必须是 fk|overlap|user")
-        if cardinality not in ("n:1", "1:1"):
-            raise ValueError("cardinality 必须是 n:1|1:1")
+        if source not in ("fk", "user"):
+            raise ValueError("source 必须是 fk|user")
+        if cardinality not in ("n:1", "1:1", "1:N", "N:M"):
+            raise ValueError("cardinality 必须是 n:1|1:1|1:N|N:M")
         tables = {t["name"] for t in (schema or {}).get("tables", [])}
         if frm not in tables or to not in tables:
             raise ValueError("未知表名")
+        # 规范化列对：cols 提供则用它，否则用 from_col/to_col 单列
+        col_pairs: list[tuple[str | None, str | None]]
+        if cols:
+            col_pairs = [(p[0], p[1]) if len(p) >= 2 else (None, None) for p in cols]
+        else:
+            col_pairs = [(frm_col, to_col)]
         edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
         existing = next((e for e in edges
-                         if e["from"] == frm and e["to"] == to and e.get("kind") == kind
-                         and e.get("from_col") == frm_col and e.get("to_col") == to_col), None)
+                         if e["from"] == frm and e["to"] == to and e.get("source") == source
+                         and e.get("from_col") == frm_col and e.get("to_col") == to_col
+                         and e.get("guard") == guard), None)
         if existing:
             return existing
         e = {"from": frm, "from_col": frm_col, "to": to, "to_col": to_col,
-             "kind": kind, "weight": weight, "shared": None,
+             "source": source, "weight": weight, "shared": None,
              "cardinality": cardinality,
-             "reason": "" if kind != "user" else "人工连线"}
+             "reason": "" if source != "user" else "人工连线"}
+        if guard:
+            e["guard"] = guard
+        if col_pairs and len(col_pairs) > 1:
+            e["cols"] = [list(p) for p in col_pairs]
+        kinds = derive_edge_types(e)
+        e["type"] = kinds
+        e["kinds"] = kinds
+        e["kind"] = primary_edge_type(kinds)
         edges.append(e)
         if save_conn_fn:
             save_conn_fn(conn_id)
         return e
 
-    def remove_graph_edge(self, conn_id: str, frm: str, to: str, kind: str, save_conn_fn: Any = None) -> int:
-        """删除一条图谱边。注意：确定性来源（fk/naming/overlap/query_log）的边
+    def remove_graph_edge(self, conn_id: str, frm: str, to: str, source: str, save_conn_fn: Any = None) -> int:
+        """删除一条图谱边。注意：确定性来源（fk/naming/query_log）的边
         在下次重建/增量构建时会重新生成--删除只对当前版本生效。"""
         edges = self._graph.get(conn_id, {"edges": []})["edges"]
         before = len(edges)
         edges[:] = [e for e in edges
-                    if not (e["from"] == frm and e["to"] == to and e.get("kind") == kind)]
+                    if not (e["from"] == frm and e["to"] == to and e.get("source") == source)]
         removed = before - len(edges)
         if removed and save_conn_fn:
             save_conn_fn(conn_id)

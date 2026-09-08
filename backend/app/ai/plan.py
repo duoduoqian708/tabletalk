@@ -73,15 +73,12 @@ class TaskPlan:
     skip_retrieval: bool = False                            # 结构问答跳过检索管线
     degraded: bool = False                                  # 走了关键词/mock 降级
     raw_question: str = ""
-    clarify: list[str] = field(default_factory=list)        # 2026-09 §13.4：意图不完整/不清晰 → 候选澄清问题（非空则执行前刹停）
+    clarify: list[str] = field(default_factory=list)        # 意图不完整/不清晰 → 候选澄清问题（非空则执行前刹停）
 
     def __post_init__(self) -> None:
         if not self.tasks and not self.clarify:
             self.tasks = [TaskSpec(action="query", modality="answer")]
 
-    @property
-    def has_write(self) -> bool:
-        return any(t.trust == "write" for t in self.tasks)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,7 +103,3 @@ class TaskPlan:
             clarify=list(d.get("clarify") or []),
         )
 
-
-def trust_for(action: str) -> str:
-    """由 action 查表派生 trust（模块级函数，供路由/安全校验用）。"""
-    return _TRUST_BY_ACTION.get(action, "read")

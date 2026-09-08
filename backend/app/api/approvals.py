@@ -86,28 +86,32 @@ async def approve(aid: str, req: ReviewRequest, request: Request):
     if cfg is None:
         state.audit.log(connection=a.connection_id, origin="ai", tier="dml", verdict="block", status="审批执行拦截-连接缺失", sql=a.sql, source="approval", approval_id=a.id)
         raise HTTPException(status_code=404, detail=f"connection not found: {a.connection_id}")
+    # M10 修复：执行前过 prepare_query_sql（会话变量占位符替换）——与预览/主链路口径一致，
+    # 避免审批执行的 SQL 与预览时不同（:current_tenant 等未替换就过闸门/执行）。
+    from app.knowledge.filters import prepare_query_sql
+    exec_sql = prepare_query_sql(state, a.connection_id, a.sql)
     reassess = None
     try:
         dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
-        reassess = safety_gate.assess_configured(state, a.sql, dialect, Origin.AI)
+        reassess = safety_gate.assess_configured(state, exec_sql, dialect, Origin.AI)
     except Exception:
         reassess = None
     if reassess is None:
-        state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="block", status="审批执行拦截-闸门异常", sql=a.sql, source="approval", approval_id=a.id)
+        state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="block", status="审批执行拦截-闸门异常", sql=exec_sql, source="approval", approval_id=a.id)
         raise HTTPException(status_code=403, detail={"reason": "gate assessment failed", "reasons": []})
     if reassess.verdict == Verdict.BLOCK:
-        state.audit.log(connection=cfg.name, origin="ai", tier=reassess.tier.value, verdict="block", status="审批执行拦截-闸门", sql=a.sql, source="approval", approval_id=a.id, reasons=reassess.reasons)
+        state.audit.log(connection=cfg.name, origin="ai", tier=reassess.tier.value, verdict="block", status="审批执行拦截-闸门", sql=exec_sql, source="approval", approval_id=a.id, reasons=reassess.reasons)
         raise HTTPException(status_code=403, detail={"reason": "; ".join(r.get("message","") for r in reassess.reasons), "reasons": reassess.reasons})
     if cfg.read_only and reassess.verdict != Verdict.ALLOW:
         ro_reasons = [{"rule_id":"read-only","message":"该连接标记为只读，禁止写操作","message_en":"Connection is read-only","objects": reassess.tables}]
-        state.audit.log(connection=cfg.name, origin="ai", tier=reassess.tier.value, verdict="block", status="审批执行拦截-只读", sql=a.sql, source="approval", approval_id=a.id, reasons=ro_reasons)
+        state.audit.log(connection=cfg.name, origin="ai", tier=reassess.tier.value, verdict="block", status="审批执行拦截-只读", sql=exec_sql, source="approval", approval_id=a.id, reasons=ro_reasons)
         raise HTTPException(status_code=403, detail={"reason": "read-only", "reasons": ro_reasons})
     # 生成回滚剧本（A4）供审计关联
     rollback = None
     rollback_ref = None
     try:
         from app.safety.rollback import build_rollback
-        rollback = build_rollback(a.sql, dialect)
+        rollback = build_rollback(exec_sql, dialect)
         if rollback and rollback.get("backup_sql"):
             import hashlib as _hl
             rollback_ref = _hl.sha256(rollback["backup_sql"].encode()).hexdigest()[:12]
@@ -117,14 +121,14 @@ async def approve(aid: str, req: ReviewRequest, request: Request):
     except Exception:
         rollback = None
     # 审计（审批通过）
-    state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批通过", sql=a.sql, source="approval", approval_id=a.id)
+    state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批通过", sql=exec_sql, source="approval", approval_id=a.id)
     # 实际执行（在原上下文执行）
     try:
-        res = await core_query.execute(state, a.connection_id, a.sql)
+        res = await core_query.execute(state, a.connection_id, exec_sql)
         # 执行后追加一条带 rollback_ref 的审计（便于回溯），并把 rowid 回填到审批单
         exec_audit_id = None
         try:
-            exec_audit_id = state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批执行完成", sql=a.sql, source="approval", approval_id=a.id, **({"rollback_ref": rollback_ref} if rollback_ref else {}))
+            exec_audit_id = state.audit.log(connection=cfg.name, origin="ai", tier="dml", verdict="executed", status="审批执行完成", sql=exec_sql, source="approval", approval_id=a.id, **({"rollback_ref": rollback_ref} if rollback_ref else {}))
         except Exception:
             pass
         if exec_audit_id:

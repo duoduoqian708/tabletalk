@@ -6,9 +6,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from app.knowledge.graph.model import PROV_QUERY_LOG, RELATION_QUERY_LOG, GraphEdge
+from app.knowledge.graph.model import PROV_QUERY_LOG, SOURCE_QUERY_LOG, GraphEdge
 from app.knowledge.graph.sql_joins import extract_join_pairs
 
 logger = logging.getLogger("kb.behavior")
@@ -19,7 +18,7 @@ def mine_join_edges(audit_rows: list[dict], schema: dict | None = None) -> list[
 
     - 用 sqlglot 解析每条 SQL 的 JOIN 子句 → 提取 (table, col) 对
     - schema 提供时：表/列不存在即丢弃（T10 §4#4 拦幻觉表）
-    - 产出：relation=query_log, confidence=0.9, provenance=query_log
+    - 产出：source=query_log, confidence=0.9, provenance=query_log
     - 解析失败/无法提取 → 跳过该条（宁缺勿错）
     - 去重：同 (表对, 列对) 只产一条
     """
@@ -43,7 +42,7 @@ def mine_join_edges(audit_rows: list[dict], schema: dict | None = None) -> list[
         edges.append(GraphEdge(
             source_table=from_t, target_table=to_t,
             cols=[(from_c, to_c)],
-            relation=RELATION_QUERY_LOG, confidence=0.9, provenance=PROV_QUERY_LOG,
+            source=SOURCE_QUERY_LOG, confidence=0.9, provenance=PROV_QUERY_LOG,
             reason="查询日志实际 join",
         ))
 

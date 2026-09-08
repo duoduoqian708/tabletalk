@@ -12,7 +12,7 @@ class FakeKB:
     def expand_tables(self, conn_id, seeds, hops=2):
         adj={}
         for e in self._graph["edges"]:
-            if e["kind"]!="fk": continue
+            if e["source"]!="fk": continue
             adj.setdefault(e["from"], set()).add(e["to"])
             adj.setdefault(e["to"], set()).add(e["from"])
         picks=set(seeds)
@@ -33,9 +33,9 @@ class FakeState:
 
 def test_direct_orders_cascade_contains_order_items_and_payments():
     edges=[
-        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","kind":"fk","weight":1.0},
-        {"from":"orders","from_col":"id","to":"payments","to_col":"order_id","kind":"fk","weight":1.0},
-        {"from":"orders","from_col":"customer_id","to":"customers","to_col":"id","kind":"fk","weight":1.0},
+        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","source":"fk","weight":1.0},
+        {"from":"orders","from_col":"id","to":"payments","to_col":"order_id","source":"fk","weight":1.0},
+        {"from":"orders","from_col":"customer_id","to":"customers","to_col":"id","source":"fk","weight":1.0},
     ]
     state=FakeState(edges)
     blast=build_blast(state, "c", ["orders"], 5)
@@ -51,7 +51,7 @@ def test_direct_orders_cascade_contains_order_items_and_payments():
 
 def test_no_fk_table_cascade_empty():
     edges=[
-        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","kind":"fk","weight":1.0},
+        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","source":"fk","weight":1.0},
     ]
     state=FakeState(edges)
     blast=build_blast(state, "c", ["big_values"], 10)
@@ -61,9 +61,9 @@ def test_no_fk_table_cascade_empty():
 
 def test_two_hop_limit():
     edges=[
-        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","kind":"fk","weight":1.0},
-        {"from":"order_items","from_col":"product_id","to":"products","to_col":"id","kind":"fk","weight":1.0},
-        {"from":"products","from_col":"category_id","to":"categories","to_col":"id","kind":"fk","weight":1.0},
+        {"from":"orders","from_col":"id","to":"order_items","to_col":"order_id","source":"fk","weight":1.0},
+        {"from":"order_items","from_col":"product_id","to":"products","to_col":"id","source":"fk","weight":1.0},
+        {"from":"products","from_col":"category_id","to":"categories","to_col":"id","source":"fk","weight":1.0},
     ]
     state=FakeState(edges)
     blast=build_blast(state, "c", ["orders"], 1)

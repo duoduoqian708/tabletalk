@@ -10,7 +10,6 @@ READ_TYPES = {"select", "show", "describe", "explain", "pragma", "desc"}
 DML_TYPES = {"update", "delete", "insert"}
 DDL_TYPES = {"create", "drop", "alter", "truncate"}
 TCL_TYPES = {"begin", "commit", "rollback", "set"}
-UNKNOWN_TYPES = {"other", "command", "empty"}
 
 
 @dataclass

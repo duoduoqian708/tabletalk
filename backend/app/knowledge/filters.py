@@ -161,11 +161,6 @@ class FilterStore:
             logger.info("[filters] conn=%s reject table=%s", conn_id, table)
         return removed
 
-    def set_exempt(self, conn_id: str, table: str) -> None:
-        """系统表豁免：connection_default 租户过滤不注入。"""
-        self._filters.setdefault(conn_id, {})[table] = TableFilter(
-            table=table, predicate="", scope="exempt", status="confirmed")
-
     def load(self, conn_id: str, items: list[dict]) -> None:
         self._filters[conn_id] = {d["table"]: TableFilter.from_dict(d) for d in items}
 
@@ -230,24 +225,6 @@ def resolve_session_vars_in_sql(sql: str, ctx: dict) -> str:
     except Exception as e:  # pragma: no cover
         logger.warning("[filters] 占位符替换失败，返回原 SQL：%s", e)
         return sql
-
-
-def _filters_tables_in_sql(sql: str) -> set[str]:
-    """sqlglot 提取 SQL 引用的表名（按表注入过滤器用；解析失败返回空集）。"""
-    try:
-        import sqlglot
-        node = sqlglot.parse_one(sql)
-    except Exception:
-        return set()
-    out: set[str] = set()
-    try:
-        for t in node.find_all(sqlglot.exp.Table):
-            n = getattr(t, "name", None)
-            if n:
-                out.add(n)
-    except Exception:
-        pass
-    return out
 
 
 def prepare_query_sql(state: Any, conn_id: str, sql: str) -> str:

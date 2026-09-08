@@ -33,13 +33,6 @@ class VectorChunk(BaseModel):
     updated_at: str = ""
 
 
-class SearchQuery(BaseModel):
-    qvec: list[float]
-    collection: str | None = None            # 精确匹配 collection
-    filter: dict[str, Any] | None = None     # metadata 子集匹配（所有键值都须命中）
-    k: int = 10
-
-
 class SearchHit(BaseModel):
     chunk: VectorChunk
     score: float
@@ -123,6 +116,3 @@ class NumpyVectorStore(VectorStore):
         top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:max(1, k)]
         return [SearchHit(chunk=self._chunks[cid], score=round(s, 4)) for cid, s in top]
 
-
-def now_ts() -> str:
-    return utcnow_iso()

@@ -29,6 +29,7 @@ class QueryRequest(BaseModel):
     limit: int | None = None
     offset: int | None = None
     count_total: bool = False
+    dry_run: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -93,6 +94,19 @@ async def _estimate_cost(state, conn_id: str, sql: str, dialect: str) -> int | N
         return None
 
 
+def _preview_rows(sql: str) -> tuple[str | None, int | None]:
+    """解析 INSERT VALUES 估算受影响行数（用于 dry-run 预览）。"""
+    try:
+        _p = sqlglot.parse_one(sql)
+        if isinstance(_p, sqlglot.exp.Insert):
+            _table = _p.find(sqlglot.exp.Table)
+            _rows = _p.find_all(sqlglot.exp.Tuple)
+            return (_table.name if _table else None), len(list(_rows))
+    except Exception:
+        pass
+    return None, None
+
+
 @router.post("/query")
 async def run_query(req: QueryRequest) -> dict:
     state = get_state()
@@ -115,8 +129,7 @@ async def run_query(req: QueryRequest) -> dict:
     if assessment.verdict == Verdict.ALLOW:
         try:
             try:
-                pol_thr = getattr(state.runtime.get().policy, "threshold", None)
-                thr = int(pol_thr) if pol_thr is not None else int(state.runtime.get().gate_review_threshold)
+                thr = int(getattr(state.runtime.get().policy, "threshold", 100000))
             except Exception:
                 thr = 100000
             est = await _estimate_cost(state, req.connection_id, exec_sql, dialect)
@@ -136,6 +149,21 @@ async def run_query(req: QueryRequest) -> dict:
         except Exception as e:
             cost_degraded_reason = str(e)
             pass
+
+    # ── dry-run 拦截：定时任务测试模式不真实执行写操作，返回预览 ──
+    if req.dry_run and origin == Origin.SCHEDULED and assessment.tier.value in ("dml", "ddl"):
+        elapsed = round((time.monotonic() - t0) * 1000, 1)
+        table, rows = _preview_rows(exec_sql)
+        state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
+                        verdict="executed", status="dry_run", sql=exec_sql, elapsed_ms=elapsed,
+                        reasons=assessment.reasons, tables=assessment.tables)
+        return {
+            "verdict": "executed", "tier": assessment.tier.value,
+            "reason": "测试模式·未真实写入",
+            "reasons": assessment.reasons,
+            "dry_run": True, "table": table, "affected_rows": rows,
+            "elapsed_ms": elapsed,
+        }
 
     if cfg.read_only and (assessment.verdict != Verdict.ALLOW or assessment.tier.value in ("dml", "ddl")):
         # 只读硬边界：不止拦非 ALLOW——定时任务 INSERT（scheduled-insert=allow）也拦，只读连接永不写

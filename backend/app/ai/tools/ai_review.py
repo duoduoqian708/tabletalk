@@ -16,32 +16,6 @@ if TYPE_CHECKING:
     from app.state import AppState
 
 
-_REVIEW_PROMPT = """你是一个数据库安全审查专家。请对以下 SQL 语句进行语义级安全审查。
-
-SQL：
-```sql
-{sql}
-```
-
-{context_section}
-
-审查要点：
-1. 是否缺少 WHERE 条件（可能导致全表操作）
-2. 是否涉及敏感字段（密码、密钥、个人信息等）
-3. 操作影响范围是否过大（批量删除/更新）
-4. 是否有潜在的注入风险
-5. DML 操作是否有明确的业务意图
-
-请返回 JSON 格式：
-{{
-  "verdict": "safe|risky|dangerous",
-  "reasons": ["原因1", "原因2"],
-  "suggestions": ["建议1", "建议2"]
-}}
-
-只返回 JSON，不要其他内容。"""
-
-
 async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, include_data: bool = False) -> ToolOutcome:
     sql = (args or {}).get("sql", "").strip()
     context = (args or {}).get("context", "").strip()
@@ -52,9 +26,9 @@ async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, incl
             think="ai_review 缺少 SQL。",
         )
 
-    # 构建 prompt
     context_section = f"业务上下文：{context}" if context else ""
-    prompt = _REVIEW_PROMPT.format(sql=sql, context_section=context_section)
+    from app.ai.prompts import render
+    prompt = render("ai_review", sql=sql, context=context_section)
 
     # 铁律3：LLM 调用前构建清单 + 调用后写审计（source=egress-review）
     try:
@@ -92,12 +66,9 @@ async def _ai_review(state: "AppState", args: dict[str, Any], conn_id: str, incl
                                         "manifest": manifest,
                                     })
         text = (getattr(resp, "content", "") or "").strip()
-
-        # 更新 manifest 中的模型信息
         manifest["model"] = provider_cfg.get("model", "")
         manifest["provider"] = provider_cfg.get("provider", "mock")
 
-        # 解析 JSON 响应
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         result = json.loads(text)
         verdict = result.get("verdict", "safe")

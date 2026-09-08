@@ -12,13 +12,9 @@ from typing import Any
 
 from app.knowledge.graph.model import (
     PROV_DECLARED_FK,
-    PROV_HUMAN,
     PROV_NAMING_INFERENCE,
-    PROV_QUERY_LOG,
-    RELATION_FK,
-    RELATION_NAMING,
-    RELATION_QUERY_LOG,
-    RELATION_USER,
+    SOURCE_FK,
+    SOURCE_NAMING,
     GraphEdge,
 )
 
@@ -62,7 +58,7 @@ def _type_family(t: str | None) -> str | None:
 # ---------------------------------------------------------------- FK
 
 def build_fk_edges(schema: dict) -> list[GraphEdge]:
-    """声明 FK → relation=fk, confidence=1.0, provenance=declared_fk。
+    """声明 FK → source=fk, confidence=1.0, provenance=declared_fk。
 
     复合 FK（同 constraint_id 多列对）→ 合并为一条边、cols 多对列；
     平行 FK（无 constraint_id 或约束不同）→ 每条独立边（平行边正确性优先）。
@@ -81,7 +77,7 @@ def build_fk_edges(schema: dict) -> list[GraphEdge]:
             source_table=from_t, target_table=to_t,
             cols=col_pairs,
             cardinality="1:1" if col_pk.get((from_t, col_pairs[0][0])) else "n:1",
-            relation=RELATION_FK, confidence=1.0, provenance=PROV_DECLARED_FK,
+            source=SOURCE_FK, confidence=1.0, provenance=PROV_DECLARED_FK,
             reason=f"FK 约束：{from_t}.{','.join(c for c, _ in col_pairs)} → {to_t}",
         ))
     logger.info("[graph_builder] fk 产边 %d 条", len(edges))
@@ -91,9 +87,9 @@ def build_fk_edges(schema: dict) -> list[GraphEdge]:
 # ---------------------------------------------------------------- 命名推断
 
 def build_naming_edges(schema: dict) -> list[GraphEdge]:
-    """命名推断 → relation=naming, confidence=0.6, provenance=naming_inference。
+    """命名推断 → source=naming, confidence=0.6, provenance=naming_inference。
 
-    迁移自 annotator._generate_candidate_pairs，去 LLM 化：直接产出边。
+
     规则：引用列名（_id/_code/... 后缀）去掉后缀 ≈ 目标表名（单复数变体），
     且类型族一致；目标列主键优先，其次 id/code。
     """
@@ -160,7 +156,7 @@ def build_naming_edges(schema: dict) -> list[GraphEdge]:
                 source_table=tname, target_table=to_t,
                 cols=[(c["name"], ref_col)],
                 cardinality="1:1" if c.get("pk") else "n:1",
-                relation=RELATION_NAMING, confidence=0.6, provenance=PROV_NAMING_INFERENCE,
+                source=SOURCE_NAMING, confidence=0.6, provenance=PROV_NAMING_INFERENCE,
                 reason=f"列名匹配：{tname}.{c['name']} → {to_t}.{ref_col}",
             ))
     logger.info("[graph_builder] naming 产边 %d 条", len(edges))
@@ -191,7 +187,7 @@ def build_draft_edges(schema: dict) -> list[dict]:
     """确定性来源（FK + 命名推断）-> 统一 draft 边列表（待人工确认才生效）。
 
     跨源去重：同列对 confidence 严格更高者胜，并列时 fk > naming。
-    格式与 LLM draft 边一致（from_table/from_col/kind/...），供审查页统一展示。
+    格式与 LLM draft 边一致（from_table/from_col/source/...），供审查页统一展示。
     """
     by_key: dict[tuple, tuple[int, float, Any]] = {}
     for prio, edges in ((0, build_fk_edges(schema)), (1, build_naming_edges(schema))):
@@ -207,7 +203,7 @@ def build_draft_edges(schema: dict) -> list[dict]:
         out.append({
             "from_table": e.source_table, "from_col": first[0],
             "to_table": e.target_table, "to_col": first[1],
-            "kind": e.relation, "cardinality": e.cardinality,
+            "source": e.source, "cardinality": e.cardinality,
             "reason": e.reason, "guard": e.guard,
             "confidence": e.confidence, "provenance": e.provenance,
             "cols": [list(p) for p in e.cols],

@@ -1,0 +1,5 @@
+Based on the database structure and the user's analysis goal below, plan 2–4 report chapters, each with one aggregate read-only query.
+__CONTEXT__
+User analysis goal: __QUESTION__
+Return JSON: {"sections":[{"id":"r1","title":"","intent":"","chart_hint":"bar|line|pie","sql":"read-only SELECT"}]}.
+Return only JSON. chart_hint must be bar|line|pie. SQL must be an aggregate query with GROUP BY or LIMIT.

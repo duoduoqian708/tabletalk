@@ -6,7 +6,6 @@ D7 原则：压缩的是叙事、保住的是结构 —— 卡片骨架（result
 """
 from __future__ import annotations
 
-import json
 import re
 from app.core.timeutil import utcnow_iso
 from typing import TYPE_CHECKING, Any
@@ -15,7 +14,6 @@ if TYPE_CHECKING:
     from app.state import AppState
 
 MECH_THRESHOLD = 12000  # token 阈值（暂定，待真实长度分布再调）
-HEAD_TURNS_KEEP = 1  # 保护尾部轮次数（当前轮上下文）
 ONE_LINE_MAX = 120  # 机械压缩后一句摘要最长字符数
 _CJK = re.compile(r"[　-鿿㐀-䶿]")
 
@@ -142,8 +140,10 @@ async def llm_compress_oldest(
             manifest = {"tables": [], "kb_docs": 0, "history_turns": 1, "mode": "standard",
                         "ts": utcnow_iso(), "model": cfg.get("model", ""), "provider": "llm-compress"}
         provider = gw.build_provider(cfg)
+        from app.ai.prompts import render
+        _compress_prompt = render("compress")
         resp = await provider.chat([
-            {"role": "system", "content": "把下面的历史对话浓缩成一句话（中文，≤80 字），只保留事实性要点，不编造；直接给摘要正文。"},
+            {"role": "system", "content": _compress_prompt},
             {"role": "user", "content": redacted},
         ], ctx={
             "conn_id": conn_id, "connection": conn_id, "skill": "compress",

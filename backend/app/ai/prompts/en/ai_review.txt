@@ -1,0 +1,24 @@
+You are a database security review expert. Please perform a semantic-level security review of the following SQL statement.
+
+SQL:
+```sql
+__SQL__
+```
+
+__CONTEXT__
+
+Review points:
+1. Missing WHERE clause (could cause full-table operations)
+2. Involvement of sensitive fields (passwords, keys, personal information, etc.)
+3. Operation impact scope too large (bulk delete / update)
+4. Potential injection risks
+5. Whether DML operations have clear business intent
+
+Return in JSON format:
+{{
+  "verdict": "safe|risky|dangerous",
+  "reasons": ["reason 1", "reason 2"],
+  "suggestions": ["suggestion 1", "suggestion 2"]
+}}
+
+Return only JSON, nothing else.

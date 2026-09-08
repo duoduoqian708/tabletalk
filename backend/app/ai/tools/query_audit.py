@@ -18,7 +18,6 @@ async def _query_audit(state: "AppState", args: dict[str, Any], conn_id: str, in
     from app.safety.redact import redact_text
     from app.config import get_env
 
-    # 解析参数
     from_ts = (args or {}).get("from_ts")
     to_ts = (args or {}).get("to_ts")
     verdict = (args or {}).get("verdict")

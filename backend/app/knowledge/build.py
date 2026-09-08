@@ -5,11 +5,12 @@ import asyncio
 import hashlib
 import json as _json
 import logging
+import os
 import time
 from typing import Any
 
 from app.core.timeutil import utcnow_iso
-from app.knowledge.embedding import HashingEmbedder, make_embedder
+from app.knowledge.embedding import make_embedder
 from app.knowledge.filters import TableFilter
 
 logger = logging.getLogger(__name__)
@@ -23,13 +24,13 @@ class BuildService:
         # 构建相关状态
         self._schema_fingerprint_map: dict[str, str] = {}  # conn -> 结构指纹
         self._synced_at: dict[str, str] = {}  # conn -> 最近增量同步时间
-        self._auto: dict[str, list[Any]] = {}  # conn -> 自动抽取文档
+        self._annotation_cache: dict[str, dict[str, dict]] = {}  # conn -> 表名 -> {input_hash, items, created_at}
 
     def _embedder(self) -> Any:
         if self._runtime is not None:
             s = self._runtime.get()
             return make_embedder(s.embedding_provider, s.embedding_base_url, s.embedding_model, s.embedding_api_key)
-        return HashingEmbedder()
+        return make_embedder("", "", "", "")
 
     def _log_embedding_usage(self, conn_id: str, operation: str = "build", emb: Any = None) -> None:
         """记录嵌入模型用量到 llm_log（仅 ApiEmbedder 有累计 usage）。"""
@@ -52,12 +53,16 @@ class BuildService:
             logger.warning("[kb.store] conn=%s 记录嵌入用量失败：%s", conn_id, e)
 
     def _emb_fingerprint(self) -> str:
-        """当前嵌入配置指纹：hash | api:model@base_url。用户更换嵌入模型后指纹变化 → 触发向量重嵌。"""
+        """当前嵌入配置指纹：api:model@base_url#合成版本 或 none。
+
+        用户更换嵌入模型 或 合成算法升级（SYNTH_VERSION 变化）→ 指纹变化 → 触发向量重嵌。
+        """
+        from app.knowledge.semantic.store import SYNTH_VERSION  # noqa: PLC0415
         if self._runtime is not None:
             s = self._runtime.get()
-            if s.embedding_provider == "api" and s.embedding_base_url:
-                return f"api:{s.embedding_model}@{s.embedding_base_url}"
-        return "hash"
+            if s.embedding_provider and s.embedding_base_url:
+                return f"api:{s.embedding_model}@{s.embedding_base_url}#{SYNTH_VERSION}"
+        return f"none#{SYNTH_VERSION}"
 
     @staticmethod
     def _schema_fingerprint(schema: dict[str, Any]) -> str:
@@ -77,6 +82,49 @@ class BuildService:
         return hashlib.sha1(
             _json.dumps(canon, ensure_ascii=False, sort_keys=True).encode()
         ).hexdigest()
+
+    @staticmethod
+    def _table_col_fingerprint(schema: dict[str, Any], table: str) -> str | None:
+        """表级列指纹（rename 检测用）：列名/类型/主外键签名（不含注释/表注释）。
+
+        指纹相同 → 结构完全一致 → 视为同一表改名，继承旧表知识。
+        返回 None 表示该表无列（视图或空壳），不参与 rename 匹配。
+        """
+        cols = sorted(
+            (c.get("name", ""), c.get("type", ""), bool(c.get("pk")), bool(c.get("fk")))
+            for c in schema.get("columns", []) if c.get("table") == table
+        )
+        if not cols:
+            return None
+        return hashlib.sha1(
+            _json.dumps(cols, ensure_ascii=False).encode()
+        ).hexdigest()
+
+    @classmethod
+    def match_renames(cls, old_schema: dict[str, Any], new_schema: dict[str, Any],
+                      removed: set[str], added: set[str]) -> list[dict[str, str]]:
+        """removed ↔ added 一对一列指纹匹配（rename 启发式）。
+
+        多候选歧义（一张旧表匹配多个新表）→ 放弃该旧表匹配（保守：当删+建处理）。
+        """
+        removed_fps: dict[str, str | None] = {t: cls._table_col_fingerprint(old_schema, t) for t in removed}
+        added_fps: dict[str, str | None] = {t: cls._table_col_fingerprint(new_schema, t) for t in added}
+        by_fp: dict[str, list[str]] = {}
+        for t, fp in added_fps.items():
+            if fp:
+                by_fp.setdefault(fp, []).append(t)
+        renames: list[dict[str, str]] = []
+        used_new: set[str] = set()
+        for old_t in sorted(removed):
+            fp = removed_fps.get(old_t)
+            if not fp:
+                continue
+            cands = [n for n in by_fp.get(fp, []) if n not in used_new]
+            if len(cands) != 1:
+                continue  # 歧义或无匹配 → 保持删+建语义
+            used_new.add(cands[0])
+            renames.append({"from": old_t, "to": cands[0]})
+        return renames
 
     @staticmethod
     def diff_schema(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +178,81 @@ class BuildService:
                               "added_columns", "removed_columns", "changed_columns",
                               "added_fks", "removed_fks")
         )
+
+    @staticmethod
+    def _touched_from_diff(diff: dict[str, Any]) -> set[str]:
+        """结构 diff → touched 表集合（新增/变更/列变化/FK 端点；不含 rename 对消）。"""
+        touched = (set(diff["added_tables"]) | set(diff["changed_tables"])
+                   | set(diff["added_columns"]) | set(diff["removed_columns"])
+                   | set(diff["changed_columns"])
+                   | {f[0] for f in diff["added_fks"]} | {f[0] for f in diff["removed_fks"]}
+                   | {f[2] for f in diff["added_fks"]} | {f[2] for f in diff["removed_fks"]})
+        touched -= set(diff["removed_tables"])
+        return touched
+
+    @classmethod
+    def compute_touched(cls, old_schema: dict[str, Any], new_schema: dict[str, Any],
+                        ) -> tuple[set[str], dict[str, Any]]:
+        """diff 模式 touched 集合 + 结构 diff（rename 未对消；调用方应用 rename 继承后再 adjust）。"""
+        diff = cls.diff_schema(old_schema, new_schema)
+        return cls._touched_from_diff(diff), diff
+
+    @staticmethod
+    def adjust_diff_for_renames(diff: dict[str, Any], renames: list[dict[str, str]]) -> dict[str, Any]:
+        """rename 对消：diff 中 removed/added/changed 键同步清理。
+
+        FK 增删对里的改名项对消（列未变，同一 FK 以新名重现 = 未变）：
+        removed 项翻新名后与 added 求交，双方都清。
+        """
+        renamed_map = {r["from"]: r["to"] for r in renames}
+        renamed_old = {r["from"] for r in renames}
+        renamed_new = {r["to"] for r in renames}
+        diff["removed_tables"] = [t for t in diff["removed_tables"] if t not in renamed_old]
+        diff["added_tables"] = [t for t in diff["added_tables"] if t not in renamed_new]
+        if renamed_map:
+            _flip = lambda f: (renamed_map.get(f[0], f[0]), f[1], renamed_map.get(f[2], f[2]), f[3])
+            flipped_removed = {_flip(f): f for f in diff["removed_fks"]}
+            cancel = {tuple(f) for f in diff["added_fks"] if tuple(f) in flipped_removed}
+            diff["added_fks"] = [f for f in diff["added_fks"] if tuple(f) not in cancel]
+            diff["removed_fks"] = [f for f in diff["removed_fks"] if _flip(f) not in cancel]
+        diff["removed_columns"] = {k: v for k, v in diff["removed_columns"].items() if k not in renamed_old}
+        diff["added_columns"] = {k: v for k, v in diff["added_columns"].items() if k not in renamed_new}
+        diff["changed_columns"] = {k: v for k, v in diff["changed_columns"].items()
+                                   if k not in renamed_old and k not in renamed_new}
+        return diff
+
+    def apply_renames(self, facade: Any, conn_id: str, renames: list[dict[str, str]]) -> None:
+        """rename 知识继承：表知识/样本/向量/标签绑定/图边/注释缓存/baseline 整体改挂新表名。
+
+        全量 diff 模式与增量同步共用（行为一致，不再各写一份）。
+        """
+        _tables_map = facade.semantic_store._tables.get(conn_id, {})
+        _samples_map = facade.semantic_store._samples.get(conn_id, {})
+        _tv_map = facade.retrieval_service._table_vec.get(conn_id, {})
+        _tt_map = facade.semantic_store._table_tags.get(conn_id, {})
+        _ann_map = self._annotation_cache.get(conn_id, {})
+        baseline = (facade.semantic_store.get_round(conn_id).get("baseline") or {}).get("tables") or {}
+        for r in renames:
+            old_t, new_t = r["from"], r["to"]
+            tk = _tables_map.get(old_t)
+            if tk is not None:
+                tk.name = new_t  # 实体名同步改写（旧实现只挪 map 键，合成文本/卡片仍带旧表名）
+                _tables_map[new_t] = _tables_map.pop(old_t)
+            if old_t in _samples_map:
+                _samples_map[new_t] = _samples_map.pop(old_t)
+            if old_t in _tv_map:
+                _tv_map[new_t] = _tv_map.pop(old_t)
+            if old_t in _tt_map:
+                _tt_map[new_t] = _tt_map.pop(old_t)
+            if old_t in _ann_map:
+                _ann_map[new_t] = _ann_map.pop(old_t)
+            if old_t in baseline:
+                baseline[new_t] = baseline.pop(old_t)  # 对比层旧侧以新表名可查
+            # auto docs 改挂新表名（知识字段随 TableKnowledge 走，docs 只换归属）
+            for d in facade._auto.get(conn_id, []):
+                if d.table == old_t:
+                    d.table = new_t
+            facade.graph_store.rename_table(conn_id, old_t, new_t)
 
     @staticmethod
     def _from_schema_subset(schema: dict[str, Any], tables: set[str], conn_id: str = "",
@@ -262,6 +385,8 @@ class BuildService:
     def ingest_values_candidates(self, facade: Any, conn_id: str, schema: dict[str, Any]) -> int:
         """T7 §9#4：ColumnInfo.values 平铺串 → 概念条目候选（draft，人工确认后生效）。
 
+        读取链：confirmed values → proposed_values（2026-09 优化：增量场景新表的
+        取值对照还是提案，一并纳入候选，产出仍为 draft——新表当轮即有概念候选）。
         概念名取 {table}.{column}（同名不同义列不自动合并，T7 §5#2）；
         同名 upsert 覆盖但 confirmed 状态不降级（T7 §5#4）。
         """
@@ -271,7 +396,7 @@ class BuildService:
         n = 0
         for tname, tk in tabs.items():
             for cname, ci in tk.columns.items():
-                vals = (ci.values or "").strip()
+                vals = (ci.values or "").strip() or (getattr(ci, "proposed_values", "") or "").strip()
                 if not vals:
                     continue
                 entries = ConceptStore.parse_values_to_candidates(vals)
@@ -288,6 +413,18 @@ class BuildService:
         if n:
             logger.info("[concepts] conn=%s values→候选 %d 个概念", conn_id, n)
         return n
+
+    @staticmethod
+    def _schema_subset(schema: dict[str, Any], tables: set[str]) -> dict[str, Any]:
+        """schema 子集（增量补齐 filters/constants 等阶段用：只喂 touched 表）。"""
+        sub = dict(schema)
+        sub["tables"] = [t for t in schema.get("tables", []) if t["name"] in tables]
+        sub["columns"] = [c for c in schema.get("columns", []) if c["table"] in tables]
+        sub["foreign_keys"] = [
+            f for f in schema.get("foreign_keys", [])
+            if f["table"] in tables or f["ref_table"] in tables
+        ]
+        return sub
 
     async def sync(
         self, facade, conn_id: str, schema: dict[str, Any],
@@ -318,13 +455,22 @@ class BuildService:
 
     async def reembed_if_needed(self, facade, conn_id: str) -> bool:
         facade.ensure_loaded(conn_id)
-        """嵌入配置变化（用户新配/更换嵌入模型）→ 重嵌表级向量（一表一 chunk），返回是否重嵌。"""
+        """嵌入配置变化（用户新配/更换嵌入模型）→ 重嵌表级向量（一表一 chunk），返回是否重嵌。
+
+        嵌入配置被移除（base_url 清空）时构造 embedder 会抛错——降级跳过重嵌，
+        保留旧向量继续可用，不让 overview/retrieve 因配置缺失而 500。
+        """
         # 运行时引用同步：门面的 _runtime 是权威（可被替换/测试打桩），
         # 子模块持有的是构造时引用，委托前必须对齐，否则配置变更不生效。
         facade.build_service._runtime = facade._runtime
         cur = facade.build_service._emb_fingerprint()
         stored = facade.retrieval_service._artifact_fingerprint.get(conn_id, "")
-        facade._emb = facade.build_service._embedder()
+        try:
+            facade._emb = facade.build_service._embedder()
+        except ValueError as e:
+            logger.warning(
+                "[kb.embed] conn=%s 嵌入配置缺失，跳过向量重嵌（保留旧向量继续可用）：%s", conn_id, e)
+            return False
         active_vecs = {k: v for k, v in facade.retrieval_service._table_vec.get(conn_id, {}).items() if v}
         dims = {len(v) for v in active_vecs.values()}
         dim_mismatch = len(dims) > 1
@@ -335,35 +481,47 @@ class BuildService:
         await facade._embed_tables(conn_id)
         facade.retrieval_service._artifact_fingerprint[conn_id] = cur
         facade._rebuild_vstore(conn_id)
-        facade._save_conn(conn_id)
+        await facade._save_conn_async(conn_id)
         return True
 
 
     async def _embed_tables(self, facade, conn_id: str, tables: set[str] | None = None,
                             on_progress: Any | None = None, p0: int = 82, p1: int = 95) -> None:
-        """统一表级嵌入（一表一 chunk）"""
+        """统一表级嵌入（一表一 chunk）
+
+        向量文本 = override > AI 画像 > 空（零代码拼接）；空文本表跳过嵌入、
+        保留旧向量继续可用（画像未生成的旧库/失败表不丢检索通道）。
+        """
         tabs = facade.semantic_store._tables.get(conn_id, {})
-        targets = [t for t in tabs if tables is None or t in tables]
+        targets = [t for t in tabs if tables is None or t in tabs]
         if not targets:
             return
         vecs: dict[str, list[float]] = {}
+        skipped = 0
         n = len(targets)
+        _t0 = time.monotonic()
         for i, name in enumerate(targets):
+            text = facade.semantic_store.table_vector_text(conn_id, tabs[name])
+            if not text:
+                skipped += 1
+                continue
             if on_progress:
                 on_progress("向量化", p0 + (p1 - p0) * i // max(1, n),
                             f"嵌入 {i + 1}/{n}")
             try:
-                vecs[name] = await facade._emb.embed(facade.semantic_store._synthesize_table_text(conn_id, tabs[name]))
+                vecs[name] = await facade._emb.embed(text)
             except Exception as e:
                 logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, name, e)
                 vecs[name] = [0.0]
+        logger.info(
+            "[kb.embed] conn=%s 表级嵌入完成 表数=%d 无文本跳过=%d 耗时 %.2fs（串行 for，云端RTT主导，CPU≈0）",
+            conn_id, n, skipped, time.monotonic() - _t0,
+        )
+        # 合并而非替换：无文本表/嵌入失败表保留旧向量；全量档丢弃已从库移除的表的陈旧向量
+        cur = facade.retrieval_service._table_vec.get(conn_id, {})
         if tables is None:
-            facade.retrieval_service._table_vec[conn_id] = vecs
-        else:
-            cur = facade.retrieval_service._table_vec.get(conn_id, {})
-            for t in targets:
-                cur.pop(t, None)
-            facade.retrieval_service._table_vec[conn_id] = {**cur, **vecs}
+            cur = {k: v for k, v in cur.items() if k in tabs}
+        facade.retrieval_service._table_vec[conn_id] = {**cur, **vecs}
 
 
     async def _reembed_tables(self, facade, conn_id: str, table_names: list[str]) -> None:
@@ -376,7 +534,7 @@ class BuildService:
             facade._emb = facade.build_service._embedder()
             await facade._embed_tables(conn_id, set(names))
             facade._rebuild_vstore(conn_id)
-            facade._save_conn(conn_id)
+            await facade._save_conn_async(conn_id)
             logger.info("[kb.store] conn=%s 确认/撤下后重嵌完成：tables=%s", conn_id, ",".join(names))
         except Exception as e:
             logger.warning("[kb.store] conn=%s 确认/撤下后重嵌失败 tables=%s：%s", conn_id, names, e)
@@ -415,7 +573,7 @@ class BuildService:
             facade.graph_store._llm_graph_edges[conn_id] = []
         facade.graph_store.clear_diff_base(conn_id)
         if n_cols or n_tables or draft_names or n_edges:
-            facade._save_conn(conn_id)
+            await facade._save_conn_async(conn_id)
         return {"columns": n_cols, "tables": n_tables, "tags": len(draft_names), "edges": n_edges}
 
     async def build(
@@ -426,15 +584,34 @@ class BuildService:
         on_progress: Any | None = None,
         include_samples: bool = False,
         enable_ai_annotation: bool = True,
-        self_check: bool | None = None,
+        annotate_mode: str = "diff",
+        tag_mode: str = "keep",
     ) -> dict[str, Any]:
-        """构建知识库"""
-        # 保持原有逻辑不变
+        """构建知识库。
+
+        annotate_mode：
+        - "diff"：只对变化表重新提案（touched = 结构 diff 出的变化表；rename 表继承知识不重注释）。
+          未变表已确认知识原样保留、不产新提案。首建（无旧 schema）天然等价 full。
+        - "full"：清空全部提案后全表重新注释（走注释缓存，未变输入零 LLM 调用）。
+        tag_mode：
+        - "keep"/"anchor"：全量划分注入既有 confirmed 域锚点（anchor 额外允许 AI 提议改名/合并）；
+        - "fresh"：先清空标签库与绑定，从零划分。
+        """
         facade.build_service._runtime = facade._runtime
-        import time
         _t0 = time.monotonic()
         _t_prev = _t0
         _segs: list[tuple[str, float]] = []
+        # 审核重构：构建发起即快照旧版知识（对比层"旧"侧）+ 旧结构集合（算 round_diff）。
+        # 必须在 _sync_table_shells/提案覆盖之前——否则旧值被刷新丢失。
+        facade.semantic_store.snapshot_round_baseline(conn_id)
+        _round_prev_tables = set(facade.semantic_store._tables.get(conn_id, {}).keys())
+        _round_prev_cols = {(t.name, c.name)
+                            for t in facade.semantic_store._tables.get(conn_id, {}).values()
+                            for c in t.columns.values()}
+        # AI 阶段降级汇总（D3）：异常阶段记入 stats["degraded_phases"]，
+        # jobs 层据此判定 tags+graph 双失败 → 阻断自动进待审
+        degraded_phases: list[str] = []
+        failed_tables: list[str] = []
 
         def _seg(label: str) -> None:
             nonlocal _t_prev
@@ -445,16 +622,31 @@ class BuildService:
             logger.info("[kb.build] conn=%s 耗时[%s] %.1fs（累计 t+%.1fs）",
                         conn_id, label, el, now - _t0)
 
-        # 2026-09 修订：全量重构保留当前生效知识（注释/标签/绑定/向量/已确认边），
-        # 只做 schema 对齐（删表删列）+ 清空上轮提案队列后重新提案。
-        old_schema = facade.semantic_store._schema.get(conn_id, {})
+        # ---- 模式解析：diff 模式算 touched + rename 继承；full/init 全表 ----
+        old_schema = facade.semantic_store._schema.get(conn_id) or {}
         old_tables = {t["name"] for t in old_schema.get("tables", [])}
         new_tables = {t["name"] for t in schema.get("tables", [])}
         removed_tables = old_tables - new_tables
+        touched: set[str] | None = None
+        renames: list[dict[str, str]] = []
+        diff0: dict[str, Any] | None = None
+        if annotate_mode == "diff" and old_tables:
+            touched, diff0 = self.compute_touched(old_schema, schema)
+            renames = self.match_renames(
+                old_schema, schema, set(diff0["removed_tables"]), set(diff0["added_tables"]))
+            if renames:
+                self.apply_renames(facade, conn_id, renames)
+                diff0 = self.adjust_diff_for_renames(diff0, renames)
+                touched = {t for t in touched if t not in {r["to"] for r in renames}}
+                logger.info("[kb.build] conn=%s diff 模式检测到表重命名：%s（知识继承，不重新注释）",
+                            conn_id, "；".join(f"{r['from']}→{r['to']}" for r in renames))
         facade.graph_store._llm_graph_edges.pop(conn_id, None)  # 提案队列重置（正式图不动）
         tv = facade.retrieval_service._table_vec.get(conn_id, {})
         for t in removed_tables:
             tv.pop(t, None)
+        _ann_map = self._annotation_cache.get(conn_id, {})
+        for t in removed_tables:
+            _ann_map.pop(t, None)
         # 已删表的标签绑定清理（孤儿标签后续由增量清理逻辑/标签管理处理）
         tt = facade.semantic_store._table_tags.get(conn_id, {})
         for t in removed_tables:
@@ -463,7 +655,17 @@ class BuildService:
             on_progress("发现结构", 5, None)
         schema = dict(schema)
         schema["_conn_id"] = conn_id
-        facade._auto[conn_id] = facade.semantic_store._from_schema(schema)
+        # auto 结构文档：full 全量重建；diff 只重建 touched（删表归档）
+        if touched is None:
+            facade._auto[conn_id] = facade.semantic_store._from_schema(schema)
+        else:
+            stale = touched | removed_tables
+            auto = [d for d in facade._auto.get(conn_id, []) if d.table not in stale or d.archived]
+            new_docs = self._from_schema_subset(schema, touched, conn_id, facade.semantic_store._from_schema)
+            _now_docs = utcnow_iso()
+            for d in new_docs:
+                d.updated_at = _now_docs
+            facade._auto[conn_id] = auto + new_docs
         facade.semantic_store._schema[conn_id] = {
             "tables": [
                 {"name": t["name"], "kind": t.get("kind", "table"),
@@ -477,9 +679,18 @@ class BuildService:
             ],
             "foreign_keys": schema.get("foreign_keys", []),
         }
-        facade.semantic_store._sync_table_shells(conn_id, schema)
+        facade.semantic_store._sync_table_shells(conn_id, schema, drop=removed_tables)
+        # 清空上轮提案：full 清全部（本轮 AI 从零提案）；diff 只清 touched
+        # （不清会导致上轮残留提案混入新一轮审查被误确认）
+        facade.semantic_store.clear_round_proposals(conn_id, touched)
         if samples is not None:
-            facade.semantic_store._samples[conn_id] = samples
+            if touched is None:
+                facade.semantic_store._samples[conn_id] = samples
+            else:
+                merged = {**facade.semantic_store._samples.get(conn_id, {}), **samples}
+                for t in removed_tables:
+                    merged.pop(t, None)
+                facade.semantic_store._samples[conn_id] = merged
         if on_progress:
             on_progress("发现结构", 10, None)
         _seg("发现结构")
@@ -488,12 +699,20 @@ class BuildService:
         ai_tags_added = 0
         _llm_edges: list[dict] = []
         if enable_ai_annotation:
-            from app.knowledge.annotator import annotate_domain, annotate_tables
+            from app.knowledge.annotator import (
+                _AdaptiveLimiter,
+                annotate_domain,
+                annotate_graph,
+                annotate_tables,
+            )
             from app.knowledge.ddl_context import (
                 ddls_from_schema,
                 generate_ddls_all,
                 truncate_samples,
             )
+            # 共享全局限流（D4）：阶段一~四共用一个自适应实例（429 减半/连成恢复），
+            # 阶段一整任务占坑，阶段二~四在 _chat_with_beat 内按次占坑
+            limiter = _AdaptiveLimiter(max(1, int(os.environ.get("TABLETALK_KB_ANNOTATION_CONCURRENCY", "10"))))
 
             if on_progress:
                 on_progress(
@@ -517,16 +736,35 @@ class BuildService:
                     tk = facade.semantic_store._tables.get(conn_id, {}).get(tname)
                     if tk is not None:
                         tk.ddl = ddl
-                effective_samples = (
-                    truncate_samples(facade.semantic_store._samples.get(conn_id, {})) if include_samples else None
-                )
-                ai_docs_added = await annotate_tables(
-                    _st, conn_id, ddl_map, facade.semantic_store._schema[conn_id],
-                    samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
-                )
-                logger.info("[kb.build] conn=%s 阶段=annotate 完成：items=%s", conn_id, ai_docs_added)
-                _seg("阶段一·逐表注释")
+                if touched is not None:
+                    # diff 模式：只注释变化表（未变表不产提案，缓存命中也省掉）
+                    ddl_map = {t: ddl for t, ddl in ddl_map.items() if t in touched}
+                if not ddl_map:
+                    # 无变化表（diff 重构零 touched / 空库）：阶段一一步打满 + 明示跳过，
+                    # 不再挂 0% 到全场结束（annotate_tables 零表时不产任何进度帧）
+                    if on_progress:
+                        on_progress("AI 正在处理", 100, "无表变更 · 跳过逐表注释",
+                                    phase="annotate", step="per_table", step_index=1, step_total=1)
+                    logger.info("[kb.build] conn=%s 无变化表，跳过逐表注释", conn_id)
+                    _seg("阶段一·逐表注释（无变更，跳过）")
+                else:
+                    effective_samples = (
+                        truncate_samples(facade.semantic_store._samples.get(conn_id, {})) if include_samples else None
+                    )
+                    ann = await annotate_tables(
+                        _st, conn_id, ddl_map, facade.semantic_store._schema[conn_id],
+                        samples=effective_samples, on_progress=on_progress, p0=0, p1=100,
+                        limiter=limiter, cache=facade.annotation_cache(conn_id),
+                    )
+                    ai_docs_added = ann["added"]
+                    failed_tables = ann["failed_tables"]
+                    if failed_tables:
+                        logger.warning("[kb.build] conn=%s 注释失败表：%s", conn_id, failed_tables)
+                    logger.info("[kb.build] conn=%s 阶段=annotate 完成：items=%s cached=%s llm=%s",
+                                conn_id, ai_docs_added, len(ann["cached_tables"]), len(ann["llm_tables"]))
+                    _seg("阶段一·逐表注释")
             except Exception as e:
+                degraded_phases.append("annotate")
                 logger.warning("[kb.build] conn=%s 阶段=annotate AI注释异常：%s", conn_id, e)
                 if on_progress:
                     on_progress("AI 正在处理", 100, None, phase="annotate")
@@ -535,9 +773,20 @@ class BuildService:
             graph_error: str | None = None
             filters_error: str | None = None
             ai_tags_added = 0
-            # 2026-09 修订：标签不清（当前标签继续生效），annotate_domain 只提新标签
+            if tag_mode == "fresh":
+                # 标签从零划分（用户显式选择：对现状彻底不满）：清库+解绑后重新划分
+                cleared = facade.clear_tags(conn_id)
+                logger.info("[kb.build] conn=%s tag_mode=fresh：清空标签库 %s 项后从零划分", conn_id, cleared)
 
-            from app.knowledge.annotator import annotate_domain, annotate_graph
+            def _existing_tags_text() -> str:
+                """既有 confirmed 域锚点文本（keep/anchor 档注入划分 prompt）。"""
+                lib = facade.semantic_store._tags.get(conn_id, {})
+                binds = facade.semantic_store._table_tags.get(conn_id, {})
+                lines = [
+                    f"- {nm}（{v.get('description', '')}）成员表：{', '.join(sorted(t for t, names in binds.items() if nm in names)) or '（暂无）'}"
+                    for nm, v in sorted(lib.items()) if v.get("status") == "confirmed"
+                ]
+                return "\n".join(lines)
 
             async def _run_tags() -> None:
                 nonlocal ai_tags_added, tags_error
@@ -545,12 +794,19 @@ class BuildService:
                     domain_result = await annotate_domain(
                         _st, conn_id,
                         schema=facade.semantic_store._schema[conn_id],
-                        self_check=self_check, on_progress=on_progress,
+                        on_progress=on_progress,
+                        limiter=limiter,
+                        existing_tags=_existing_tags_text() or None,
+                        allow_rename=(tag_mode == "anchor"),
                     )
                     ai_tags_added = domain_result.get("new_tags", 0)
+                    # 标签全集（版本制对比）：仅全量划分路径产出 → 挂本轮 round
+                    if domain_result.get("domain_list"):
+                        facade.semantic_store.set_round(conn_id, tags_new=domain_result["domain_list"])
                     logger.info("[kb.build] conn=%s 阶段=tags 完成：new_tags=%s", conn_id, ai_tags_added)
                 except Exception as e:
                     tags_error = str(e) or type(e).__name__
+                    degraded_phases.append("tags")
                     logger.warning("[kb.build] conn=%s 阶段=tags 标签提取异常：%s（%s）",
                                    conn_id, tags_error, type(e).__name__)
 
@@ -559,11 +815,13 @@ class BuildService:
                 try:
                     _llm_edges = await annotate_graph(
                         _st, conn_id, facade.semantic_store._schema[conn_id],
-                        on_progress=on_progress, self_check=self_check,
+                        on_progress=on_progress,
+                        limiter=limiter,
                     )
                     logger.info("[kb.build] conn=%s 阶段=graph 完成：llm_edges=%s", conn_id, len(_llm_edges))
                 except Exception as e:
                     graph_error = str(e) or type(e).__name__
+                    degraded_phases.append("graph")
                     logger.warning("[kb.build] conn=%s 阶段=graph 关系识别异常：%s（%s）",
                                    conn_id, graph_error, type(e).__name__)
 
@@ -574,10 +832,12 @@ class BuildService:
                     await annotate_filters(
                         _st, conn_id, facade.semantic_store._schema[conn_id],
                         on_progress=on_progress,
+                        limiter=limiter,
                     )
                     logger.info("[kb.build] conn=%s 阶段=filters AI 裁决完成", conn_id)
                 except Exception as e:
                     filters_error = str(e) or type(e).__name__
+                    degraded_phases.append("filters")
                     logger.warning("[kb.build] conn=%s 阶段=filters 过滤器裁决异常：%s（%s）",
                                    conn_id, filters_error, type(e).__name__)
 
@@ -590,9 +850,11 @@ class BuildService:
                     await annotate_constants(
                         _st, conn_id, facade.semantic_store._schema[conn_id],
                         on_progress=on_progress,
+                        limiter=limiter,
                     )
                     logger.info("[kb.build] conn=%s 阶段=constants 识别完成", conn_id)
                 except Exception as e:
+                    degraded_phases.append("constants")
                     logger.warning("[kb.build] conn=%s 阶段=constants 异常：%s", conn_id, e)
 
             await asyncio.gather(_run_tags(), _run_graph(), _run_filters(), _run_constants())
@@ -609,10 +871,13 @@ class BuildService:
         n_det = facade.graph_store.merge_draft_edges(conn_id, drafts)
         n_llm = facade.graph_store.merge_draft_edges(
             conn_id,
-            [{**e, "kind": "llm"} for e in _llm_edges],
+            [{**e, "source": "llm"} for e in _llm_edges],
         )
-        # 图 diff 基线：本轮提案键集合（确认全部/放弃时清除）
-        facade.graph_store.set_diff_base(conn_id, facade.graph_store.llm_graph_edges(conn_id))
+        # 图 diff 基线：本轮"重新主张过"的边 = 去重前 raw 提案（确定性 + LLM）∪ 现存队列。
+        # 修复（2026-09）：此前误传去重后队列——与已确认边完全一致而被去重丢弃的边既不在
+        # 队列也不在基线，被 diff 误判为"本轮未重新提案"（全量重建后 FK 边全红的根因）。
+        facade.graph_store.set_diff_base(
+            conn_id, [*drafts, *_llm_edges, *facade.graph_store.llm_graph_edges(conn_id)])
         logger.info("[kb.build] conn=%s draft 边：确定性 %d 条 + LLM 提案 %d 条（待人工确认）",
                     conn_id, n_det, n_llm)
         _seg("构图")
@@ -624,8 +889,46 @@ class BuildService:
         facade.build_service.ingest_values_candidates(facade, conn_id, schema)
         # T8：结构检测 → 表级过滤器 draft 候选（人工确认后生效）
         facade.build_service.ingest_filter_candidates(facade, conn_id, schema)
+        # 结构 diff（审核页 new/del 徽章数据源）——必须在落盘**前**写入 round，否则快照缺 diff：
+        # - diff 模式：真实结构 diff（含 renamed），与增量同步同构（mode=incr，镜头出增量摘要）
+        # - full 模式：本轮 vs 构建前快照对比
+        def _flat(d: dict[str, list[str]] | None) -> list[str]:
+            return sorted(f"{t}.{c}" for t, cs in (d or {}).items() for c in cs)[:300]
+
+        if touched is not None and diff0 is not None:
+            facade.semantic_store.set_round(conn_id, mode="incr", diff={
+                "tables": {
+                    "added": sorted(diff0["added_tables"]),
+                    "removed": sorted(diff0["removed_tables"]),
+                    "renamed": [[r["from"], r["to"]] for r in renames],
+                },
+                "columns": {
+                    "added": _flat(diff0["added_columns"]),
+                    "removed": _flat(diff0["removed_columns"]),
+                    "changed": _flat(diff0["changed_columns"]),
+                },
+            })
+        else:
+            cur_tables = set(facade.semantic_store._tables.get(conn_id, {}).keys())
+            cur_cols = {(t.name, c.name)
+                        for t in facade.semantic_store._tables.get(conn_id, {}).values()
+                        for c in t.columns.values()}
+            facade.semantic_store.set_round(conn_id, mode="full", diff={
+                "tables": {
+                    "added": sorted(cur_tables - _round_prev_tables),
+                    "removed": sorted(_round_prev_tables - cur_tables),
+                    "renamed": [],
+                },
+                "columns": {
+                    "added": sorted(f"{t}.{c}" for t, c in cur_cols - _round_prev_cols)[:300],
+                    "removed": sorted(f"{t}.{c}" for t, c in _round_prev_cols - cur_cols)[:300],
+                    "changed": [],
+                },
+            })
+        # failed_tables 无条件写入（空列表 = 清掉上轮残留，防跨轮误显示）
+        facade.semantic_store.set_round(conn_id, failed_tables=failed_tables)
         facade._rebuild_vstore(conn_id)
-        facade._save_conn(conn_id)
+        await facade._save_conn_async(conn_id)
         _seg("落盘")
         facade.build_service._log_embedding_usage(conn_id, "build", facade._emb)
         logger.info(
@@ -646,6 +949,10 @@ class BuildService:
             "sample_cols": sum(
                 len(cols) for cols in facade.semantic_store._samples.get(conn_id, {}).values()
             ),
+            "degraded_phases": degraded_phases,
+            "annotate_mode": annotate_mode,
+            "tag_mode": tag_mode,
+            "failed_tables": failed_tables,
         }
 
 
@@ -657,10 +964,24 @@ class BuildService:
         """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。"""
         if include_samples is None:
             include_samples = bool(facade._runtime and facade._runtime.get().kb_ai_annotation_samples)
+        # 审核重构：增量同样快照旧版知识（对比层"旧"侧）
+        facade.semantic_store.snapshot_round_baseline(conn_id)
         old_schema = facade.semantic_store._schema.get(conn_id, {})
         diff = facade.build_service.diff_schema(old_schema, new_schema)
         if facade.build_service.diff_is_empty(diff):
             return {"changed": False, **diff}
+
+        # rename 检测（启发式）：removed ↔ added 列指纹一致 → 继承旧表知识，不重注释
+        # （继承与 diff 对消逻辑与全量 diff 模式共用：apply_renames / adjust_diff_for_renames）
+        renames = facade.build_service.match_renames(
+            old_schema, new_schema, set(diff["removed_tables"]), set(diff["added_tables"])
+        )
+        if renames:
+            facade.build_service.apply_renames(facade, conn_id, renames)
+            diff = facade.build_service.adjust_diff_for_renames(diff, renames)
+            logger.info("[kb.incr] conn=%s 检测到表重命名：%s（知识继承，不重新注释）",
+                        conn_id, "；".join(f"{r['from']}→{r['to']}" for r in renames))
+        touched = facade.build_service._touched_from_diff(diff)
 
         facade.semantic_store._schema[conn_id] = {
             "tables": [
@@ -687,11 +1008,7 @@ class BuildService:
             for t in diff["removed_tables"]:
                 all_samples.pop(t, None)
 
-        touched = (set(diff["added_tables"]) | set(diff["changed_tables"])
-                   | set(diff["added_columns"]) | set(diff["removed_columns"])
-                   | set(diff["changed_columns"])
-                   | {f[0] for f in diff["added_fks"]} | {f[0] for f in diff["removed_fks"]})
-        touched |= {f[2] for f in diff["added_fks"]} | {f[2] for f in diff["removed_fks"]}
+        touched = facade.build_service._touched_from_diff(diff)
 
         auto = facade._auto.get(conn_id, [])
         now = utcnow_iso()
@@ -704,8 +1021,12 @@ class BuildService:
         tv = facade.retrieval_service._table_vec.get(conn_id, {})
         for t in removed:
             tv.pop(t, None)
+        for t in removed:
+            facade.build_service._annotation_cache.get(conn_id, {}).pop(t, None)
 
         rebuild_tables = touched - removed
+        # 增量只清变化表的提案（改名表已从 rebuild 剔除，继承的知识不误清）
+        facade.semantic_store.clear_round_proposals(conn_id, rebuild_tables)
         docs_added = 0
         if rebuild_tables:
             auto = [d for d in auto if d.table not in rebuild_tables or d.archived]
@@ -720,9 +1041,11 @@ class BuildService:
 
         ai_docs_added = 0
         ai_tags_added = 0
+        incr_degraded: list[str] = []
+        incr_failed: list[str] = []
         if rebuild_tables:
             try:
-                from app.knowledge.annotator import annotate_domain, annotate_tables
+                from app.knowledge.annotator import _AdaptiveLimiter, annotate_domain, annotate_tables
                 from app.knowledge.ddl_context import (
                     ddls_from_schema,
                     generate_ddls_all,
@@ -730,6 +1053,8 @@ class BuildService:
                 )
                 from app.state import get_state as _get_state
                 _st = _get_state()
+                # 增量与全量共用同一限流语义（表少通常一轮就完）
+                limiter = _AdaptiveLimiter(max(1, int(os.environ.get("TABLETALK_KB_ANNOTATION_CONCURRENCY", "10"))))
                 try:
                     ddl_map = await generate_ddls_all(_st, conn_id)
                 except Exception as e:
@@ -748,19 +1073,38 @@ class BuildService:
                     effective_samples = (
                         truncate_samples(facade.semantic_store._samples.get(conn_id, {})) if include_samples else None
                     )
-                    ai_docs_added = await annotate_tables(
+                    ann = await annotate_tables(
                         _st, conn_id, changed_ddl_map, facade.semantic_store._schema[conn_id],
-                        samples=effective_samples,
+                        samples=effective_samples, limiter=limiter,
+                        cache=facade.annotation_cache(conn_id),
                     )
+                    ai_docs_added = ann["added"]
+                    incr_failed = ann["failed_tables"]
+                    if incr_failed:
+                        logger.warning("[kb.incr] conn=%s 注释失败表：%s", conn_id, incr_failed)
                 if diff["added_tables"]:
                     domain_result = await annotate_domain(
                         _st, conn_id,
                         schema=facade.semantic_store._schema[conn_id],
                         mode="incremental", target_tables=diff["added_tables"],
+                        limiter=limiter,
                     )
                     ai_tags_added = domain_result.get("new_tags", 0)
+                # 增量补齐（2026-09 优化）：filters/constants/概念候选随增量刷新——
+                # 此前三者仅全量构建运行，靠增量长大的库知识维度天然缺块。
+                try:
+                    from app.knowledge.annotator import annotate_constants, annotate_filters
+                    sub_schema = self._schema_subset(facade.semantic_store._schema[conn_id], rebuild_tables)
+                    if sub_schema["tables"]:
+                        await annotate_filters(_st, conn_id, sub_schema, limiter=limiter)
+                        await annotate_constants(_st, conn_id, sub_schema, limiter=limiter)
+                except Exception as e:
+                    incr_degraded.append("filters_constants")
+                    logger.warning("[kb.incr] conn=%s 增量 filters/constants 补齐异常：%s", conn_id, e)
+                self.ingest_values_candidates(facade, conn_id, new_schema)
                 logger.info("[kb.incr] conn=%s AI注释完成：items=%s new_tags=%s", conn_id, ai_docs_added, ai_tags_added)
             except Exception as e:
+                incr_degraded.append("annotate")
                 logger.warning("[kb.incr] conn=%s 增量AI注释/标签异常：%s", conn_id, e)
 
         cleared_tags = facade.graph_store._sync_removed_tables(
@@ -786,19 +1130,37 @@ class BuildService:
                 incr_edges = await annotate_graph(
                     _st2, conn_id, facade.semantic_store._schema[conn_id],
                     mode="incremental", target_tables=list(rebuild_tables),
+                    limiter=limiter,
                 )
                 facade.graph_store._upsert_llm_edges(conn_id, set(rebuild_tables), incr_edges)
                 logger.info("[kb.incr] conn=%s 增量图谱补边：target=%s 新边=%s",
                             conn_id, len(rebuild_tables), len(incr_edges))
             except Exception as e:
+                incr_degraded.append("graph")
                 logger.warning("[kb.incr] conn=%s 增量图谱补边异常：%s", conn_id, e)
 
         facade._schema_fingerprint_map[conn_id] = facade.build_service._schema_fingerprint(new_schema)
         facade._synced_at[conn_id] = now
         # T8：结构变化 → 表级过滤器 draft 候选随增量刷新（confirmed 保留）
         facade.build_service.ingest_filter_candidates(facade, conn_id, new_schema)
+        # 结构 diff 挂本轮 round（审核页 new/del 徽章）；增量无标签全集 → tags_new 清空
+        # 必须在落盘前写入（否则快照缺 diff）
+        def _flat(d: dict[str, list[str]] | None) -> list[str]:
+            return sorted(f"{t}.{c}" for t, cs in (d or {}).items() for c in cs)[:300]
+        facade.semantic_store.set_round(conn_id, mode="incr", diff={
+            "tables": {
+                "added": sorted(diff.get("added_tables") or []),
+                "removed": sorted(diff.get("removed_tables") or []),
+                "renamed": [[r["from"], r["to"]] for r in (renames or [])],
+            },
+            "columns": {
+                "added": _flat(diff.get("added_columns")),
+                "removed": _flat(diff.get("removed_columns")),
+                "changed": _flat(diff.get("changed_columns")),
+            },
+        }, tags_new=[], failed_tables=incr_failed)
         facade._rebuild_vstore(conn_id)
-        facade._save_conn(conn_id)
+        await facade._save_conn_async(conn_id)
         logger.info(
             "[kb.incr] conn=%s 增量同步完成：+表%s -表%s 变更表%s docs=%s ai_items=%s",
             conn_id, len(diff["added_tables"]), len(diff["removed_tables"]),
@@ -810,7 +1172,9 @@ class BuildService:
             "tables_added": len(diff["added_tables"]),
             "tables_removed": len(diff["removed_tables"]),
             "tables_changed": len(rebuild_tables),
+            "tables_renamed": renames,
             "cleared_tags": cleared_tags,
+            "degraded_phases": incr_degraded,
             **diff,
         }
 

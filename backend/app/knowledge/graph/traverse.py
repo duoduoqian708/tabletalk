@@ -98,12 +98,12 @@ def path_strings(edges: list[Any], seeds: set[str], hops: int = 2,
 
 
 def reachable_tables(edges: list[Any], seeds: set[str], hops: int = 2,
-                     kinds: set[str] | None = None) -> set[str]:
+                     sources: set[str] | None = None) -> set[str]:
     """BFS 可达表集合（按边展开、精确表名匹配，T6 修正 _fk_adj 缺陷）。
 
     - 返回表集合（路由候选/封顶/图读工具用）；列对级路径请用 path_strings
-    - kinds：只沿指定 relation 扩展（路由场景传 {"fk"} 保持 FK 连通语义；
-      默认 None = 全部边类型）
+    - sources：只沿指定来源扩展（路由场景传 {"fk"} 保持 FK 连通语义；
+      默认 None = 全部边来源）
     - visited 按表名防环；自环天然不重复入队
     """
     graph_edges = _coerce(edges)
@@ -111,7 +111,7 @@ def reachable_tables(edges: list[Any], seeds: set[str], hops: int = 2,
         return set()
     adj: dict[str, list[GraphEdge]] = {}
     for e in graph_edges:
-        if kinds and e.relation not in kinds:
+        if sources and e.source not in sources:
             continue
         adj.setdefault(e.source_table, []).append(e)
         adj.setdefault(e.target_table, []).append(e)

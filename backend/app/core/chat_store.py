@@ -47,6 +47,20 @@ CREATE TABLE IF NOT EXISTS pending_dmls (
   data TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+-- Harness 受控流：模型提议的执行计划（propose_plan → 人审 confirm/reject）。瞬态状态。
+CREATE TABLE IF NOT EXISTS pending_plans (
+  plan_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT,
+  steps TEXT NOT NULL,
+  evidence TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  done_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plans_session ON pending_plans(session_id);
 """
 
 
@@ -60,6 +74,11 @@ class ChatStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            # 旧库迁移：pending_plans 补 done_count 列
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(pending_plans)").fetchall()}
+            if "pending_plans" in cols and "done_count" not in cols:
+                c.execute("ALTER TABLE pending_plans ADD COLUMN done_count INTEGER NOT NULL DEFAULT 0")
+                c.commit()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -182,8 +201,51 @@ class ChatStore:
         with self._conn() as c:
             c.execute(
                 "INSERT OR REPLACE INTO pending_dmls (session_id, data, updated_at) VALUES (?,?,?)",
-                (session_id, json.dumps(data, ensure_ascii=False), _now()),
+                (session_id, json.dumps(data), _now()),
             )
+
+    # ── Harness 受控流：pending_plans（propose_plan → 人审） ──
+
+    def create_pending_plan(self, plan_id: str, session_id: str, ptype: str,
+                            title: str, steps: list[dict], evidence: str,
+                            ttl_seconds: int = 1800, done_count: int = 0) -> dict:
+        """创建待确认计划（同 plan_id 覆盖 = 续段写回）。返回含 expires_at 的载荷。"""
+        import time as _t
+
+        expires_at = _t.time() + ttl_seconds
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO pending_plans"
+                " (plan_id, session_id, type, title, steps, evidence, status, created_at, expires_at, done_count)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (plan_id, session_id, ptype, title, json.dumps(steps, ensure_ascii=False),
+                 evidence, "pending", _now(), expires_at, max(0, int(done_count))),
+            )
+        return {"plan_id": plan_id, "expires_at": expires_at,
+                "expires_in": max(0, int(expires_at - _t.time()))}
+
+    def get_pending_plan(self, plan_id: str) -> dict | None:
+        """取计划（过期的惰性标记 expired 并返回 None 语义 → 调用方判 status）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM pending_plans WHERE plan_id=?", (plan_id,)).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["steps"] = json.loads(d.get("steps") or "[]")
+        except (ValueError, TypeError):
+            d["steps"] = []
+        import time as _t
+
+        if d["status"] == "pending" and d.get("expires_at", 0) < _t.time():
+            self.set_plan_status(plan_id, "expired")
+            d["status"] = "expired"
+        return d
+
+    def set_plan_status(self, plan_id: str, status: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute("UPDATE pending_plans SET status=? WHERE plan_id=?", (status, plan_id))
+            return cur.rowcount > 0
 
     def get_pending_dml(self, session_id: str) -> dict | None:
         """WS4 T4.1：读待确认 DML；无则 None。"""

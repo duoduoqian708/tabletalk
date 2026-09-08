@@ -1,0 +1,6 @@
+根据以下数据库结构与用户分析目标，规划 2~4 个报告章节，每章一个聚合只读查询。
+__CONTEXT__
+用户分析目标：__QUESTION__
+返回 JSON：{"sections":[{"id":"r1","title":"","intent":"","
+"chart_hint":"bar|line|pie","sql":"只读 SELECT"}]}。
+只返回 JSON。chart_hint 仅 bar/line/pie。SQL 必须是有 GROUP BY 或 LIMIT 的聚合查询。

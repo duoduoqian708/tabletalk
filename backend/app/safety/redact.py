@@ -76,17 +76,34 @@ def _token(value: str, salt: bytes, prefix: str) -> str:
         _TOKEN_MAP[tok] = value
     return tok
 
-def _is_sensitive_col(table: str, col: str, sensitive: list[str] | None) -> bool:
+def _is_sensitive_col(table: str, col: str, sensitive: list[str | dict[str, Any]] | None) -> bool:
+    """敏感列判定：兼容双结构——str=glob 模式；dict{table, columns[]}=精确名单（columns 空/缺=整表）。"""
     if not sensitive:
         return False
     import fnmatch
-    key = f"{table}.{col}".lower()
-    key2 = col.lower()
-    for pat in sensitive:
-        pat = pat.strip().lower()
+    tl = table.lower()
+    cl = col.lower()
+    for entry in sensitive:
+        if isinstance(entry, dict):
+            et = str(entry.get("table", "")).strip().lower()
+            if not et:
+                continue
+            if tl != et and not fnmatch.fnmatch(tl, et):
+                continue
+            cols = entry.get("columns")
+            # 未给 columns（或空数组）= 整表视为敏感
+            if cols is None or (isinstance(cols, list) and not cols):
+                return True
+            if isinstance(cols, list):
+                if any(cl == str(c).strip().lower() for c in cols if str(c).strip()):
+                    return True
+            continue
+        if not isinstance(entry, str):
+            continue
+        pat = entry.strip().lower()
         if not pat:
             continue
-        if fnmatch.fnmatch(key, pat) or fnmatch.fnmatch(key2, pat) or fnmatch.fnmatch(table.lower(), pat):
+        if fnmatch.fnmatch(f"{tl}.{cl}", pat) or fnmatch.fnmatch(cl, pat) or fnmatch.fnmatch(tl, pat):
             return True
     return False
 
@@ -119,9 +136,15 @@ def redact_rows(
     columns: list[str],
     table: str,
     salt: bytes,
-    sensitive: list[str] | None = None,
+    sensitive: list[str | dict[str, Any]] | None = None,
+    auto_rules: bool = True,
 ) -> tuple[list[list[Any]], dict[str, str]]:
-    """脱敏聚合行（标准档下 include_data 的行）。列级规则优先于正则。"""
+    """脱敏聚合行（标准档下 include_data 的行）。仅列级判定，不扫值。
+
+    auto_rules=True（标准档）：显式名单 + 列名语义（整列 token 化）；未命中列原样透传。
+    auto_rules=False（自定义档）：只 token 化显式名单命中的列，其余原样。
+    不做值正则逐格扫描——自由文本里的敏感串属 redact_text 的职责（对话/审计文本）。
+    """
     if not rows or not columns:
         return rows, {}
     local_map: dict[str, str] = {}
@@ -132,10 +155,14 @@ def redact_rows(
         if _is_sensitive_col(table, col, sensitive):
             # 显式敏感列：整列 token 化，前缀用列名 hint 或 SENSITIVE
             flag = _col_prefix(table, col) or "SENSITIVE"
-        else:
+        elif auto_rules:
             # 列名语义：若列名含敏感 hint，则整列视为敏感（即使值不匹配正则）
             flag = _col_prefix(table, col)
         col_flags.append(flag)
+
+    # 无任何整列命中 → 原样直通
+    if not any(col_flags):
+        return rows, {}
 
     redacted: list[list[Any]] = []
     for row in rows:
@@ -144,39 +171,15 @@ def redact_rows(
             if val is None:
                 new_row.append(None)
                 continue
-            sval = str(val)
             flag = col_flags[idx] if idx < len(col_flags) else None
-            # 整列敏感：直接 token 化（即使值不匹配正则）
             if flag:
+                # 整列敏感：直接 token 化
+                sval = str(val)
                 tok = _token(sval, salt, flag)
                 local_map[tok] = sval
                 new_row.append(tok)
-                continue
-            # 否则按正则逐值脱敏（值内可能含邮箱等）
-            redacted_val = sval
-            for prefix, pat in _PATTERNS:
-                # 若值完全匹配正则，则整值 token 化；否则子串替换
-                if pat.fullmatch(sval):
-                    tok = _token(sval, salt, prefix)
-                    local_map[tok] = sval
-                    redacted_val = tok
-                    break
-                elif pat.search(sval):
-                    def repl(m: re.Match[str], p=prefix) -> str:
-                        v = m.group(0)
-                        t = _token(v, salt, p)
-                        local_map[t] = v
-                        return t
-                    redacted_val = pat.sub(repl, sval)
-                    # 若有替换，则已记录 map
-            new_row.append(redacted_val)
+            else:
+                # 未命中列：原样透传（不做值正则扫描）
+                new_row.append(val)
         redacted.append(new_row)
     return redacted, local_map
-
-def reverse_token(token: str) -> str | None:
-    with _MAP_LOCK:
-        return _TOKEN_MAP.get(token)
-
-def clear_map() -> None:
-    with _MAP_LOCK:
-        _TOKEN_MAP.clear()

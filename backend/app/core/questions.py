@@ -180,7 +180,6 @@ class QuestionStore:
                     best = e
             if best:
                 best["hit_count"] = int(best.get("hit_count", 0)) + 1
-                # 更新 DB
                 try:
                     con = get_conn(self._data_dir)
                     con.execute(

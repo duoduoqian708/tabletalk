@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,59 @@ def _extract_summary(text: str) -> str | None:
         if line.startswith("TT-SUMMARY: "):
             last = line[len("TT-SUMMARY: "):].strip()
     return last or None
+
+
+_ARTIFACT_RE = re.compile(r"reports/([^\s：:，,，]+?\.(?:md|txt|csv|json))")
+
+
+def _parse_artifacts(text: str) -> list[str]:
+    """从运行输出解析产出物相对路径（lib.py report() 会打印 报表已生成：reports/xxx.md）。
+
+    去重保序；文件名仅允许字母数字下划线中划线点与中文，防注入路径。
+    """
+    out: list[str] = []
+    for m in _ARTIFACT_RE.finditer(text or ""):
+        name = m.group(1)
+        if re.fullmatch(r"[\w\-.一-鿿]+", name) and name not in out:
+            out.append(name)
+    return out
+
+
+def _ingest_artifacts(state: "AppState", job_name: str, run_id: int, conn: str,
+                      artifacts: list[str], text: str) -> None:
+    """正式运行结束后收编报告产物进 results 库（正文落库；文件保留作调试/导出副本）。
+
+    沙箱测试（run_job_raw）不收编——测试产物不进库。失败静默：收编不影响运行结果本身。
+    """
+    if not artifacts:
+        return
+    try:
+        reports_dir = state.env.data_dir / "reports"
+        for name in artifacts:
+            f = reports_dir / name
+            if not f.is_file():
+                continue
+            try:
+                content = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            fmt = "html" if name.lower().endswith((".html", ".htm")) else (
+                "txt" if name.lower().endswith(".txt") else (
+                    "csv" if name.lower().endswith(".csv") else "md"))
+            # 标题：md 首行 "# 标题"；否则用文件名去扩展
+            title = name.rsplit(".", 1)[0]
+            for line in content.splitlines()[:3]:
+                s = line.strip()
+                if s.startswith("# ") and len(s) > 2:
+                    title = s[2:].strip()
+                    break
+            state.results.save_result(
+                source="job", group_id=job_name, source_id=f"{job_name}#{run_id}",
+                content=content, title=title, connection_id=conn or "", fmt=fmt,
+                meta={"job_name": job_name, "run_id": run_id, "file": name},
+            )
+    except Exception:  # noqa: BLE001 - 收编失败不影响运行记录
+        pass
 
 
 async def run_job(state: "AppState", job_name: str, trigger: str = "schedule") -> dict:
@@ -52,6 +106,8 @@ async def run_job(state: "AppState", job_name: str, trigger: str = "schedule") -
         "TABLETALK_TOKEN": get_token() or "",
         "TABLETALK_JOB": job_name,
         "TABLETALK_JOB_CONNECTION": job.connection or "",
+        # 显式注入：lib.py report() 按此落产出物（与沙箱测试路径一致）
+        "TABLETALK_DATA_DIR": str(get_env().data_dir.resolve()),
     }
     timeout = int(os.environ.get("TABLETALK_JOB_TIMEOUT", str(JOB_TIMEOUT_DEFAULT)))
 
@@ -76,7 +132,7 @@ async def run_job(state: "AppState", job_name: str, trigger: str = "schedule") -
         status = "timeout"
         summary = f"执行超时（{timeout}s）"
         output = f"[TIMEOUT {timeout}s]\n"
-        store.finish_run(run_id, status, summary, output)
+        store.finish_run(run_id, status, summary, output, _parse_artifacts(output))
         _audit(state, job, status, summary)
         return {"ok": False, "status": status, "summary": summary, "trigger": trigger}
     finally:
@@ -90,9 +146,12 @@ async def run_job(state: "AppState", job_name: str, trigger: str = "schedule") -
 
     status = "success" if rc == 0 else "error"
     summary = _extract_summary(text) or (f"exit={rc}" if rc != 0 else "完成")
-    store.finish_run(run_id, status, summary, output)
+    artifacts = _parse_artifacts(text)
+    store.finish_run(run_id, status, summary, output, artifacts)
+    _ingest_artifacts(state, job_name, run_id, job.connection, artifacts, text)
     _audit(state, job, status, summary)
-    return {"ok": rc == 0, "status": status, "summary": summary, "exit_code": rc, "trigger": trigger}
+    return {"ok": rc == 0, "status": status, "summary": summary, "exit_code": rc,
+            "artifacts": artifacts, "trigger": trigger}
 
 
 def _audit(state: "AppState", job, status: str, summary: str) -> None:
@@ -131,9 +190,32 @@ def running_jobs() -> list[str]:
     return [k for k, v in _running.items() if v.returncode is None]
 
 
+def _resolve_connection(state: "AppState", key: str) -> str:
+    """连接 id 或 name → name（lib.py SDK 按 name 匹配）。
+
+    空串原样返回（脚本自己会落到默认连接）；给了但查不到 → 抛 ValueError，
+    绝不静默回退到第一个连接（曾导致多连接环境沙箱测试跑错库）。
+    """
+    k = (key or "").strip()
+    if not k:
+        return ""
+    try:
+        conns = state.connections.list()
+    except Exception:
+        conns = []
+    for c in conns:
+        if getattr(c, "id", None) == k:
+            return c.name
+    for c in conns:
+        if getattr(c, "name", None) == k:
+            return c.name
+    raise ValueError(f"连接不存在: {k}")
+
+
 async def run_job_raw(state: "AppState", script_text: str, connection_id: str, timeout: int = 30) -> dict:
     """在隔离沙箱中执行一段候选脚本（测试/preview 用），不写 store、不写任务审计。
 
+    connection_id 接受连接 id 或名称（内部归一为 name 传给 lib.py SDK）。
     双重隔离，保证候选脚本**物理上改不到任何真实文件**：
     1. 副本隔离：沙箱 = jobs/ 目录的一次性副本（lib.py SDK + 辅助模块），cwd 在副本里；
     2. OS 沙箱（macOS sandbox-exec）：禁沙箱目录外的任何文件写/删，网络仅放行本机回环
@@ -145,13 +227,25 @@ async def run_job_raw(state: "AppState", script_text: str, connection_id: str, t
 
     from app.config import get_env, get_token
 
+    try:
+        conn_name = _resolve_connection(state, connection_id)
+    except ValueError as e:
+        return {"ok": False, "status": "error", "error": str(e), "summary": str(e), "output": ""}
+
     base_url = f"http://127.0.0.1:{get_env().port}"
+    # 显式注入真实 data_dir：lib.py report() 按此写产出物（沙箱同步放行该子目录），
+    # 否则未设环境变量时脚本落到 cwd（沙箱临时目录）里被销毁，测试报表永远丢失。
+    data_dir = str(get_env().data_dir.resolve())
+    reports_dir = Path(data_dir) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "TABLETALK_URL": base_url,
         "TABLETALK_TOKEN": get_token() or "",
         "TABLETALK_JOB": "_test",
-        "TABLETALK_JOB_CONNECTION": connection_id,
+        "TABLETALK_JOB_CONNECTION": conn_name,
+        "TABLETALK_TEST": "1",
+        "TABLETALK_DATA_DIR": data_dir,
     }
     job_name = "_test_sandbox"
     if job_name in _running:
@@ -173,6 +267,17 @@ async def run_job_raw(state: "AppState", script_text: str, connection_id: str, t
 
         resolved = str(sandbox.resolve())
         profile = sandbox / "sandbox.sb"
+        
+        # 从环境变量读取允许的网络端口（逗号分隔）
+        import os as _os
+        allowed_ports_env = _os.environ.get("TABLETALK_SANDBOX_PORTS", "8777,5432,3306")
+        allowed_ports = [p.strip() for p in allowed_ports_env.split(",") if p.strip()]
+        
+        network_rules = []
+        for port in allowed_ports:
+            network_rules.append(f'(allow network-outbound (remote tcp "localhost:{port}"))')
+        network_rules_str = "\n".join(network_rules)
+        
         profile.write_text(
             "(version 1)\n"
             "(deny default)\n"
@@ -180,7 +285,9 @@ async def run_job_raw(state: "AppState", script_text: str, connection_id: str, t
             "(allow process*)\n"
             "(allow file-read*)\n"
             f'(allow file-write* (subpath "{resolved}"))\n'
-            '(allow network-outbound (remote tcp "localhost:*"))\n'
+            # 产出物目录：报表等脚本产物写真实 data_dir/reports（测试与生产行为一致，预览可见）
+            f'(allow file-write* (subpath "{reports_dir.resolve()}"))\n'
+            f"{network_rules_str}\n"
             "(allow network-inbound)\n"
             "(allow sysctl-read)\n",
             encoding="utf-8",
@@ -217,6 +324,7 @@ async def run_job_raw(state: "AppState", script_text: str, connection_id: str, t
         if err:
             text += "\n[stderr]\n" + err.decode("utf-8", errors="replace")
         summary = _extract_summary(text) or (f"exit={rc}" if rc != 0 else "完成")
-        return {"ok": rc == 0, "status": "success" if rc == 0 else "error", "summary": summary, "output": text[:OUTPUT_CAP], "exit_code": rc}
+        return {"ok": rc == 0, "status": "success" if rc == 0 else "error", "summary": summary,
+                "output": text[:OUTPUT_CAP], "exit_code": rc, "artifacts": _parse_artifacts(text)}
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)

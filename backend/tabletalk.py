@@ -2,6 +2,7 @@
 
 用法：
     python tabletalk.py            # 自动完成：venv → 依赖 → 前端构建 → 起 sidecar → 开浏览器
+    python tabletalk.py --fast     # 跳过依赖检查，秒起（依赖已装过时使用）
     python tabletalk.py --check    # 只检查环境（venv/依赖/前端），不起服务
 
 流程（全部幂等，重复运行秒起）：
@@ -59,7 +60,21 @@ def _ensure_venv() -> Path:
 
 # ---------------------------------------------------------------- 2. 依赖（含嵌入式组件）
 
-def _ensure_deps(venv_py: Path) -> None:
+def _ensure_deps(venv_py: Path, *, skip: bool = False) -> None:
+    if skip:
+        print(_g("✓ 依赖已就绪（--fast 跳过检查）"))
+        return
+    # 快速检测：import httpx + sqlglot + fastapi（耗时 <0.3s）
+    probe = [
+        str(venv_py), "-c",
+        "import httpx, sqlglot, fastapi; import app.core.settings",
+    ]
+    try:
+        if subprocess.run(probe, cwd=str(BACKEND_DIR), capture_output=True, timeout=5).returncode == 0:
+            print(_g("✓ 依赖已就绪"))
+            return
+    except Exception:
+        pass
     print(_c("· 检查依赖（requirements.txt）…"))
     ok = _run([str(venv_py), "-m", "pip", "install", "-q", "-r", str(REQ)], BACKEND_DIR, quiet=True) == 0
     if not ok:
@@ -146,10 +161,11 @@ def _wait_health(host: str, port: int, timeout: float = 20.0) -> bool:
 def main() -> int:
     args = sys.argv[1:]
     check_only = "--check" in args
+    fast = "--fast" in args
 
     print("tabletalk · 本地 AI 优先数据库查询工具（一键启动）")
     venv_py = _ensure_venv()
-    _ensure_deps(venv_py)
+    _ensure_deps(venv_py, skip=fast)
     _ensure_frontend()
     if check_only:
         print(_g("✓ 环境检查通过：venv / 依赖 / 前端全部就绪"))

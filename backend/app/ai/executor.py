@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable
 
 from app.ai.context_object import Context
 from app.ai.plan import TaskPlan, TaskSpec
-from app.ai.skills.route import route_effective as route
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -21,7 +20,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("ai.executor")
 
 # 任务结果块统一结构（§19）
-RESULT_TYPES = {"table", "report", "confirm", "text"}
 
 
 @dataclass
@@ -98,7 +96,8 @@ async def execute_plan(
     for idx, task in enumerate(plan.tasks):
         task_id = task.id or f"t{idx + 1}"
         task.id = task_id
-        skill_id = route(task.action, task.modality)
+        # 引擎合一后无 skill 路由：任务标签直接用剖面（report 报告管线，其余按 action）
+        skill_id = "report" if task.modality == "report" else (task.action or "unknown")
         ctx.current_task = task
         ctx.current_skill = skill_id
 

@@ -19,13 +19,8 @@ async def _suggest_followup(state: "AppState", args: dict[str, Any], conn_id: st
     if not question and not answer:
         return ToolOutcome(result={"ok": True, "suggestions": []})
 
-    prompt = (
-        f"用户问题：{question}\n"
-        f"助手回答摘要：{answer[:500]}\n\n"
-        "基于以上对话，生成 2-3 个自然的追问建议，帮助用户深入探索。\n"
-        "要求：与当前数据库业务相关，不要重复已回答的内容。\n"
-        '只返回 JSON 数组：["问题1", "问题2", "问题3"]'
-    )
+    from app.ai.prompts import render
+    prompt = render("followup") + f"\n\n用户问题：{question}\n助手回答摘要：{answer[:500]}"
 
     try:
         from app.ai import gateway as gw
@@ -35,7 +30,15 @@ async def _suggest_followup(state: "AppState", args: dict[str, Any], conn_id: st
             pass
         provider_cfg = resolve_provider_cfg(state, _Req())
         provider = gw.build_provider(provider_cfg)
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        # 中央记账：llm_log + cost + egress 审计（铁律4——每次模型调用可审计，不漏）
+        try:
+            conn_name = state.connections.get(conn_id).name
+        except Exception:
+            conn_name = conn_id
+        resp = await provider.chat(
+            [{"role": "user", "content": prompt}], tools=None,
+            ctx={"conn_id": conn_id, "connection": conn_name, "skill": "suggest_followup",
+                 "source": "egress", "status": "egress", "include_data": False})
         text = (getattr(resp, "content", "") or "").strip()
         import json
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()

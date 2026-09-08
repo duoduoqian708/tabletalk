@@ -10,11 +10,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import os
 import secrets
 from pathlib import Path
-from typing import Any
 
 
 def _ensure_master_key_file(data_dir: Path) -> bytes | None:
@@ -129,6 +127,3 @@ def decrypt(ciphertext: str, data_dir: Path) -> str:
             return ""
     # 未知格式
     return ""
-
-def is_encrypted(value: str) -> bool:
-    return isinstance(value, str) and value.startswith("ENC@")

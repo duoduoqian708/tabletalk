@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +34,6 @@ class KnowledgeBase:
         self._runtime = runtime
         self._storage_backend = os.environ.get("TABLETALK_KB_STORAGE", "")  # sqlite(默认) | json
         self._storages: dict[str, Any] = {}
-        self._lock = threading.Lock()
 
         # 子模块
         self.graph_store = GraphStore()
@@ -50,9 +48,8 @@ class KnowledgeBase:
         # 门面保留的状态（持久化/版本协调）
         self._auto: dict[str, list[Any]] = {}
 
-        # 嵌入器
-        from app.knowledge.embedding import HashingEmbedder
-        self._emb = HashingEmbedder()
+        # 嵌入器（按需创建，依赖运行时配置）
+        self._emb = None
 
     # ---------- 向后兼容：子模块内部状态经 property 暴露（无别名赋值 hack） ----------
     _tables = property(lambda self: self.semantic_store._tables)
@@ -68,6 +65,12 @@ class KnowledgeBase:
     _table_vec = property(lambda self: self.retrieval_service._table_vec)
     _vstore = property(lambda self: self.retrieval_service._vstore)
     _artifact_fingerprint = property(lambda self: self.retrieval_service._artifact_fingerprint)
+
+    # ---------- 注释缓存（内容寻址，阶段一 LLM 注释跳过重复调用） ----------
+    def annotation_cache(self, conn_id: str) -> dict[str, dict]:
+        """返回连接级注释缓存 dict（就地读写，随快照落盘）。"""
+        self.ensure_loaded(conn_id)
+        return self.build_service._annotation_cache.setdefault(conn_id, {})
 
     # ---------- 持久化 ----------
     def _storage(self, conn_id: str) -> Any:
@@ -114,10 +117,20 @@ class KnowledgeBase:
         self.concept_store.load(conn_id, snap.concepts)
         self.filter_store.load(conn_id, snap.table_filters)
         self.fewshot_store.load(conn_id, snap.fewshot)
+        self.build_service._annotation_cache[conn_id] = dict(snap.annotation_cache or {})
+        if snap.round:
+            self.semantic_store.set_round(conn_id, **snap.round)
         self._rebuild_vstore(conn_id)
 
     def _save_conn(self, conn_id: str) -> None:
-        """全量快照写回存储后端（标准格式/JSON 均在此落盘）。"""
+        """全量快照写回存储后端（标准格式/JSON 均在此落盘）。
+
+        同步方法：供 sync 链（graph/tag 低频交互写）沿用；构建热路径请用
+        _save_conn_async（to_thread，避免大库 DELETE+INSERT 阻塞事件循环）。
+        """
+        self._save_conn_blocking(conn_id)
+
+    def _save_conn_blocking(self, conn_id: str) -> None:
         try:
             from app.knowledge.storage import KbSnapshot
             snap = KbSnapshot(
@@ -138,10 +151,16 @@ class KnowledgeBase:
                 concepts=self.concept_store.dump(conn_id),
                 table_filters=self.filter_store.dump(conn_id),
                 fewshot=self.fewshot_store.dump(conn_id),
+                annotation_cache=self.build_service._annotation_cache.get(conn_id, {}),
+                round=self.semantic_store.get_round(conn_id),
             )
             self._storage(conn_id).save(snap)
         except Exception as e:
             logger.warning("[kb.store] conn=%s 快照落盘失败：%s", conn_id, e)
+
+    async def _save_conn_async(self, conn_id: str) -> None:
+        """构建热路径落盘：全量快照序列化+写库挪线程池，不卡事件循环（大库 SSE 不冻结）。"""
+        await asyncio.to_thread(self._save_conn_blocking, conn_id)
 
     def _rebuild_vstore(self, conn_id: str) -> None:
         """重建向量索引"""
@@ -156,8 +175,8 @@ class KnowledgeBase:
     def _vector_store(self, conn_id: str) -> Any:
         return self.retrieval_service._vector_store(conn_id)
 
-    def _synthesize_table_text(self, conn_id: str, tk: Any) -> str:
-        return self.semantic_store._synthesize_table_text(conn_id, tk)
+    def table_vector_text(self, conn_id: str, tk: Any) -> str:
+        return self.semantic_store.table_vector_text(conn_id, tk)
 
     def _table_payload(self, conn_id: str, tk: Any, synced_at: str = "") -> dict[str, Any]:
         return self.semantic_store._table_payload(conn_id, tk, synced_at)
@@ -182,18 +201,21 @@ class KnowledgeBase:
     def expand_tables(self, conn_id: str, seeds: set[str], hops: int = 2) -> set[str]:
         return self.graph_store.expand_tables(conn_id, seeds, hops)
 
-    def add_graph_edge(self, conn_id: str, frm: str, to: str, kind: str,
+    def add_graph_edge(self, conn_id: str, frm: str, to: str, source: str,
                        frm_col: str | None = None, to_col: str | None = None,
                        weight: float | None = None,
-                       cardinality: str = "n:1") -> dict[str, Any]:
+                       cardinality: str = "n:1",
+                       guard: str | None = None,
+                       cols: list[list[str]] | None = None) -> dict[str, Any]:
         return self.graph_store.add_graph_edge(
-            conn_id, frm, to, kind, frm_col, to_col, weight, cardinality,
+            conn_id, frm, to, source, frm_col, to_col, weight, cardinality,
             schema=self.semantic_store._schema.get(conn_id),
             save_conn_fn=self._save_conn,
+            guard=guard, cols=cols,
         )
 
-    def remove_graph_edge(self, conn_id: str, frm: str, to: str, kind: str) -> int:
-        return self.graph_store.remove_graph_edge(conn_id, frm, to, kind, self._save_conn)
+    def remove_graph_edge(self, conn_id: str, frm: str, to: str, source: str) -> int:
+        return self.graph_store.remove_graph_edge(conn_id, frm, to, source, self._save_conn)
 
     def pin_graph_edge(self, conn_id: str, frm: str, to: str, frm_col: str | None = None,
                        to_col: str | None = None) -> int:
@@ -238,27 +260,44 @@ class KnowledgeBase:
     def annotate_drafts(self, conn_id: str, items: list[dict[str, Any]]) -> int:
         return self.semantic_store.annotate_drafts(conn_id, items, self._save_conn)
 
+    async def annotate_drafts_async(self, conn_id: str, items: list[dict[str, Any]]) -> int:
+        """构建热路径：批量注释落库 + 落盘挪线程（同步写会卡事件循环）。"""
+        return await asyncio.to_thread(
+            self.semantic_store.annotate_drafts, conn_id, items, self._save_conn
+        )
 
-    async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None) -> int:
+
+    async def confirm(self, conn_id: str, table: str | None = None, column: str | None = None,
+                      table_only: bool = False) -> int:
         return await self.semantic_store.confirm(
             conn_id, table, column,
             save_conn_fn=self._save_conn,
             reembed_fn=self._reembed_tables,
+            table_only=table_only,
         )
 
     async def confirm_all(self, conn_id: str) -> dict[str, int]:
         # 2026-09 修订：先归档当前生效字段文本（提案提升前的旧值，供字段回溯），再确认
         archived = self.build_service._archive_current_fields(conn_id, self._storage)
-        n_docs = await self.confirm(conn_id)
+        # 只提升提案不打重嵌：受影响表的向量由下方 _embed_tables(affected) 一次性完成
+        # （2026-09 优化：只嵌受影响表，不再全库重嵌——500 表库每次确认省数百次嵌入调用）
+        affected: list[str] = []
+        n_docs = await self.semantic_store.confirm(
+            conn_id, None, None,
+            save_conn_fn=self._save_conn,
+            reembed_fn=None,
+            collect_affected=affected,
+        )
         n_tags = 0
         for name in list(self.semantic_store._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
         n_edges = self.confirm_graph_edges(conn_id)
         self.graph_store.clear_diff_base(conn_id)
-        await self._embed_tables(conn_id, None)
+        self.semantic_store.clear_round(conn_id)  # 审核完成 → 清本轮对比区
+        await self._embed_tables(conn_id, set(affected))
         self._storage(conn_id).bump_kb_version()
-        self._save_conn(conn_id)
+        await self._save_conn_async(conn_id)
         return {"docs": n_docs, "tags": n_tags, "edges": n_edges, "archived": archived,
                 "version": self.current_version(conn_id)}
 
@@ -269,6 +308,7 @@ class KnowledgeBase:
         self.graph_store._graph.pop(conn_id, None)
         self.graph_store._excluded.pop(conn_id, None)
         self.graph_store._llm_graph_edges.pop(conn_id, None)
+        self.graph_store.clear_diff_base(conn_id)  # 取消后清图 diff 基线，避免陈旧红边
         self.retrieval_service._table_vec.pop(conn_id, None)
         self.retrieval_service._vstore.pop(conn_id, None)
         self.retrieval_service._artifact_fingerprint.pop(conn_id, None)
@@ -277,6 +317,7 @@ class KnowledgeBase:
         self.concept_store._concepts.pop(conn_id, None)
         self.filter_store._filters.pop(conn_id, None)
         self.fewshot_store._items.pop(conn_id, None)
+        self.build_service._annotation_cache.pop(conn_id, None)
 
     def clear_tags(self, conn_id: str) -> int:
         return self.semantic_store.clear_tags(conn_id, self._save_conn)
@@ -374,7 +415,19 @@ class KnowledgeBase:
 
     async def discard_drafts(self, conn_id: str) -> dict[str, int]:
         """「放弃本轮」：清除全部提案（当前生效知识不动，无需回滚）。"""
-        return await self.build_service.discard_drafts(self, conn_id)
+        r = await self.build_service.discard_drafts(self, conn_id)
+        self.semantic_store.clear_round(conn_id)  # 放弃 → 清本轮对比区
+        return r
+    def round_table_baseline(self, conn_id: str, table: str) -> dict[str, Any] | None:
+        """单表旧版知识（审核页对比层"旧"侧）。"""
+        self.ensure_loaded(conn_id)
+        return self.semantic_store.round_table_baseline(conn_id, table)
+    def round_meta(self, conn_id: str) -> dict[str, Any]:
+        """本轮对比元信息（diff + 标签全集 + 注释失败表），overview 透传。"""
+        self.ensure_loaded(conn_id)
+        r = self.semantic_store.get_round(conn_id)
+        return {"diff": r.get("diff"), "tags_new": r.get("tags_new") or [],
+                "failed_tables": r.get("failed_tables") or []}
     def synced_at(self, conn_id: str) -> str:
         return self._synced_at.get(conn_id, "")
 
@@ -396,7 +449,7 @@ class KnowledgeBase:
             emb=self._emb,
             reembed_fn=self.reembed_if_needed,
             log_usage_fn=self.build_service._log_embedding_usage,
-            synthesize_text_fn=self.semantic_store._synthesize_table_text,
+            synthesize_text_fn=self.semantic_store.table_vector_text,
             table_payload_fn=self.semantic_store._table_payload,
             graph=self.graph_store._graph,
             table_whitelist=table_whitelist,
@@ -411,7 +464,7 @@ class KnowledgeBase:
             emb=self._emb,
             reembed_fn=self.reembed_if_needed,
             log_usage_fn=self.build_service._log_embedding_usage,
-            synthesize_text_fn=self.semantic_store._synthesize_table_text,
+            synthesize_text_fn=self.semantic_store.table_vector_text,
             table_payload_fn=self.semantic_store._table_payload,
             graph=self.graph_store._graph,
             table_whitelist=table_whitelist,
@@ -483,12 +536,13 @@ class KnowledgeBase:
         on_progress: Any | None = None,
         include_samples: bool = False,
         enable_ai_annotation: bool = True,
-        self_check: bool | None = None,
+        annotate_mode: str = "diff",
+        tag_mode: str = "keep",
     ) -> dict[str, Any]:
-        """构建知识库（实现见 build.py）。"""
+        """构建知识库（实现见 build.py）。annotate_mode: diff|full；tag_mode: keep|anchor|fresh。"""
         return await self.build_service.build(
             self, conn_id, schema, samples, on_progress,
-            include_samples, enable_ai_annotation, self_check)
+            include_samples, enable_ai_annotation, annotate_mode, tag_mode)
     async def incremental_build(
         self, conn_id: str, new_schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,

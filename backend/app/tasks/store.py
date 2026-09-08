@@ -1,6 +1,7 @@
 """任务运行记录：jobs.db（单表 runs）。任务定义在脚本头里，这里不存定义，只存执行史。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from pathlib import Path
@@ -32,11 +33,16 @@ class JobStore:
                         finished_at TEXT,
                         status TEXT,
                         summary TEXT,
-                        output TEXT
+                        output TEXT,
+                        artifacts TEXT
                     );
                     CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_name, id DESC);
                     """
                 )
+                # 旧库迁移：补 artifacts 列
+                cols = {r["name"] for r in con.execute("PRAGMA table_info(runs)").fetchall()}
+                if "artifacts" not in cols:
+                    con.execute("ALTER TABLE runs ADD COLUMN artifacts TEXT")
                 con.commit()
             finally:
                 con.close()
@@ -55,13 +61,15 @@ class JobStore:
             finally:
                 con.close()
 
-    def finish_run(self, run_id: int, status: str, summary: str | None = None, output: str | None = None) -> None:
+    def finish_run(self, run_id: int, status: str, summary: str | None = None,
+                   output: str | None = None, artifacts: list[str] | None = None) -> None:
         with self._lock:
             con = self._conn()
             try:
                 con.execute(
-                    "UPDATE runs SET finished_at=?, status=?, summary=?, output=? WHERE id=?",
-                    (utcnow_iso(), status, summary or "", output or "", int(run_id)),
+                    "UPDATE runs SET finished_at=?, status=?, summary=?, output=?, artifacts=? WHERE id=?",
+                    (utcnow_iso(), status, summary or "", output or "",
+                     json.dumps(artifacts or [], ensure_ascii=False), int(run_id)),
                 )
                 con.commit()
             finally:
@@ -76,27 +84,21 @@ class JobStore:
                     "SELECT * FROM runs WHERE job_name=? ORDER BY id DESC LIMIT ?",
                     (job_name, int(limit)),
                 ).fetchall()
-                return [dict(r) for r in rows]
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    try:
+                        d["artifacts"] = json.loads(d.get("artifacts") or "[]")
+                    except (ValueError, TypeError):
+                        d["artifacts"] = []
+                    out.append(d)
+                return out
             finally:
                 con.close()
 
     def last(self, job_name: str) -> dict | None:
         runs = self.recent_runs(job_name, 1)
         return runs[0] if runs else None
-
-    def recent_summaries(self, limit: int = 50) -> dict[str, dict]:
-        """各任务最近一次运行（供列表 last_run/last_status 快速展示）。"""
-        with self._lock:
-            con = self._conn()
-            con.row_factory = sqlite3.Row
-            try:
-                rows = con.execute(
-                    "SELECT job_name, status, summary, started_at, finished_at FROM runs "
-                    "WHERE id IN (SELECT MAX(id) FROM runs GROUP BY job_name) ORDER BY job_name"
-                ).fetchall()
-                return {dict(r)["job_name"]: dict(r) for r in rows}
-            finally:
-                con.close()
 
     def clear(self, job_name: str) -> None:
         with self._lock:
