@@ -11,11 +11,14 @@ export interface RunQueryParams {
   limit?: number
   offset?: number
   countTotal?: boolean
+  /** 停止按钮 abort（AbortError 向调用方抛出，由其静默处理） */
+  signal?: AbortSignal
 }
 
 export function runQuery(p: RunQueryParams): Promise<QueryResponse> {
   return request('/api/v1/query', {
     method: 'POST',
+    ...(p.signal ? { signal: p.signal } : {}),
     body: JSON.stringify({
       connection_id: p.connectionId,
       sql: p.sql,

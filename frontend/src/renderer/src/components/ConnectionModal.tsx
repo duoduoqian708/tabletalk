@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { testDraftConnection } from '@renderer/api/connections'
 import { getSchema } from '@renderer/api/schema'
+import { Dropdown } from './Dropdown'
 import type { SensitiveEntry } from '@renderer/api/types'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
 import { saveTestState, type ConnTestState } from '@renderer/utils/connTestState'
+import { CloseBtn } from './ui/buttons'
 
 interface Props {
   open: boolean
@@ -17,6 +19,8 @@ const DIALECTS = ['sqlite', 'postgres', 'mysql']
 const DRAFT_KEY = 'tabletalk-conn-drafts-v1'
 /** 编辑模式密码占位：表示"已保存"，真值永不出网；留空=沿用已存密码测试/保存 */
 const PWD_PLACEHOLDER = '••••••••'
+/** 敏感名单（表/列过滤）UI 暂时屏蔽：交互逻辑未想清楚前不开放编辑入口，后端逻辑保留，开启时置 true 即可 */
+const SENSITIVE_UI_ENABLED = false
 
 interface Draft {
   name: string
@@ -27,7 +31,6 @@ interface Draft {
   password: string
   database: string
   file: string
-  ssl: boolean
   readOnly: boolean
   sensitive: SensitiveEntry[]
 }
@@ -35,7 +38,7 @@ interface Draft {
 const EMPTY: Draft = {
   name: '', dialect: 'postgres', host: '127.0.0.1', port: '5432',
   user: '', password: '', database: '', file: '',
-  ssl: false, readOnly: true, sensitive: [],
+  readOnly: true, sensitive: [],
 }
 
 function loadDraft(): Draft {
@@ -92,7 +95,6 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       password: c.password ? PWD_PLACEHOLDER : '',  // 有已存密码 → *** 占位，真值不出网
       database: c.database ?? '',
       file: c.file ?? '',
-      ssl: c.ssl ?? false,
       readOnly: c.read_only ?? false,
       sensitive: (c.sensitive ?? []).map((e) =>
         typeof e === 'string' ? e : { table: e.table, columns: e.columns ?? [] }),
@@ -135,7 +137,6 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
     password: isSqlite ? '' : (editId && form.password === PWD_PLACEHOLDER ? '' : form.password),  // 占位 → 空：沿用已存
     database: isSqlite ? '' : form.database,
     file: isSqlite ? form.file : '',
-    ssl: form.ssl,
     read_only: form.readOnly,
     sensitive: form.sensitive.map((e) =>
       typeof e === 'string' ? e : { table: e.table, columns: e.columns ?? [] }),
@@ -219,7 +220,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
   function entryLabel(e: SensitiveEntry): string {
     if (typeof e === 'string') return e  // 旧 glob 名单
     const cols = e.columns ?? []
-    return cols.length ? `${e.table} : ${cols.join(', ')}` : `${e.table}（整表）`
+    return cols.length ? `${e.table} : ${cols.join(', ')}` : `${e.table} · ${t('conn.wholeTable')}`
   }
 
   function addSensitiveEntry(): void {
@@ -249,7 +250,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
       <div className="modal">
           <div className="mh">
             <span className="t">{editId ? t('conn.modal.titleEdit') : t('conn.modal.title')}</span>
-            <button className="close" onClick={onClose}>✕</button>
+            <CloseBtn className="close" title={t('common.close')} onClick={onClose} />
           </div>
           <div className="mb">
             <div className="fld">
@@ -258,17 +259,13 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
             </div>
             <div className="fld">
               <label>{t('conn.modal.database')}</label>
-            <select
-              className="fld-input"
-              value={form.dialect}
-              onChange={(e) => set('dialect', e.target.value)}
-              style={{ background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 12px', color: 'var(--ink)', fontFamily: 'IBM Plex Mono', fontSize: 12 }}
-            >
-              {DIALECTS.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          </div>
+              <Dropdown
+                style={{ width: '100%' }}
+                value={form.dialect}
+                options={DIALECTS.map((d) => ({ value: d, label: d }))}
+                onChange={(v) => set('dialect', v)}
+              />
+            </div>
           {isSqlite ? (
             <div className="fld">
               <label>{t('conn.modal.sqlitePath')}</label>
@@ -308,13 +305,11 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
           <div className="fld">
             <div style={{ display: 'flex', gap: 20 }}>
               <label className="toggle-ssl">
-                <input type="checkbox" checked={form.ssl} onChange={(e) => set('ssl', e.target.checked)} /> SSL / TLS
-              </label>
-              <label className="toggle-ssl">
                 <input type="checkbox" checked={form.readOnly} onChange={(e) => set('readOnly', e.target.checked)} /> {t('conn.modal.readOnly')}
               </label>
             </div>
           </div>
+          {SENSITIVE_UI_ENABLED && (
             <div className="fld">
               <label>{t('conn.modal.sensitive')}</label>
               <div className="sen-box">
@@ -325,21 +320,23 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
                   <span key={i} className={`sen-chip${typeof e === 'string' ? ' glob' : ''}`}>
                     {typeof e === 'string' && <em className="sen-glob-tag">glob</em>}
                     {entryLabel(e)}
-                    <button type="button" className="sen-x" onClick={() => removeSensitiveAt(i)}>✕</button>
+                    <CloseBtn className="sen-x" onClick={() => removeSensitiveAt(i)} />
                   </span>
                 ))}
               </div>
               <div className="sen-add">
                 <div className="sen-add-row">
                   {schemaTables ? (
-                    <select
+                    <Dropdown
+                      style={{ flex: 1, minWidth: 0 }}
                       value={addTable}
-                      onChange={(e) => { setAddTable(e.target.value); setAddCols([]) }}
-                      style={{ background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', color: 'var(--ink)', fontFamily: 'IBM Plex Mono', fontSize: 12, flex: 1, minWidth: 0 }}
-                    >
-                      <option value="">— {t('conn.modal.sensitivePickTable')} —</option>
-                      {schemaTables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
-                    </select>
+                      placeholder={`— ${t('conn.modal.sensitivePickTable')} —`}
+                      options={[
+                        { value: '', label: `— ${t('conn.modal.sensitivePickTable')} —` },
+                        ...schemaTables.map((t) => ({ value: t.name, label: t.name })),
+                      ]}
+                      onChange={(v) => { setAddTable(v); setAddCols([]) }}
+                    />
                   ) : (
                     <input value={addTable} onChange={(e) => setAddTable(e.target.value)} placeholder={t('conn.modal.sensitiveTable')} style={{ flex: 1, minWidth: 0 }} />
                   )}
@@ -369,6 +366,7 @@ export function ConnectionModal({ open, onClose, editId }: Props): React.JSX.Ele
                 )}
               </div>
           </div>
+          )}
           {testMsg && (
             <div className="note mono" style={{ fontFamily: 'IBM Plex Mono', fontSize: 12, color: testMsg.ok ? 'var(--accent)' : 'var(--danger, #e57)' }}>
               {testMsg.text}

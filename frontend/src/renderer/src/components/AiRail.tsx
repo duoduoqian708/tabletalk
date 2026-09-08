@@ -8,6 +8,8 @@ import { runQuery, cancelDml, formatSql } from '@renderer/api/query'
 import type { QueryResponse } from '@renderer/api/types'
 import {
   chatStream,
+  confirmPlanStream,
+  rejectPlan,
   selection,
   setSessionTitle,
   type AiCard,
@@ -20,9 +22,10 @@ import { fmtDT } from '@renderer/lib/timefmt'
 import { useChat, generateTitle, relTime, type Turn as ChatTurn, type Conversation } from '@renderer/store/chat'
 import { useKbGate } from '@renderer/store/kbgate'
 import { getSettings, type SettingsPublic } from '@renderer/api/settings'
-import { listSkills } from '@renderer/api/skills'
 import { useI18n } from '@renderer/store/i18n'
 import { getRuntime } from '@renderer/api/client'
+import { CloseBtn } from './ui/buttons'
+import { IconCheck, IconX, IconPlus, IconSend } from './ui/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 const CmEditor = React.lazy(() => import('./CmEditor').then((m) => ({ default: m.CmEditor })))
@@ -34,122 +37,15 @@ function AiMd({ text }: { text: string }): React.JSX.Element {
   return <ReactMarkdown remarkPlugins={[remarkGfm]}>{src}</ReactMarkdown>
 }
 
-/* ---------- 推理步骤状态机 ---------- */
-type StepStatus = string
-
-interface Step {
-  id: string
-  label: string
-  status: StepStatus
-  detail: string[]
-}
-
-const STEP_DEFS: { id: string; label: string }[] = [
-  { id: 'intent', label: 'ws.stepIntent' },
-  { id: 'retrieval', label: 'ws.stepRetrieval' },
-  { id: 'sql', label: 'ws.stepSql' },
-  { id: 'gate', label: 'ws.stepGate' }
-]
-
-function makeSteps(): Step[] {
-  return STEP_DEFS.map((s, i) => ({ ...s, status: i === 0 ? 'running' : ('pending' as StepStatus), detail: [] }))
-}
-
-const GATE_LABEL: Record<string, string> = {
-  allow: 'ws.gateAllow',
-  review: 'ws.gateReview',
-  block: 'ws.gateBlock'
-}
-
-/* 推理步骤：默认收成一行轻量指示，点击展开细节（真实事件驱动，无 mock 播放） */
-function ThinkPanel({ steps }: { steps: Step[] }): React.JSX.Element {
-  const { t } = useI18n()
-  const [open, setOpen] = useState(true)
-  const [openStep, setOpenStep] = useState<Set<string>>(new Set())
-  const running = steps.some((s) => s.status === 'running')
-  const doneCount = steps.filter((s) => s.status === 'done').length
-
-  if (!running && doneCount === 0) return <div className="think-line" />
-
-  const toggleStep = (id: string): void => {
-    setOpenStep((prev) => {
-      const n = new Set(prev)
-      if (n.has(id)) n.delete(id)
-      else n.add(id)
-      return n
-    })
-  }
-
-  return (
-    <div className="think-panel">
-      <div className="think-line" onClick={() => setOpen((o) => !o)}>
-        {running ? (
-          <>
-            <span className="spin" />
-            <span>{t('ws.thinking')}</span>
-          </>
-        ) : (
-          <>
-            <span className="ok">✓</span>
-            <span>{t('ws.evalSteps', { n: doneCount })}</span>
-          </>
-        )}
-        <span className="spacer" />
-        <span className="step-arrow">{open ? '▾' : '▸'}</span>
-      </div>
-      {open && (
-        <div className="steps">
-          {steps.map((s, i) => {
-            const isOpen = openStep.has(s.id)
-            const first = i === 0
-            return (
-              <div className={`step ${s.status}`} key={s.id}>
-                <div className="step-h" onClick={() => toggleStep(s.id)}>
-                  <span className="step-ic">
-                    {s.status === 'done' && <span className="ok">✓</span>}
-                    {s.status === 'running' && <span className="spin" />}
-                    {s.status === 'pending' && <span className="dot" />}
-                  </span>
-                  <span className="step-label">
-                    {first && <span className="tag">AI</span>}
-                    {t(s.label)}
-                  </span>
-                  <span className="step-arrow">▾</span>
-                </div>
-                <div className={`step-detail${isOpen ? ' open' : ''}`}>
-                  {s.detail.length === 0 ? (
-                    <div className="sd-empty mono">{s.status === 'running' ? t('ws.thinking') : '—'}</div>
-                  ) : (
-                    s.detail.map((d, di) => (
-                      <div key={di} className="sd-line mono">{d}</div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
+/* 引擎合一（2026-09）：STEP_DEFS 静态步槽已退役——事件驱动（subtask/task 流）取代固定四步模板 */
 
 function BlockRenderer({ block }: { block: import('@renderer/api/ai').Block }): React.JSX.Element {
   const { t } = useI18n()
-  if (block.kind === 'sql_editor') {
-    return <div className="blk-code mono"><div className="blk-label">SQL</div><pre>{block.sql}</pre></div>
-  }
   if (block.kind === 'table') {
     return <div className="blk-table"><div className="blk-label">{block.title || t('aiRail.blockTable')}</div><div className="mono" style={{ fontSize: '11px' }}>{block.columns.join(' | ')} — {t('aiRail.blockRows', { n: block.rows.length })}</div></div>
   }
   if (block.kind === 'chart') {
     return <div className="blk-chart"><div className="blk-label">{t('aiRail.blockChart', { type: block.chartType })}</div><div className="mono" style={{ fontSize: '11px' }}>{block.title || ''} — {t('aiRail.blockPlaceholder')}</div></div>
-  }
-  if (block.kind === 'confirm') {
-    return <div className="blk-confirm"><span className="mono">{block.prompt}</span><button className="btn pri" style={{ marginLeft: 8 }}>{block.confirmLabel || t('common.confirm')}</button><button className="btn gho" style={{ marginLeft: 6 }}>{block.cancelLabel || t('common.cancel')}</button></div>
-  }
-  if (block.kind === 'choice') {
-    return <div className="blk-choice"><div className="mono">{block.prompt}</div><div style={{ marginTop: 6 }}>{block.options.map((o) => <label key={o.value} className="mono" style={{ marginRight: 12 }}><input type={block.multiple ? 'checkbox' : 'radio'} name="choice" value={o.value} /> {o.label}</label>)}</div></div>
   }
   return <div className="blk-text mono">{(block as { text: string }).text}</div>
 }
@@ -170,11 +66,11 @@ function TaskFlowPanel({ tasks }: { tasks: import('@renderer/api/ai').AiTaskFlow
         return (
           <div key={tk.id} className={`tf-task ${tk.status}`}>
             <div className={`tf-task-h${tk.tools.some((x) => x.status === 'running') ? ' live' : ''}`} onClick={() => toggle(tk.id)}>
-              <span className="tf-ic">{tk.status === 'running' ? <span className="spin" /> : tk.status === 'error' || tk.status === 'blocked' ? <span className="ok">✗</span> : <span className="ok">✓</span>}</span>
+              <span className="tf-ic">{tk.status === 'running' ? <span className="spin" /> : tk.status === 'error' || tk.status === 'blocked' ? <span className="ok"><IconX size={10} /></span> : <span className="ok"><IconCheck size={10} /></span>}</span>
               <span className="tf-mono">{tk.index != null ? `${tk.index}.` : ''}</span>
               <span className="tf-skill">{tk.skill}</span>
               <span className="tf-action mono">{tk.action}</span>
-              {tk.tools.length > 0 && <span className="tf-hint mono">({doneTools}/{tk.tools.length} 工具)</span>}
+              {tk.tools.length > 0 && <span className="tf-hint mono">{t('aiRail.toolCount', { cur: doneTools, total: tk.tools.length })}</span>}
               {tk.status === 'error' && tk.error && <span className="tf-err">{String(tk.error)}</span>}
               <span className="step-arrow">{isOpen ? '▾' : '▸'}</span>
             </div>
@@ -184,7 +80,7 @@ function TaskFlowPanel({ tasks }: { tasks: import('@renderer/api/ai').AiTaskFlow
                 {tk.tools.map((tool) => (
                   <div key={tool.id} className={`tf-tool ${tool.status}`}>
                     <div className="tf-tool-h">
-                      <span className="tf-ic">{tool.status === 'done' ? <span className="ok">✓</span> : tool.status === 'error' ? <span className="ok">✗</span> : <span className="spin" />}</span>
+                      <span className="tf-ic">{tool.status === 'done' ? <span className="ok"><IconCheck size={10} /></span> : tool.status === 'error' ? <span className="ok"><IconX size={10} /></span> : <span className="spin" />}</span>
                       <span className="tf-tool-name mono">{tool.label || tool.tool}</span>
                     </div>
                     {tool.logs.length > 0 && (
@@ -209,10 +105,13 @@ function SubtaskPanel({ subtasks, scene }: { subtasks: import('@renderer/store/c
   if (!subtasks || subtasks.length === 0) return <></>
   const running = subtasks.some((s) => s.status === 'running')
   const doneCount = subtasks.filter((s) => s.status === 'done').length
+  useEffect(() => {
+    if (!running && doneCount > 0) setOpen(false)
+  }, [running, doneCount])
   return (
     <div className="think-panel">
       <div className="think-line" onClick={() => setOpen((o) => !o)}>
-        {running ? <><span className="spin" /><span>{scene ? `${scene} · ${t('ws.thinking')}` : t('ws.thinking')}</span></> : <><span className="ok">✓</span><span>{t('ws.evalSteps', { n: doneCount })}</span></>}
+        {running ? <><span className="spin" /><span>{scene ? `${scene} · ${t('ws.thinking')}` : t('ws.thinking')}</span></> : <><span className="ok"><IconCheck size={10} /></span><span>{t('ws.evalSteps', { n: doneCount })}</span></>}
         <span className="spacer" />
         <span className="step-arrow">{open ? '▾' : '▸'}</span>
       </div>
@@ -221,7 +120,7 @@ function SubtaskPanel({ subtasks, scene }: { subtasks: import('@renderer/store/c
           {subtasks.map((s) => (
             <div className={`step ${s.status}`} key={s.id}>
               <div className="step-h">
-                <span className="step-ic">{s.status === 'done' && <span className="ok">✓</span>}{s.status === 'running' && <span className="spin" />}{s.status === 'error' && <span className="ok">✗</span>}</span>
+                <span className="step-ic">{s.status === 'done' && <span className="ok"><IconCheck size={10} /></span>}{s.status === 'running' && <span className="spin" />}{s.status === 'error' && <span className="ok"><IconX size={10} /></span>}</span>
                 <span className="step-label">{s.label || s.tool}</span>
                 <span className="mono" style={{ fontSize: '10px', opacity: 0.6 }}>{s.tool}</span>
               </div>
@@ -648,10 +547,10 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, session
                 const rt = getRuntime()
                 if (!rt?.token || !connectionId) return
                 const r = await fetch(`/api/v1/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token }, body: JSON.stringify({ connection_id: connectionId, sql: draft }) })
-                if (r.ok) alert(t('aiRail.sentToApproval'))
+                if (r.ok) toastMsg(t('aiRail.sentToApproval'))
                 else {
                   const j = await r.json().catch(()=>({detail:'failed'}))
-                  alert(j.detail || t('aiRail.toApprovalFail'))
+                  toastMsg(j.detail || t('aiRail.toApprovalFail'))
                 }
               }}>{t('aiRail.toApproval')}</button>
             </div>
@@ -682,10 +581,10 @@ function SqlCard({ card, question, busy, pending, dialect, connectionId, session
                 const rt = getRuntime()
                 if (!rt?.token || !connectionId) return
                 const r = await fetch(`/api/v1/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-TableTalk-Token': rt.token }, body: JSON.stringify({ connection_id: connectionId, sql: draft }) })
-                if (r.ok) alert(t('aiRail.sentToApproval'))
+                if (r.ok) toastMsg(t('aiRail.sentToApproval'))
                 else {
                   const j = await r.json().catch(()=>({detail:'failed'}))
-                  alert(j.detail || t('aiRail.toApprovalFail'))
+                  toastMsg(j.detail || t('aiRail.toApprovalFail'))
                 }
               }}>{t('aiRail.toApproval')}</button>
             </div>
@@ -768,32 +667,25 @@ const SUGGESTIONS: string[] = [
 ]
 
 /**
- * WS2（T2.4）：C2 建议只引用 enabled 技能涉及的能力——纯函数，便于单测。
- * 每种建议归属一个技能（query 为地板常开）；disabled 的技能不参与生成。
- * confirmed：已确认领域标签；tableForTag：标签→代表表；enabledIds：启用技能 id 集。
+ * WS2（T2.4）：C2 建议基于已确认领域标签本地生成 3-5 个（纯函数，零模型调用）。
+ * confirmed：已确认领域标签；tableForTag：标签→代表表。
+ * （引擎合一后无技能开关，全部建议类型常开）
  */
 function buildSuggestions(
   confirmed: string[],
   tableForTag: Record<string, string>,
-  t: (key: string, vars?: Record<string, string | number>) => string,
-  enabledIds: Set<string>
+  t: (key: string, vars?: Record<string, string | number>) => string
 ): string[] {
   const sugs: string[] = []
-  // 数据查询建议（query 地板；默认涵盖现有"按月统计"生成）
-  if (enabledIds.has('query')) {
-    for (const tg of confirmed.slice(0, 5)) {
-      const tbl = tableForTag[tg] || ''
-      sugs.push(tbl ? t('aiRail.sugMonthlyCount', { tag: tg, tbl }) : t('aiRail.sugQueryTag', { tag: tg }))
-    }
+  // 数据查询建议（默认涵盖现有"按月统计"生成）
+  for (const tg of confirmed.slice(0, 5)) {
+    const tbl = tableForTag[tg] || ''
+    sugs.push(tbl ? t('aiRail.sugMonthlyCount', { tag: tg, tbl }) : t('aiRail.sugQueryTag', { tag: tg }))
   }
-  if (enabledIds.has('schema') && confirmed.length) {
+  if (confirmed.length) {
     sugs.push(t('aiRail.sugSchemaList'))
-  }
-  if (enabledIds.has('report') && confirmed.length) {
     sugs.push(t('aiRail.sugReportOn', { tag: confirmed[0] }))
-  }
-  // query 常开兜底：补齐到至少 3 条
-  if (enabledIds.has('query') && confirmed.length) {
+    // 兜底：补齐到至少 3 条
     let i = 0
     while (sugs.length < 3) {
       sugs.push(t('aiRail.sugTrendOf', { tag: confirmed[i % confirmed.length] }))
@@ -817,6 +709,47 @@ export function AiRail(): React.JSX.Element {
   const { conversations, activeId, newConversation, rename, saveTurns, touch, select, trustLevel, setTrustLevel } = useChat()
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [busy, setBusy] = useState(false)
+  // 停止/逃生口：流式请求（chat/计划确认/查询执行）共用一个 AbortController。
+  // busy 卡死的根因是 SSE 流永不 settle → finally 永不执行；abort 让用户随时复位。
+  const abortRef = useRef<AbortController | null>(null)
+  const abortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const _clearAbort = (): void => {
+    if (abortTimerRef.current) { clearTimeout(abortTimerRef.current); abortTimerRef.current = null }
+    abortRef.current = null
+  }
+
+  /** 开始一次可中止的流式请求：返回 signal（620s 墙钟兜底 = 后端 600s 护栏 + 余量）。 */
+  const _beginAbortable = (): AbortSignal => {
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
+    abortTimerRef.current = setTimeout(() => ctrl.abort(), 620_000)
+    return ctrl.signal
+  }
+
+  /** 停止按钮：中止当前流（后端 gen() finally 会取消在飞查询并存 carry-over 续答摘要）。 */
+  function stopStream(): void {
+    abortRef.current?.abort()
+  }
+
+  /** AbortError 识别（用户停止/墙钟超时 → 静默标记，不走 ⚠ 报错文案）。 */
+  const _isAbort = (e: unknown): boolean =>
+    e instanceof DOMException && e.name === 'AbortError'
+
+  /** 中止/结束后给当前 AI turn 收尾（置 running=false + 停止标记）。 */
+  const _markTurnStopped = (): void => {
+    const stoppedText = t('aiRail.stopped')
+    setTurns((tt) => {
+      const n = [...tt]
+      const last = n[n.length - 1]
+      if (last.role === 'ai') {
+        last.running = false
+        last.text = (last.text ? last.text + '\n\n' : '') + stoppedText
+      }
+      return n
+    })
+  }
+
   const [input, setInput] = useState('')
   const [histOpen, setHistOpen] = useState(false)
   const [secPolicyOpen, setSecPolicyOpen] = useState(false)
@@ -850,17 +783,8 @@ export function AiRail(): React.JSX.Element {
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [askDraft, setAskDraft])
-  // C2 猜你想问：基于已确认领域标签 + enabled 技能本地生成 3-5 个（零模型调用）
+  // C2 猜你想问：基于已确认领域标签本地生成 3-5 个（零模型调用，LLM 优先、标签模板回退）
   const [dynamicSugs, setDynamicSugs] = useState<string[] | null>(null)
-  // WS2（T2.4）：启用技能集合（query/refusal 为地板，后端保证恒 enabled）
-  const [enabledSkills, setEnabledSkills] = useState<Set<string>>(new Set())
-  useEffect(() => {
-    let alive = true
-    void listSkills()
-      .then((cat) => alive && setEnabledSkills(new Set(cat.skills.filter((s) => s.enabled).map((s) => s.id))))
-      .catch(() => undefined)
-    return () => { alive = false }
-  }, [])
   useEffect(() => {
     if (!currentId) { setDynamicSugs(null); return }
     let alive = true
@@ -897,12 +821,12 @@ export function AiRail(): React.JSX.Element {
             if (confirmed.includes(tg) && !tableForTag[tg]) tableForTag[tg] = tbl
           }
         }
-        const sugs = buildSuggestions(confirmed, tableForTag, useI18n.getState().t, enabledSkills)
+        const sugs = buildSuggestions(confirmed, tableForTag, useI18n.getState().t)
         if (alive) setDynamicSugs(sugs)
       } catch {}
     })()
     return () => { alive = false }
-  }, [currentId, enabledSkills])
+  }, [currentId])
   // 输入框自动增高
   const inputRef = useRef<HTMLTextAreaElement>(null)
   function autoGrow(): void {
@@ -912,11 +836,10 @@ export function AiRail(): React.JSX.Element {
     el.style.height = Math.min(180, Math.max(56, el.scrollHeight)) + 'px'
   }
   // 澄清挂起：报告中等待用户回答澄清问题时渲染内联输入
-  const [clarifyPending, setClarifyPending] = useState<{ q: string; field: string } | null>(null)
+  const [clarifyPending, setClarifyPending] = useState<{ q: string; field: string; origin?: string } | null>(null)
   const [clarifyInput, setClarifyInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const histRef = useRef<{ role: 'user' | 'assistant'; content: string }[]>([])
-  const stepTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   const cardsRef = useRef<AiCard[]>([])
   const loopResultRef = useRef<Record<string, any> | null>(null)
   const userCountRef = useRef(0)
@@ -1020,33 +943,21 @@ export function AiRail(): React.JSX.Element {
   }
 
   function clearStepTimers(): void {
-    stepTimers.current.forEach((t) => clearTimeout(t))
-    stepTimers.current = []
   }
 
-  /** 将暂存的卡片挂到当前 turn（安全评估未完成时 pending=true）。
-   *  仅当 SQL 生成步已完成（播放器走到）或流已结束时挂载，避免卡片早于步骤出现。 */
+  /** 将暂存的卡片挂到当前 turn（sql_card 事件到达即挂；安全评估详情由 finishGate 补挂）。
+   *  不再依赖 STEP_DEFS 的 sql/gate 步状态——那两步由 stage sql/gate 事件驱动，harness 流不发，旧门槛会导致卡片永不挂载。 */
   function attachCards(): void {
     const cards = cardsRef.current
     if (cards.length === 0) return
     setTurns((tt) => {
       const n = [...tt]
       const last = n[n.length - 1]
-      if (last.role !== 'ai' || !last.steps) return n
+      if (last.role !== 'ai') return n
       // 若已挂过同样数量的卡则跳过
       if ((last.cards?.length ?? 0) >= cards.length) return n
-      const sqlIdx = STEP_DEFS.length - 2
-      const sqlDone = last.steps[sqlIdx]?.status === 'done'
-      const gateDone = last.steps[last.steps.length - 1]?.status === 'done'
-      if (!sqlDone && !gateDone && last.running) return n   // 播放器还没走到，等
       last.cards = cards.map((c) => ({ ...c }))
-      last.pending = !gateDone
-      // SQL 生成步（倒数第 2）挂 SQL 首行
-      last.steps = last.steps.map((s, i) =>
-        i === sqlIdx && !s.detail.some((d) => d.startsWith(t('ws.genSql')))
-          ? { ...s, detail: [...s.detail, `${t('ws.genSql')}${cards[cards.length - 1].sql.split('\n')[0]}`] }
-          : s
-      )
+      last.pending = !!cards[cards.length - 1].needs_confirm
       return n
     })
   }
@@ -1068,20 +979,15 @@ export function AiRail(): React.JSX.Element {
     void exec(card.sql, false, curQuestionRef.current)
   }
 
-  /** 安全评估完成：取消 pending，挂判定。若流已结束且是读卡 → 自动执行（无需人点）。 */
+  /** 安全评估完成：取消 pending。若流已结束且是读卡 → 自动执行（无需人点）。
+   *  （判定徽标由 SqlCard 自带渲染；旧 gate 步详情行随 STEP_DEFS 退役删除） */
   function finishGate(): void {
     const card = cardsRef.current[cardsRef.current.length - 1]
     setTurns((tt) => {
       const n = [...tt]
       const last = n[n.length - 1]
-      if (last.role !== 'ai' || !last.steps) return n
+      if (last.role !== 'ai') return n
       last.pending = false
-      const g = last.steps[last.steps.length - 1]
-      if (card && !g.detail.some((d) => d.startsWith(t('ws.verdictPrefix')))) {
-        const glKey = GATE_LABEL[card.verdict]
-        const glText = glKey ? t(glKey) : card.verdict
-        g.detail = [...g.detail, `${t('ws.verdictPrefix')} ${glText}${card.preview_rows != null ? t('ws.verdictRows', { n: card.preview_rows }) : ''}`]
-      }
       return n
     })
     gateDoneRef.current = true
@@ -1119,12 +1025,13 @@ export function AiRail(): React.JSX.Element {
       setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true, sessionId: reqSid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
     } else {
       setTurns((t) => [...t, { role: 'user', text: q }])
-      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], steps: makeSteps(), subtasks: [], running: true, sessionId: reqSid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
+      setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], subtasks: [], running: true, sessionId: reqSid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
     }
     cardsRef.current = []
     // 提问刷新会话更新时间（查看历史不刷新）
     if (reqSid) touch(reqSid)
 
+    const _signal = _beginAbortable()
     try {
       await chatStream(
         {
@@ -1137,8 +1044,7 @@ export function AiRail(): React.JSX.Element {
           model_id: modelId ?? undefined,
         },
         (ev: AiEvent) => {
-          if ((ev as unknown as { type: string }).type === 'manifest') {
-            const m = (ev as unknown as { manifest: Manifest }).manifest
+          if ((ev as unknown as { type: string }).type === 'manifest') {            const m = (ev as unknown as { manifest: Manifest }).manifest
             setTurns((t) => {
               const n = [...t]
               const last = n[n.length - 1]
@@ -1162,13 +1068,25 @@ export function AiRail(): React.JSX.Element {
           if (ev.type === 'clarify') {
             // 澄清：把问题挂到当前 turn.clarify；意图澄清带 options（点击候选=续问 new_question）
             const opts = (ev as { options?: string[] }).options
-            setClarifyPending({ q: ev.question, field: ev.field ?? '' })
+            setClarifyPending({ q: ev.question, field: ev.field ?? '', origin: ev.origin })
             setTurns((t) => {
               const n = [...t]
               const last = n[n.length - 1]
               if (last.role === 'ai') {
                 last.clarify = [...(last.clarify ?? []), ev.question]
                 if (opts && opts.length) last.clarifyOptions = opts
+              }
+              return n
+            })
+            return
+          }
+          if (ev.type === 'plan_pending') {
+            // 受控计划提议：挂到当前 turn 渲染确认卡（确认/拒绝）
+            setTurns((t) => {
+              const n = [...t]
+              const last = n[n.length - 1]
+              if (last.role === 'ai') {
+                last.plan = { planId: ev.plan_id, title: ev.title, steps: ev.steps }
               }
               return n
             })
@@ -1235,44 +1153,6 @@ export function AiRail(): React.JSX.Element {
               const last = n[n.length - 1]
               if (last.role === 'ai') {
                 last.thinks = [...(last.thinks ?? []), ev.text]
-                if (last.steps) {
-                  const cur = last.steps.find((s) => s.status === 'running') ?? last.steps[last.steps.length - 1]
-                  cur.detail = [...cur.detail, ev.text]
-                }
-              }
-              return n
-            })
-          } else if (ev.type === 'stage' && ev.stage === 'intent') {
-            // 四步展示：意图分解（真实标签路由结果）
-            setTurns((tt) => {
-              const n = [...tt]
-              const last = n[n.length - 1]
-              if (last.role === 'ai' && last.steps) {
-                const s = last.steps.find((x) => x.id === 'intent')
-                if (s) {
-                  s.status = 'done'
-                  const v = Array.isArray(ev.value) ? (ev.value as string[]).join(' / ') : String(ev.value ?? '')
-                  s.detail = [...s.detail, `${t('ws.intentTag')}${v || t('ws.intentNone')}`]
-                }
-              }
-              return n
-            })
-          } else if (ev.type === 'stage' && ev.stage === 'retrieval') {
-            // 四步展示：表检索定位（真实候选表清单：标签路由 × 向量召回 → FK 扩展）
-            setTurns((tt) => {
-              const n = [...tt]
-              const last = n[n.length - 1]
-              if (last.role === 'ai' && last.steps) {
-                const s = last.steps.find((x) => x.id === 'retrieval')
-                const tables = ev.tables ?? []
-                const vecN = Array.isArray(ev.vec_tables) ? (ev.vec_tables as string[]).length : 0
-                if (s) {
-                  s.status = 'done'
-                  s.detail = [
-                    ...s.detail,
-                    `${t('ws.candTables', { n: tables.length })}${tables.join(', ') || t('ws.candMiss')}${vecN > 0 ? t('ws.vecRecall', { n: vecN }) : ''}`
-                  ]
-                }
               }
               return n
             })
@@ -1430,19 +1310,27 @@ export function AiRail(): React.JSX.Element {
               }, 800)
             }
           }
-        }
+        },
+        _signal
       )
     } catch (e) {
-      setTurns((t) => {
-        const n = [...t]
-        const last = n[n.length - 1]
-        if (last.role === 'ai') { last.running = false; last.text = `⚠ ${(e as Error).message}` }
-        return n
-      })
+      if (_isAbort(e)) {
+        // 用户停止/墙钟超时：turn 收尾 + 停止标记（后端已取消在飞查询）
+        _markTurnStopped()
+      } else {
+        setTurns((t) => {
+          const n = [...t]
+          const last = n[n.length - 1]
+          if (last.role === 'ai') { last.running = false; last.text = `⚠ ${(e as Error).message}` }
+          return n
+        })
+      }
     } finally {
+      _clearAbort()
       setBusy(false)
     }
   }
+
 
   // C3 追问链：卡片内的 followup 事件直接续问（不重建会话）
   useEffect(() => {
@@ -1454,7 +1342,109 @@ export function AiRail(): React.JSX.Element {
     return () => window.removeEventListener('tabletalk:followup', h as unknown as EventListener)
   }, [currentId, selectedTable])
 
-  /** 澄清回答：把澄清问答作为 system(clarify)+user 消息重传，resume 报告流。 */
+  /** 受控计划确认：流式执行下一段（task_* / sql_card / plan_* 事件路由到新 AI turn）。 */
+  async function runPlanConfirm(planId: string): Promise<void> {
+    if (busy || !currentId) return
+    const sid = resolveSessionForConn(currentId)
+    if (!sid) return
+    setBusy(true)
+    setTurns((tt) => [...tt, { role: 'ai', question: t('ws.planExec'), thinks: [], cards: [], running: true, sessionId: sid, tasks: [] as import('@renderer/api/ai').AiTaskFlow[] }])
+    const _signal = _beginAbortable()
+    try {
+      await confirmPlanStream(planId, sid, (ev: AiEvent) => {
+        const set = (fn: (last: import('@renderer/store/chat').Turn) => void): void => {
+          setTurns((t) => {
+            const n = [...t]
+            const last = n[n.length - 1]
+            if (last.role === 'ai') fn(last)
+            return n
+          })
+        }
+        if (ev.type === 'text') set((last) => { last.text = (last.text ?? '') + ev.content })
+        else if (ev.type === 'think') set((last) => { last.thinks = [...(last.thinks ?? []), ev.text] })
+        else if (ev.type === 'sql_card') {
+          set((last) => { last.cards = [...(last.cards ?? []), ev.card]; last.pending = !!ev.card.needs_confirm })
+        } else if (ev.type === 'task_start') {
+          set((last) => { last.tasks = [...(last.tasks ?? []), { id: ev.id, skill: ev.skill || ev.action, action: ev.action || ev.skill, status: 'running', index: (last.tasks?.length ?? 0) + 1, tools: [] }] })
+        } else if (ev.type === 'task_result') {
+          set((last) => { const tk = (last.tasks ?? []).find((x) => x.id === ev.id); if (tk) { tk.result_type = ev.result_type; tk.index = ev.index ?? tk.index; if (!ev.ok) tk.error = ev.error || '任务失败' } })
+        } else if (ev.type === 'task_done') {
+          set((last) => { const tk = (last.tasks ?? []).find((x) => x.id === ev.id); if (tk) { tk.status = ev.ok ? 'done' : 'error'; if (!ev.ok && !tk.error) tk.error = ev.error || '任务失败' } })
+        } else if (ev.type === 'plan_stopped') {
+          set((last) => { const cur = (last.tasks ?? [])[(last.tasks?.length ?? 1) - 1]; if (cur && cur.status === 'running') { cur.status = 'blocked'; cur.error = ev.reason } })
+        } else if (ev.type === 'subtask_start') {
+          set((last) => { last.subtasks = [...(last.subtasks ?? []), { id: ev.id, tool: ev.tool, label: ev.label || ev.tool, status: 'running', details: [], blocks: [] }]; const tk = (last.tasks ?? [])[(last.tasks?.length ?? 1) - 1]; if (tk) tk.tools = [...tk.tools, { id: ev.id, tool: ev.tool, label: ev.label || ev.tool, status: 'running', logs: [] }] })
+        } else if (ev.type === 'subtask_progress') {
+          set((last) => { const it = (last.subtasks ?? []).find((s) => s.id === ev.id); if (it) it.details = [...it.details, ev.delta]; const tk = (last.tasks ?? [])[(last.tasks?.length ?? 1) - 1]; const tool = tk && tk.tools.find((x) => x.id === ev.id); if (tool) tool.logs = [...tool.logs, ev.delta] })
+        } else if (ev.type === 'subtask_done') {
+          set((last) => { const it = (last.subtasks ?? []).find((s) => s.id === ev.id); if (it) { it.status = ev.status === 'error' ? 'error' : 'done'; if (ev.detail) it.details = [...it.details, ev.detail] }; const tk = (last.tasks ?? [])[(last.tasks?.length ?? 1) - 1]; const tool = tk && tk.tools.find((x) => x.id === ev.id); if (tool) { tool.status = ev.status === 'error' ? 'error' : 'done'; if (ev.detail) tool.logs = [...tool.logs, ev.detail] } })
+        } else if (ev.type === 'block') {
+          set((last) => { const it = (last.subtasks ?? []).find((s) => s.id === ev.id); if (it) it.blocks = [...it.blocks, ev.block] })
+        } else if (ev.type === 'plan_awaiting') {
+          set((last) => { last.planAwaitingId = ev.plan_id; last.running = false })
+        } else if (ev.type === 'plan_done') {
+          set((last) => { last.planAwaitingId = undefined; last.text = `${last.text ?? ''}✅ ${t('ws.planDone', { n: ev.completed })}` })
+          void useAuditSignal.getState().refresh()
+        } else if (ev.type === 'plan_failed') {
+          set((last) => { last.planAwaitingId = undefined; last.text = `${last.text ?? ''}⚠ ${t('ws.planFailed', { n: ev.completed })}` })
+        } else if (ev.type === 'error') {
+          set((last) => { last.text = `⚠ ${ev.message}` })
+        } else if (ev.type === 'done') {
+          set((last) => { last.running = false })
+          void useAuditSignal.getState().refresh()
+        }
+      }, _signal)
+    } catch (e) {
+      if (_isAbort(e)) {
+        _markTurnStopped()
+      } else {
+        setTurns((t) => {
+          const n = [...t]
+          const last = n[n.length - 1]
+          if (last.role === 'ai') { last.running = false; last.text = `⚠ ${(e as Error).message}` }
+          return n
+        })
+      }
+    } finally {
+      _clearAbort()
+      setBusy(false)
+    }
+  }
+
+  /** 受控计划：确认（标记原卡 + 启动分段执行）/ 拒绝（后端写系统消息）。 */
+  async function onPlanConfirm(planId: string): Promise<void> {
+    setTurns((t) => {
+      const n = [...t]
+      for (const turn of n) {
+        if (turn.plan?.planId === planId) turn.plan = { ...turn.plan, confirmed: true }
+      }
+      return n
+    })
+    await runPlanConfirm(planId)
+  }
+
+  async function onPlanReject(planId: string): Promise<void> {
+    if (!currentId) return
+    const sid = resolveSessionForConn(currentId)
+    if (!sid) return
+    try {
+      await rejectPlan(planId, sid)
+    } catch (e) {
+      toastMsg((e as Error).message)
+    }
+    setTurns((tt) => {
+      const n = [...tt]
+      for (const turn of n) {
+        if (turn.plan?.planId === planId) turn.plan = { ...turn.plan, confirmed: true }
+      }
+      const last = n[n.length - 1]
+      if (last.role === 'ai') last.text = `${last.text ?? ''}${t('ws.planRejected')}`
+      return n
+    })
+  }
+
+  /** 澄清回答：按来源分流——ask_user（harness）→ 作为新消息续 harness 会话；
+   *  report（报告流澄清）→ 澄清问答作为 system(clarify)+user 消息重传，resume 报告流。 */
   async function answerClarify(): Promise<void> {
     const pending = clarifyPending
     const ans = clarifyInput.trim()
@@ -1462,6 +1452,12 @@ export function AiRail(): React.JSX.Element {
     setClarifyPending(null)
     setClarifyInput('')
     const q = curQuestionRef.current
+    // harness ask_user 的回答：服务端历史已含澄清问题（kind=clarify → assistant 还原），
+    // 直接作为新问句续默认对话流——不能走 mode:'report'（会被劫持进报告管线）。
+    if (pending.origin !== 'report') {
+      await send(ans)
+      return
+    }
     // 重传历史：原始问题 → 澄清问 → 本次回答（后端 _extract_clarify_answers 凭 system+name 识别并 replay）
     const msgs: { role: string; content: string; name?: string }[] = [
       { role: 'user', content: q },
@@ -1476,6 +1472,7 @@ export function AiRail(): React.JSX.Element {
     setTurns((t) => [...t, { role: 'ai', question: q, thinks: [], cards: [], running: true, isReport: true }])
     const reqSid = resolveSessionForConn(currentId)
     if (reqSid) touch(reqSid)
+    const _signal = _beginAbortable()
     try {
       await chatStream(
         {
@@ -1507,7 +1504,8 @@ export function AiRail(): React.JSX.Element {
               sections: [], narration: '', refs: []
             })
           } else if (ev.type === 'clarify') {
-            setClarifyPending({ q: ev.question, field: ev.field ?? '' })
+            // 此流固定 mode:'report'，后续澄清必为报告流追问
+            setClarifyPending({ q: ev.question, field: ev.field ?? '', origin: 'report' })
           } else if (ev.type === 'plan') {
             setTurns((tt) => {
               const n = [...tt]
@@ -1540,16 +1538,22 @@ export function AiRail(): React.JSX.Element {
               return n
             })
           }
-        }
+        },
+        _signal
       )
     } catch (e) {
-      setTurns((t) => {
-        const n = [...t]
-        const last = n[n.length - 1]
-        if (last.role === 'ai') { last.running = false; last.text = `⚠ ${(e as Error).message}` }
-        return n
-      })
+      if (_isAbort(e)) {
+        _markTurnStopped()
+      } else {
+        setTurns((t) => {
+          const n = [...t]
+          const last = n[n.length - 1]
+          if (last.role === 'ai') { last.running = false; last.text = `⚠ ${(e as Error).message}` }
+          return n
+        })
+      }
     } finally {
+      _clearAbort()
       setBusy(false)
     }
   }
@@ -1581,17 +1585,29 @@ export function AiRail(): React.JSX.Element {
   async function exec(sql: string, confirm: boolean, question?: string, card?: AiCard, sessionId?: string | null): Promise<void> {
     if (!currentId) return
     setBusy(true)
+    const _signal = _beginAbortable()
     try {
-      const r = await runQuery({ connectionId: currentId, sql, origin: 'ai', confirm, confirm_token: card?.confirm_token ?? null, session_id: sessionId ?? null })
+      const r = await runQuery({ connectionId: currentId, sql, origin: 'ai', confirm, confirm_token: card?.confirm_token ?? null, session_id: sessionId ?? null, signal: _signal })
       handleQueryResult(r, sql, question)
     } catch (e) {
-      setTurns((tt) => {
-        const n = [...tt]
-        const last = n[n.length - 1]
-        if (last.role === 'ai') last.text = `${t('ws.execFail')}${(e as Error).message}`
-        return n
-      })
+      if (_isAbort(e)) {
+        // 用户停止/墙钟超时：不写 ⚠ 报错文案（后端 /query/cancel 由断连 finally 兜底）
+        setTurns((tt) => {
+          const n = [...tt]
+          const last = n[n.length - 1]
+          if (last.role === 'ai') { last.running = false; last.text = (last.text ? last.text + '\n\n' : '') + t('aiRail.stopped') }
+          return n
+        })
+      } else {
+        setTurns((tt) => {
+          const n = [...tt]
+          const last = n[n.length - 1]
+          if (last.role === 'ai') last.text = `${t('ws.execFail')}${(e as Error).message}`
+          return n
+        })
+      }
     } finally {
+      _clearAbort()
       setBusy(false)
     }
   }
@@ -1663,7 +1679,7 @@ export function AiRail(): React.JSX.Element {
               {activeConv?.title ?? t('chat.newConversation')}
             </span>
             <span className="spacer" />
-            <button className="ah-btn" title={t('ws.newConvTitle')} disabled={busy} onClick={newChat}>＋</button>
+            <button className="ah-btn" title={t('ws.newConvTitle')} disabled={busy} onClick={newChat}><IconPlus size={11} /></button>
             <div className="ah-dd" ref={histDdRef}>
               <button
                 className={`ah-btn${histOpen ? ' on' : ''}`}
@@ -1730,7 +1746,7 @@ export function AiRail(): React.JSX.Element {
                 <div className="m-u" key={i}>{turn.text}</div>
               ) : (
                 <div className="m-a" key={i}>
-                  {(turn.text || (turn.cards && turn.cards.length > 0) || turn.steps) && (
+                  {(turn.text || (turn.cards && turn.cards.length > 0)) && (
                     <div className="ai-id">
                       <span className="ai-avatar">◆</span>
                       <span className="ai-name">TABLETALK</span>
@@ -1750,13 +1766,39 @@ export function AiRail(): React.JSX.Element {
                       {turn.clarifyOptions && turn.clarifyOptions.length > 0 && (
                         <div className="cl-options">
                           {turn.clarifyOptions.map((op, oi) => (
-                            <button key={oi} className="follow-chip" onClick={() => void send(op, { mode: 'query' })}>{op}</button>
+                            <button key={oi} className="follow-chip" onClick={() => void send(op)}>{op}</button>
                           ))}
                         </div>
                       )}
                     </div>
                   )}
-                  {turn.tasks && turn.tasks.length > 0 ? <TaskFlowPanel tasks={turn.tasks} /> : (turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : turn.steps && !(turn.text && (turn.text.includes('不处理此类问题') || turn.text.includes('不在处理范围') || turn.text.includes('引导'))) && <ThinkPanel steps={turn.steps} />)}
+                  {turn.plan && !turn.plan.confirmed && (
+                    <div className="tk-proposal" style={{ alignSelf: 'stretch', margin: '4px 0' }}>
+                      <div className="tk-proposal-head">
+                        <span className="tk-proposal-name">📋 {t('ws.planCardTitle')}</span>
+                        <span className="tk-proposal-name">{turn.plan.title}</span>
+                      </div>
+                      <div style={{ padding: '8px 12px', borderTop: '1px solid var(--line)', display: 'grid', gap: 4, fontSize: 12 }}>
+                        {turn.plan.steps.map((s, si) => (
+                          <div key={si}>
+                            <span className="mono" style={{ color: 'var(--ink-faint)' }}>{si + 1}. [{s.action}]</span> {s.description}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="tk-proposal-actions">
+                        <span className="mono" style={{ fontSize: 11, color: 'var(--ink-faint)', marginRight: 'auto', alignSelf: 'center' }}>{t('ws.planCardHint')}</span>
+                        <button className="btn gho" disabled={busy} onClick={() => void onPlanReject(turn.plan!.planId)}>{t('ws.planReject')}</button>
+                        <button className="btn pri" disabled={busy} onClick={() => void onPlanConfirm(turn.plan!.planId)}>{t('ws.planConfirm')}</button>
+                      </div>
+                    </div>
+                  )}
+                  {turn.planAwaitingId && !turn.running && (
+                    <button className="btn pri" style={{ alignSelf: 'flex-start' }} disabled={busy}
+                            onClick={() => { const pid = turn.planAwaitingId; setTurns((t) => { const n = [...t]; const last = n[n.length - 1]; if (last.role === 'ai') last.planAwaitingId = undefined; return n }); void runPlanConfirm(pid!) }}>
+                      ▶ {t('ws.planContinue')}
+                    </button>
+                  )}
+                  {turn.tasks && turn.tasks.length > 0 ? <TaskFlowPanel tasks={turn.tasks} /> : (turn.subtasks && turn.subtasks.length > 0 ? <SubtaskPanel subtasks={turn.subtasks} scene={turn.scene} /> : null)}
                   {turn.manifest && <ManifestView manifest={turn.manifest} />}
                   {turn.text && !turn.isReport && (
                     <div className="ai-txt"><AiMd text={turn.text} /></div>
@@ -1804,7 +1846,7 @@ export function AiRail(): React.JSX.Element {
                   disabled={busy}
                   autoFocus
                 />
-                <button className="send" disabled={busy || !clarifyInput.trim()} onClick={() => void answerClarify()}>→</button>
+                <button className="send" disabled={busy || !clarifyInput.trim()} onClick={() => void answerClarify()}><IconSend size={14} /></button>
               </div>
             </div>
           )}
@@ -1818,7 +1860,7 @@ export function AiRail(): React.JSX.Element {
             <div className="ctx-chips">
               <span className="ctx-chip" title={t('ws.ctxTip')}>
                 {t('ws.context')}{ctxTable}
-                <button className="ctx-x" title={t('ws.removeContext')} onClick={() => selectTable(null)}>✕</button>
+                <CloseBtn className="ctx-x" title={t('ws.removeContext')} onClick={() => selectTable(null)} />
               </span>
             </div>
             {sugs.length > 0 && (
@@ -1885,7 +1927,11 @@ export function AiRail(): React.JSX.Element {
             disabled={busy}
             rows={2}
           />
-          <button className="send" disabled={busy || !input.trim()} onClick={() => void send()} title={t('ws.send')}>→</button>
+          {busy ? (
+            <button className="send stop" onClick={stopStream} title={t('aiRail.stop')}><IconX size={14} /></button>
+          ) : (
+            <button className="send" disabled={!input.trim()} onClick={() => void send()} title={t('ws.send')}><IconSend size={14} /></button>
+          )}
         </div>
       </div>
     </div>

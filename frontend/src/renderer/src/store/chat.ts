@@ -17,7 +17,6 @@ export interface Turn {
   question?: string
   thinks?: string[]
   cards?: AiCard[]
-  steps?: { id: string; label: string; status: string; detail: string[] }[]
   subtasks?: Subtask[]
   scene?: string
   /** 2026-09 §19.6 实时任务流：任务级树（task_/subtask_ 事件驱动） */
@@ -30,6 +29,10 @@ export interface Turn {
   isReport?: boolean
   /** 报告澄清中：渲染澄清输入，答完作为历史重传 */
   clarify?: string[]
+  /** 受控计划（propose_plan → 人审确认卡）；confirmed 后不再渲染 */
+  plan?: { planId: string; title: string; steps: { action: string; description: string }[]; confirmed?: boolean }
+  /** 计划分段挂起：等待用户继续执行剩余步骤（点击续段） */
+  planAwaitingId?: string
   /** B1 出网清单 */
   manifest?: import('@renderer/api/ai').Manifest
   /** WS4 会话 id：用于 DML 确认 token 校验 */
@@ -44,7 +47,7 @@ export interface Conversation {
   turns: Turn[]
 }
 
-export type TrustLevel = 'all_confirm' | 'read_auto' | 'max_trust'
+type TrustLevel = 'all_confirm' | 'read_auto' | 'max_trust'
 
 const LS_KEY = 'tabletalk-chats-v1'
 const LS_KEY_LEGACY = 'cleared-chats-v1'

@@ -1,5 +1,5 @@
 import { request } from './client'
-import type { BuildProgress, FieldHistoryItem, GraphEdge, KbStatus, KnowledgeOverview, RouteResult, TagInfo } from './types'
+import type { BuildProgress, FieldHistoryItem, GraphEdge, KbStatus, KnowledgeOverview, RoundBaseline, RouteResult, TagInfo } from './types'
 
 export interface TagLibrary {
   library: TagInfo[]
@@ -11,11 +11,17 @@ export function overview(connId: string): Promise<KnowledgeOverview> {
 }
 
 /** 启动后台构建任务（任务化：立即返回，轮询 buildProgress）。
- * selfCheck 空置时由后端运行时 kb_build_self_check 决定；传布尔即构建期覆盖。 */
-export function build(connId: string, includeSamples = false, trigger: 'init' | 'rebuild' = 'init', selfCheck?: boolean): Promise<{ job_id: string; kb_status: string; stage: string }> {
+ */
+export function build(
+  connId: string,
+  includeSamples = false,
+  trigger: 'init' | 'rebuild' = 'init',
+  annotateMode: 'diff' | 'full' = 'diff',
+  tagMode: 'keep' | 'anchor' | 'fresh' = 'keep'
+): Promise<{ job_id: string; kb_status: string; stage: string }> {
   return request(`/api/v1/knowledge/${connId}/build`, {
     method: 'POST',
-    body: JSON.stringify({ include_samples: includeSamples, trigger, self_check: selfCheck ?? null }),
+    body: JSON.stringify({ include_samples: includeSamples, trigger, annotate_mode: annotateMode, tag_mode: tagMode }),
   })
 }
 
@@ -29,11 +35,6 @@ export function buildCancel(connId: string): Promise<{ cancelled: boolean }> {
 
 export function kbStatus(connId: string): Promise<KbStatus> {
   return request(`/api/v1/knowledge/${connId}/status`)
-}
-
-/** 确认闸：一键确认全部草案文档 + draft 标签 → kb_status=ready（解锁数据源）。 */
-export function confirmAllEnabled(connId: string): Promise<{ docs: number; tags: number; kb_status: string }> {
-  return request(`/api/v1/knowledge/${connId}/confirm-all`, { method: 'POST' })
 }
 
 export interface DiscardResult {
@@ -92,8 +93,8 @@ export function assignTags(connId: string, table: string, tagNames: string[]): P
   return request(`/api/v1/knowledge/${connId}/tags/assign`, { method: 'POST', body: JSON.stringify({ table, tags: tagNames }) })
 }
 
-export function confirmComment(connId: string, table: string, column?: string): Promise<{ confirmed: number }> {
-  return request(`/api/v1/knowledge/${connId}/confirm`, { method: 'POST', body: JSON.stringify({ table, column: column ?? null }) })
+export function confirmComment(connId: string, table: string, column?: string, tableOnly?: boolean): Promise<{ confirmed: number }> {
+  return request(`/api/v1/knowledge/${connId}/confirm`, { method: 'POST', body: JSON.stringify({ table, column: column ?? null, table_only: tableOnly ?? false }) })
 }
 
 /** 整库一键确认全部待确认注释（table/column 均为 null）。 */
@@ -126,6 +127,8 @@ export interface TableEditResult {
   table: string
   vector_text: string
   vector_override: string | null
+  vector_profile?: string | null
+  proposed_profile?: string | null
 }
 export function patchTable(connId: string, input: TableEditInput): Promise<TableEditResult> {
   return request(`/api/v1/knowledge/${connId}/table`, {
@@ -154,22 +157,26 @@ export function retrieve(connId: string, q: string, k = 10): Promise<{ count: nu
 export interface GraphEdgeInput {
   from_table: string
   to_table: string
-  kind?: 'user'
+  source?: 'user'
   from_col?: string | null
   to_col?: string | null
   weight?: number | null
-  /** 边 v2 基数（默认 n:1，from 恒为多侧） */
-  cardinality?: 'n:1' | '1:1'
+  /** 基数 n:1 | 1:1 | 1:N | N:M（默认 n:1） */
+  cardinality?: 'n:1' | '1:1' | '1:N' | 'N:M'
+  /** 守卫谓词（多态关联条件，如 "X.type = 1"），普通关联省略 */
+  guard?: string | null
+  /** 复合边完整列对 [[from,to],...]；缺省用 from_col/to_col 单列 */
+  cols?: [string, string][] | null
 }
 
 export function addEdge(connId: string, edge: GraphEdgeInput): Promise<{ edge: GraphEdge; graph: { edges: GraphEdge[] } }> {
   return request(`/api/v1/knowledge/${connId}/graph/edges`, {
     method: 'POST',
-    body: JSON.stringify({ kind: 'user', ...edge }),
+    body: JSON.stringify({ source: 'user', ...edge }),
   })
 }
 
-export function removeEdge(connId: string, edge: { from_table: string; to_table: string; kind: string }): Promise<{ removed: number; graph: { edges: GraphEdge[] } }> {
+export function removeEdge(connId: string, edge: { from_table: string; to_table: string; source: string }): Promise<{ removed: number; graph: { edges: GraphEdge[] } }> {
   return request(`/api/v1/knowledge/${connId}/graph/edges`, {
     method: 'DELETE',
     body: JSON.stringify(edge),
@@ -227,5 +234,54 @@ export function applyFieldHistory(connId: string, table: string, column: string,
   return request(`/api/v1/knowledge/${connId}/field-history/apply`, {
     method: 'POST',
     body: JSON.stringify({ table, column, history_id: historyId }),
+  })
+}
+
+/* ═══ 审核重构（2026-09）：本轮对比区 API ═══ */
+
+/** 手动增量构建：结构对比 → 变化表 AI 增量注释（产生提案则进待审） */
+export function syncIncremental(connId: string): Promise<{ changed: boolean; tables_added?: number; tables_removed?: number; tables_changed?: number; docs_added?: number }> {
+  return request(`/api/v1/knowledge/${connId}/sync`, { method: 'POST' })
+}
+
+/** 单表旧版知识（对比层"旧"侧） */
+export function roundTableBaseline(connId: string, table: string): Promise<{ table: string; has_baseline: boolean; baseline: RoundBaseline }> {
+  return request(`/api/v1/knowledge/${connId}/round/table/${encodeURIComponent(table)}`)
+}
+
+/** 单表重新注释（审核镜头「重试」/手动刷新单表）：与构建共用注释缓存 */
+export function annotateTable(connId: string, table: string): Promise<{ table: string; source: string; items: number; added: number }> {
+  return request(`/api/v1/knowledge/${connId}/annotate-table`, {
+    method: 'POST',
+    body: JSON.stringify({ table }),
+  })
+}
+
+/** 批量裁决：一次请求提升/撤销多张表（几百表规模） */
+export function batchReview(connId: string, tables: string[], action: 'confirm' | 'reject'): Promise<{ applied: number; tables: string[]; pending: Record<string, number>; kb_status: string; version: number }> {
+  return request(`/api/v1/knowledge/${connId}/tables/batch-review`, {
+    method: 'POST',
+    body: JSON.stringify({ tables, action }),
+  })
+}
+
+/** 标签版本制应用：采纳新版 + 保留旧版，其余淘汰 */
+export function applyRoundTags(connId: string, keepOld: string[], adoptNew: string[]): Promise<{ adopted: number; kept_old: number; removed: number; kb_status: string; version: number; tags: { library: TagInfo[]; tables: Record<string, string[]> } }> {
+  return request(`/api/v1/knowledge/${connId}/tags/apply-round`, {
+    method: 'POST',
+    body: JSON.stringify({ keep_old: keepOld, adopt_new: adoptNew }),
+  })
+}
+
+/** 审核收尾：待审全清 → 版本启用（ready）；未清 → 保持 pending */
+export function reviewFinalize(connId: string): Promise<{ kb_status: string; version: number; pending: Record<string, number> }> {
+  return request(`/api/v1/knowledge/${connId}/review/finalize`, { method: 'POST' })
+}
+
+/** 红边"保留"（pin 豁免自动移除） */
+export function pinEdge(connId: string, e: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }): Promise<{ pinned: number }> {
+  return request(`/api/v1/knowledge/${connId}/graph/edges/pin`, {
+    method: 'POST',
+    body: JSON.stringify(e),
   })
 }

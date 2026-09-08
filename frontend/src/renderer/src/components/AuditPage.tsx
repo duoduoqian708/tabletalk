@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
+import { IconCheck, IconAlert } from './ui/icons'
 import ListPane from './audit/ListPane'
 import DetailPane from './audit/DetailPane'
 import ReportDrawer from './audit/ReportDrawer'
@@ -28,9 +29,9 @@ export function AuditPage(): React.JSX.Element {
     <div className="review kb-page audit-page au2">
       <div className="concl-bar">
         {calm
-          ? <span className="cb-verdict ok">✓ {t('audit.allClearToday')}</span>
+          ? <span className="cb-verdict ok"><IconCheck size={11} /> {t('audit.allClearToday')}</span>
           : <span className="cb-verdict warn">
-              ⚠ {t('audit.todayLine', { blocked: todayBlocked, pending })}
+              <IconAlert size={13} /> {t('audit.todayLine', { blocked: todayBlocked, pending })}
               {unread > 0 && <span className="cb-unread">{t('audit.unreadN', { n: unread })}</span>}
             </span>}
         <span className="cb-sub mono">{connName}</span>

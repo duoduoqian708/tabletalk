@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { patchTable, fieldHistory, applyFieldHistory, type TableEditInput } from '@renderer/api/knowledge'
+import { Dropdown } from './Dropdown'
 import type { FieldHistoryItem, KbColumnView, KnowledgeOverview, RouteResult, TagInfo } from '@renderer/api/types'
 import type { GraphNode as Graph3DNode, GraphEdge as Graph3DEdge } from './Graph3D'
 import { useConnections } from '@renderer/store/connections'
@@ -9,19 +10,22 @@ import { useI18n } from '@renderer/store/i18n'
 import { assignUniqueColors, getTagColor, TAG_COLORS } from '@renderer/utils/tagColors'
 import { toastMsg } from '@renderer/utils/toast'
 import { tagColorForTable } from '@renderer/lib/colors'
+import { syncIncremental } from '@renderer/api/knowledge'
 import { fmtDT } from '@renderer/lib/timefmt'
 import { Graph3D } from './Graph3D'
+import { IconEdit, IconSearch, IconPlus, IconX, IconCheck, IconRefresh, IconLock } from "./ui/icons"
 import { TableRelationGraph2D, computeInitialLayout } from './TableRelationGraph2D'
 import { GraphEdgeList } from './GraphEdgeList'
 import { KbHistoryDrawer } from './KbHistoryDrawer'
 import { trgColumns, trgEdges, trgTables, useTrg2dActions } from '@renderer/hooks/useTrg2d'
+import { ReviewLens } from './ReviewLens'
 
 /* ═══════════════════════════════════════════════
-   知识库主页（审阅/管理）
-   顶部「知识库 | 图库」双 Tab：
+   知识库主页（当前生效版本）
+   顶部「知识库 | 审核 | 图库」模式切换（审核=镜头，仅 pending_review 期间出现）：
    - 知识库：三列（左=标签 · 中=按表结构聚合的表块 · 右=选中表详情面板）
-   - 图库：全宽关系图谱（展示/编辑双形态）+ 草案边逐条审阅
-   审核动作全部行内化（表块/标签/字段/草案边 ✓✕），历史记录抽屉保留
+   - 审核：同骨架审核镜头（变更集 + new/del 徽章 + 旧版对比 + 全暂存裁决栏，见 ReviewLens）
+   - 图库：全宽关系图谱（展示/编辑双形态）
    右详情面板两块：向量化片段（可编辑覆盖） / 元数据（type 固定 table_schema）
    ═══════════════════════════════════════════════ */
 
@@ -38,8 +42,8 @@ function Tag({ name, status, color, onConfirm, onReject }: {
       {name}
       {status === 'draft' && (
         <span className="tag-acts">
-          <button onClick={onConfirm} title={t('kb.confirmTitle')}>✓</button>
-          <button onClick={onReject} title={t('kb.rejectTitle')}>✕</button>
+          <button onClick={onConfirm} title={t('kb.confirmTitle')}><IconCheck size={9} /></button>
+          <button onClick={onReject} title={t('kb.rejectTitle')}><IconX size={9} /></button>
         </span>
       )}
     </span>
@@ -74,7 +78,7 @@ function NewTagDialog({ connId, onClose }: {
       await load(connId)
       onClose()
     } catch (e) {
-      toastMsg(`创建失败：${(e as Error).message}`)
+      toastMsg(`${t('kb.createFail: ')}${(e as Error).message}`)
     } finally {
       setSaving(false)
     }
@@ -142,7 +146,7 @@ function EditTagDialog({ connId, tag, onClose }: {
       await load(connId)
       onClose()
     } catch (e) {
-      toastMsg(`保存失败：${(e as Error).message}`)
+      toastMsg(`${t('kb.saveFail: ')}${(e as Error).message}`)
     } finally {
       setSaving(false)
     }
@@ -231,7 +235,7 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
       void load(currentId)
       toastMsg(t('kb.fieldHistoryApply'))
     } catch (e) {
-      toastMsg(`回溯失败：${(e as Error).message}`)
+      toastMsg(`${t('kb.revertFail: ')}${(e as Error).message}`)
     }
   }
 
@@ -253,7 +257,7 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
       setVecEditing(false); setCmtEditing(false); setColEditing(null)
       await load(currentId)
     } catch (e) {
-      toastMsg(`保存失败：${(e as Error).message}`)
+      toastMsg(`${t('kb.saveFail: ')}${(e as Error).message}`)
     }
   }
 
@@ -270,10 +274,10 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
       <section className="tdp-sec">
         <div className="tdp-sec-h mono">
           {t('kb.vecChunk')}
-          {overview.embedding_provider === 'hash' ? (
-            <span className="emb-state off" title={t('kb.embUnconfiguredHint')}>{t('kb.embOff')}</span>
-          ) : (
+          {overview.embedding_provider ? (
             <span className="emb-state on" title={t('kb.embOnTitle')}>{t('kb.embOn')}</span>
+          ) : (
+            <span className="emb-state off" title={t('kb.embUnconfiguredHint')}>{t('kb.embOff')}</span>
           )}
         </div>
         {vecEditing ? (
@@ -288,12 +292,28 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
         ) : (
           <div className="tdp-vec">
             <div className="tdp-vec-head">
-              <span className={`tdp-vec-badge${tbl.vector_override ? ' over' : ''}`}>
-                {tbl.vector_override ? t('kb.vecOverride') : t('kb.vecGenerated')}
-              </span>
+              {tbl.vector_override ? (
+                <span className="tdp-vec-badge over">{t('kb.vecOverride')}</span>
+              ) : tbl.vector_text ? (
+                <span className="tdp-vec-badge">{t('kb.vecProfile')}</span>
+              ) : (
+                <span className="tdp-vec-badge none">{t('kb.vecNeedProfile')}</span>
+              )}
               <span className="tdp-hint mono">({t('kb.vecScope')})</span>
-              <button className="mini-edit" onClick={beginVecEdit}>✎ {t('kb.edit')}</button>
+              <span className="spacer" />
+              {tbl.vector_override && (
+                <button className="mini-edit" title={t('kb.vecResetTitle')}
+                  onClick={() => void saveEdit({ table: tbl.name, vector_text: '' })}>
+                  <IconX size={11} /> {t('kb.vecReset')}
+                </button>
+              )}
+              <button className="mini-edit" onClick={beginVecEdit}><IconEdit size={11} /> {t('kb.edit')}</button>
             </div>
+            {tbl.proposed_profile && (
+              <div className="tdp-vec-pending mono" title={tbl.proposed_profile}>
+                {t('kb.vecPendingProfile')}：{tbl.proposed_profile.length > 80 ? `${tbl.proposed_profile.slice(0, 80)}…` : tbl.proposed_profile}
+              </div>
+            )}
             <div className="tdp-vec-text">{tbl.vector_text || <span className="kb-none">{t('kb.noDesc')}</span>}</div>
           </div>
         )}
@@ -305,7 +325,7 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
 
         <div className="tdp-kv">
           <span className="tdp-kv-k mono">type</span>
-          <span className="tdp-kv-v tdp-kv-lock mono">table_schema <span title={t('kb.typeLocked')}>🔒</span></span>
+          <span className="tdp-kv-v tdp-kv-lock mono">table_schema <span className="tdp-lock-ic" title={t('kb.typeLocked')}><IconLock size={10} /></span></span>
         </div>
         <div className="tdp-kv">
           <span className="tdp-kv-k mono">{t('kb.version')}</span>
@@ -343,11 +363,11 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
           <span className="tdp-kv-v">
             {tbl.proposed_comment && (
               <span className="mini-acts">
-                <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name)}>✓</button>
-                <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name)}>✕</button>
+                <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name)}><IconCheck size={10} /></button>
+                <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name)}><IconX size={10} /></button>
               </span>
             )}
-            <button className="mini-edit" onClick={beginCmtEdit}>✎ {t('kb.edit')}</button>
+            <button className="mini-edit" onClick={beginCmtEdit}><IconEdit size={11} /> {t('kb.edit')}</button>
           </span>
         </div>
         {cmtEditing ? (
@@ -372,9 +392,10 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
         {/* 字段：name/type/pk/fk 只读；comment/values/example 知识字段可编辑 */}
         <div className="tdp-fields-h mono">
           {t('kb.detailColumns')} <span className="tdp-hint">({tbl.columns.length})</span>
-          {(tbl.proposed_comment || tbl.columns.some((c) => c.proposed_comment || c.proposed_values || c.proposed_example)) && (
+          {/* pending_review 期间隐藏批量裁决（拆除清单#5：裁决唯一收尾点=审核台账印章栏），编辑保留 */}
+          {overview?.kb_status !== 'pending_review' && (tbl.proposed_comment || tbl.columns.some((c) => c.proposed_comment || c.proposed_values || c.proposed_example)) && (
             <span className="mini-acts">
-              <button title={t('kb.applyAll')} onClick={() => confirmComment(currentId, tbl.name)}>✓ {t('kb.applyAll')}</button>
+              <button title={t('kb.applyAll')} onClick={() => confirmComment(currentId, tbl.name)}><IconCheck size={10} /> {t('kb.applyAll')}</button>
               <button title={t('kb.keepAll')} onClick={() => rejectComment(currentId, tbl.name)}>⟲ {t('kb.keepAll')}</button>
             </span>
           )}
@@ -390,12 +411,16 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
                 {col.fk && <span className="ckey fk mono">FK</span>}
                 {col.is_enum && <span className="ckey enum mono">ENUM</span>}
                 <span className="spacer" />
-                <button className="mini-edit" onClick={() => beginColEdit(col)}>✎</button>
+                <button className="mini-edit" onClick={() => beginColEdit(col)}><IconEdit size={11} /></button>
                 {(col.proposed_comment || col.proposed_values || col.proposed_example) && (
                   <span className="mini-acts">
                     <button title={t('kb.compareTitle')} onClick={() => setCmpOpen({ table: tbl.name, column: col.name })}>⧉</button>
-                    <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name, col.name)}>✓</button>
-                    <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name, col.name)}>✕</button>
+                    {overview?.kb_status !== 'pending_review' && (
+                      <>
+                        <button title={t('kb.applyProposal')} onClick={() => confirmComment(currentId, tbl.name, col.name)}><IconCheck size={9} /></button>
+                        <button title={t('kb.keepCurrent')} onClick={() => rejectComment(currentId, tbl.name, col.name)}><IconX size={9} /></button>
+                      </>
+                    )}
                   </span>
                 )}
               </div>
@@ -503,7 +528,7 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
                     {col.proposed_values && <div className="cvals" title={col.proposed_values}>{t('kb.colValues')}: {col.proposed_values}</div>}
                     {col.proposed_example && <div className="cexample mono">{t('kb.colExample')} {col.proposed_example}</div>}
                   </div>
-                  <button className="btn save" onClick={() => { void confirmComment(currentId, cmpOpen.table, cmpOpen.column); setCmpOpen(null) }}>✓ {t('kb.applyProposal')}</button>
+                  <button className="btn save" onClick={() => { void confirmComment(currentId, cmpOpen.table, cmpOpen.column); setCmpOpen(null) }}><IconCheck size={10} /> {t('kb.applyProposal')}</button>
                 </div>
               </div>
             </div>
@@ -521,14 +546,12 @@ function TableDetailPanel({ overview, selName, currentId, colorByTag, onOpenGrap
 export function KnowledgeReview(): React.JSX.Element {
   const currentId = useConnections((s) => s.currentId)
   const connName = useConnections((s) => s.list.find((c) => c.id === s.currentId)?.name ?? '—')
-  const { overview, loading, busy, error, load, buildProgress,
-    confirmComment, rejectComment, confirmTag, rejectTag, assignTags,
-    confirmAll, discardAll } = useKnowledge()
+  const { overview, loading, busy, error, load, dismissError,
+    confirmComment, rejectComment, confirmTag, rejectTag, assignTags } = useKnowledge()
   const { t } = useI18n()
   const openBuildDialog = useKbGate((s) => s.openBuildDialog)
-  const buildPct = buildProgress?.percent ?? null
 
-  const [mode, setMode] = useState<'kb' | 'graph'>('kb')
+  const [mode, setMode] = useState<'kb' | 'review' | 'graph'>('kb')
   const [selTags, setSelTags] = useState<Set<string>>(new Set())
   const [selTable, setSelTable] = useState<string | null>(null)
   const [showDraftOnly, setShowDraftOnly] = useState(false)
@@ -543,13 +566,13 @@ export function KnowledgeReview(): React.JSX.Element {
   const [graphMode, setGraphMode] = useState<'display' | 'edit'>('display')
   /** 2D 编辑页：关系预览列表选中的边 key（联动高亮定位） */
   const [hlEdgeKey, setHlEdgeKey] = useState<string | null>(null)
-  /** 历史记录抽屉（审计 origin=kb_build 的构建/重建/放弃/启用留痕） */
+  /** {t('kb.history')}抽屉（审计 origin=kb_build 的构建/重建/放弃/启用留痕） */
   const [historyOpen, setHistoryOpen] = useState(false)
-  /** 顶部批量操作（仅 pending_review 显示）：确认启用 / 放弃本轮 的二次确认弹窗开关 */
-  const [batchConfirm, setBatchConfirm] = useState(false)
-  const [batchDiscard, setBatchDiscard] = useState(false)
-  /** 确认启用中的版本写入等待遮罩（写入向量库 → 清理旧版本 → 生效） */
-  const [confirming, setConfirming] = useState(false)
+  /** 增量同步任务进度（与构建同一 job 通道，按 kind 区分：构建期间不误显"同步中"） */
+  const syncTask = useKnowledge((s) => s.syncTask)
+  const syncBusy = useKnowledge((s) => s.busy)
+  const buildProgress = useKnowledge((s) => s.buildProgress)
+  const syncing = syncBusy && buildProgress !== null && buildProgress.connId === currentId && buildProgress.kind === 'sync'
   const trg2dActions = useTrg2dActions(currentId)
 const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): void => {
     trg2dActions.onLayoutChange(layout)
@@ -572,7 +595,8 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
     [overview?.tables],
   )
   const g3dEdges: Graph3DEdge[] = useMemo(
-    () => overview?.graph.edges.map((e) => ({ table: e.from, ref_table: e.to })) ?? [],
+    // 透传完整 API GraphEdge（含 guard/cols/kinds/cardinality），3D 边弹窗展示详情
+    () => overview?.graph.edges ?? [],
     [overview?.graph.edges],
   )
 
@@ -598,6 +622,29 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
   useEffect(() => {
     if (currentId) void load(currentId)
   }, [currentId, load])
+
+  // 进页提醒弹窗已删除（2026-09 拆除清单）：pending_review 由审核 Tab + 门禁卡引导，不再自动弹窗
+  const reviewWanted = useKbGate((s) => s.reviewWantedConnId)
+  const consumeReview = useKbGate((s) => s.consumeReview)
+  useEffect(() => {
+    if (reviewWanted && reviewWanted === currentId && overview?.kb_status === 'pending_review') {
+      consumeReview(currentId)
+      setMode('review')
+    }
+  }, [reviewWanted, currentId, overview?.kb_status, consumeReview])
+
+  // 完成引导（2026-09）：构建完成（kb_status 转入 pending_review）且用户正停在知识库页
+  // → toast + 自动跳进审核台账；仅监听"转变"，后进页/刷新不误跳（状态本身不触发）
+  const prevKbStatus = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    const cur = overview?.kb_status ?? null
+    if (prevKbStatus.current !== undefined && cur === 'pending_review'
+        && prevKbStatus.current !== 'pending_review' && mode !== 'review') {
+      toastMsg(t('kb.review.buildDoneJump', { n: totalPending }))
+      setMode('review')
+    }
+    prevKbStatus.current = cur
+  }, [overview?.kb_status, totalPending, mode, t])
 
   useEffect(() => {
     if (selTags.size > 0) {
@@ -659,7 +706,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
     return ts
   }, [overview, selTags, showDraftOnly, kq])
 
-  const notBuilt = overview !== null && overview.built === false
+  const notBuilt = overview !== null && (overview.built === false || overview.kb_status === 'none')
 
   function beginEdit(table: string, comment: string): void {
     setEditing(table)
@@ -670,39 +717,36 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
     if (!currentId) return
     void patchTable(currentId, { table, table_comment: text })
       .then(() => { setEditing(null); return load(currentId) })
-      .catch((e) => toastMsg(`保存失败：${(e as Error).message}`))
+      .catch((e) => toastMsg(`${t('kb.saveFail: ')}${(e as Error).message}`))
   }
 
-  /* 顶部批量操作（pending_review → 一键确认启用 / 放弃本轮） */
-  async function doBatchConfirm(): Promise<void> {
+  /* 手动增量同步（任务化）：无变化同步返回；有变化接 job 进度（与构建同一通道），完成后刷新 */
+  async function doSync(): Promise<void> {
     if (!currentId) return
-    setBatchConfirm(false)
-    setConfirming(true)
     try {
-      await confirmAll(currentId)
+      const r = await syncIncremental(currentId)
+      if (!r.changed) {
+        toastMsg(t('kb.syncNoChange'))
+        return
+      }
+      await syncTask(currentId)
       await load(currentId)
-      toastMsg(t('kb.batchConfirmOk'))
+      const st = useKnowledge.getState().overview?.kb_status
+      if (st === 'pending_review') toastMsg(t('kb.syncDoneReview'))
+      else toastMsg(t('kb.syncDoneGeneric'))
     } catch (e) {
-      toastMsg(t('kb.confirmFail', { msg: (e as Error).message }))
-    } finally {
-      setConfirming(false)
-    }
-  }
-
-  async function doBatchDiscard(): Promise<void> {
-    if (!currentId) return
-    try {
-      await discardAll(currentId)
-      toastMsg(t('kb.batchDiscardOk'))
-      setBatchDiscard(false)
-    } catch (e) {
-      toastMsg(`放弃失败：${(e as Error).message}`)
+      toastMsg(t('kb.review.applyFail', { msg: (e as Error).message }))
     }
   }
 
   return (
     <div className="review kb-page">
-      {error && <div className="review-err mono">{error}</div>}
+      {error && (
+        <div className="review-err mono">
+          <span className="review-err-text">{error}</span>
+          <button className="review-err-x" onClick={dismissError} title={t('common.close')}>✕</button>
+        </div>
+      )}
 
       {notBuilt ? (
         <div className="kb-not-built">
@@ -712,7 +756,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
             {t('kb.notBuiltDesc')}
           </div>
           <button className="btn save" disabled={busy} onClick={() => openBuildDialog('init')}>
-            {busy ? `${t('kb.building', { n: buildPct ?? 0 })}…` : t('kb.build')}
+            {busy ? `${t('kb.buildingLabel')}…` : t('kb.build')}
           </button>
         </div>
       ) : loading && !overview ? (
@@ -725,41 +769,44 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
               <button type="button" className={`kb-mode-btn${mode === 'kb' ? ' on' : ''}`} onClick={() => setMode('kb')}>
                 {t('kb.tabKb')}
               </button>
+              {/* 审核 = 中间态（2026-09 用户裁定）：不与知识库/图库并列为常驻 Tab。
+                  入口：构建完成自动跳转 / 门禁卡 CTA / 待审 chip（下） */}
               <button type="button" className={`kb-mode-btn${mode === 'graph' ? ' on' : ''}`} onClick={() => setMode('graph')}>
                 {t('kb.tabGraph')}
               </button>
             </div>
-            {mode === 'kb' && totalPending > 0 && (
-              <span className="kb-topbar-pending mono">{t('kb.statsDraft')} {totalPending}</span>
+            {mode !== 'review' && overview.kb_status === 'pending_review' && totalPending > 0 && (
+              /* 待审 chip = 台账回头入口（关闭台账后可重新进入） */
+              <button type="button" className="kb-topbar-pending mono as-btn" onClick={() => setMode('review')}
+                      title={t('kb.review.openLedger')}>
+                {t('kb.review.pendingChip', { n: totalPending })} →
+              </button>
             )}
             <span className="spacer" />
-            {overview.kb_status === 'pending_review' && (
-              <span className="kb-topbar-batch">
-                <button className="btn save mini" onClick={() => setBatchConfirm(true)}
-                        disabled={busy} title={t('kb.batchConfirmTitle')}>
-                  {t('kb.confirmAll')}
-                </button>
-                <button className="btn ghost mini" onClick={() => setBatchDiscard(true)}
-                        disabled={busy} title={t('kb.batchDiscardTitle')}>
-                  {t('kb.discardAll')}
-                </button>
-              </span>
-            )}
             {overview.synced_at && (
               <span className="kb-synced mono" title={t('kb.syncedTitle')}>
                 {t('kb.lastSync')} {fmtDT(overview.synced_at)}
               </span>
             )}
-            <button className="iconbtn" onClick={() => setHistoryOpen(true)} title="查看知识库历史记录（构建/重建/放弃/启用）">
-              历史记录
+            <button className="iconbtn" onClick={() => setHistoryOpen(true)} title={t('kb.historyTitle')}>
+              {t('kb.history')}
             </button>
             <button className="iconbtn rebuild-btn" onClick={() => openBuildDialog('rebuild')} disabled={busy}
                     title={t('kb.rebuildTitle')}>
-              {busy ? t('kb.building', { n: buildPct ?? 0 }) : t('kb.rebuildAll')}
+              {busy ? t('kb.buildingLabel') : t('kb.rebuildAll')}
+            </button>
+            <button className="iconbtn" onClick={() => void doSync()} disabled={busy || syncing}
+                    title={syncing ? t('kb.syncingTitle') : t('kb.syncTitle')}>
+              {syncing ? t('kb.syncingLabel') : t('kb.syncIncr')}
             </button>
           </div>
 
-          {mode === 'graph' ? (
+          {/* 进页提醒弹窗已删除（拆除清单#1）：不再自动弹窗 */}
+
+          {mode === 'review' ? (
+            /* ════════ 审核镜头：同骨架变更集 + 全暂存裁决栏（唯一收尾点） ════════ */
+            <ReviewLens onClose={() => setMode('kb')} />
+          ) : mode === 'graph' ? (
             /* ════════ 图库 Tab：3D/2D 切换 + 草案边审阅 ════════ */
             <div className="kb-graph">
               <div className="kb-right-cap mono">
@@ -793,9 +840,9 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
 <div className="trg2d-split">
                     <GraphEdgeList edges={trgEdges(overview)} activeKey={hlEdgeKey}
                       onPick={(key) => setHlEdgeKey((cur) => (cur === key ? null : key))} />
-                    <div className="kb-trg2d-wrap" style={{ '--graph-node-font': '10.5px' } as React.CSSProperties}>
+                    <div className="kb-trg2d-wrap">
                       <button type="button" className="trg2d-reset" onClick={handleResetLayout}
-                        title={t('kb.resetLayoutTitle')}>⟳ {t('kb.resetLayout')}</button>
+                        title={t('kb.resetLayoutTitle')}><IconRefresh size={10} /> {t('kb.resetLayout')}</button>
                       <TableRelationGraph2D
                           tables={trgTables(overview)}
                           edges={trgEdges(overview)}
@@ -837,9 +884,9 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                             {edge.reason && <div className="rv-card-body rv-edge-reason">{edge.reason}</div>}
                           </div>
                           <div className="rv-card-acts">
-                            <button className="rv-btn-ok" onClick={() => confirmGraphDraftSafe(edge.from_table)} title={edge.status === 'previously_rejected' ? t('kb.graphEdgeRestoreTitle') : t('kb.confirmTitle')}>✓</button>
+                            <button className="rv-btn-ok" onClick={() => confirmGraphDraftSafe(edge.from_table)} title={edge.status === 'previously_rejected' ? t('kb.graphEdgeRestoreTitle') : t('kb.confirmTitle')}><IconCheck size={13} /></button>
                             {edge.status !== 'previously_rejected' && (
-                              <button className="rv-btn-no" onClick={() => rejectGraphDraftSafe(edge.from_table)}>✕</button>
+                              <button className="rv-btn-no" onClick={() => rejectGraphDraftSafe(edge.from_table)}><IconX size={13} /></button>
                             )}
                           </div>
                         </div>
@@ -867,13 +914,13 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                           style={{ '--tag-c': getTagColor(tg.name, colorByTag) } as React.CSSProperties}
                           onClick={() => toggleTag(tg.name)}>
                           <span className="kb-tag-chip">
-                            <span className="kb-tag-name" style={{ color: 'var(--amber)' }}>{tg.name}</span>
+                            <span className="kb-tag-name">{tg.name}</span>
                           </span>
                           <button className="mini-edit" title={t('kb.editTag')}
-                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
+                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}><IconEdit size={11} /></button>
                           <span className="mini-acts">
-                            <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}>✓</button>
-                            <button title={t('kb.rejectTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
+                            <button title={t('kb.confirmTitle')} onClick={(e) => { e.stopPropagation(); void confirmTag(currentId, tg.name) }}><IconCheck size={10} /></button>
+                            <button title={t('kb.rejectTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}><IconX size={10} /></button>
                           </span>
                         </div>
                       ))}
@@ -894,11 +941,11 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                             <span className="kb-tag-cnt mono">{tagCount[tg.name] ?? 0}</span>
                           </span>
                           <button className="mini-edit" title={t('kb.editTag')}
-                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}>✎</button>
+                            onClick={(e) => { e.stopPropagation(); setEditTag(tg) }}><IconEdit size={11} /></button>
                           <span className="mini-acts">
-                            <button title={t('kb.deleteTagTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}>✕</button>
+                            <button title={t('kb.deleteTagTitle')} onClick={(e) => { e.stopPropagation(); void rejectTag(currentId, tg.name) }}><IconX size={10} /></button>
                           </span>
-                          {on && <span className="kb-tag-active mono">✓</span>}
+                          {on && <span className="kb-tag-active mono"><IconCheck size={9} /></span>}
                         </div>
                       )
                     })}
@@ -908,7 +955,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                       <span className="kb-tag-cnt mono">{untaggedCount}</span>
                     </div>
                   </div>
-                  <button className="kb-tag-add-new" onClick={() => setNewTagOpen(true)}>＋ {t('kb.newTag')}</button>
+                  <button className="kb-tag-add-new" onClick={() => setNewTagOpen(true)}><IconPlus size={10} /> {t('kb.newTag')}</button>
                 </div>
                 {selTags.size > 0 && (
                   <div className="kb-route-preview">
@@ -918,7 +965,7 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                     ) : (
                       <div className="rv-none mono">{t('kb.routePreviewHint')}</div>
                     )}
-                    <button className="kb-clear-filter" onClick={() => setSelTags(new Set())}>✕ {t('kb.clearFilter')}</button>
+                    <button className="kb-clear-filter" onClick={() => setSelTags(new Set())}><IconX size={9} /> {t('kb.clearFilter')}</button>
                   </div>
                 )}
               </section>
@@ -933,14 +980,14 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                       placeholder={t('kb.searchTablePlaceholder')}
                       onChange={(e) => setKq(e.target.value)}
                     />
-                    <button className="kb-qbtn" disabled={!kq.trim()} title={t('kb.searchTblTitle')}>🔍 {t('kb.search')}</button>
+                    <button className="kb-qbtn" disabled={!kq.trim()} title={t('kb.searchTblTitle')} onClick={() => setKq(kq.trim())}><IconSearch size={12} /> {t('kb.search')}</button>
                     <button className={`kb-qbtn${showDraftOnly ? ' on' : ''}`} onClick={() => setShowDraftOnly((v) => !v)}>{t('kb.onlyDraft')}</button>
                     {selTags.size > 0 && (
-                      <button className="kb-qbtn on" onClick={() => setSelTags(new Set())}>{t('kb.filtering', { n: selTags.size })} ✕</button>
+                      <button className="kb-qbtn on" onClick={() => setSelTags(new Set())}>{t('kb.filtering', { n: selTags.size })} <IconX size={9} /></button>
                     )}
                   </div>
                   <span className="spacer" />
-                  <span className="kb-count mono">{filteredTables.length} 张表</span>
+                  <span className="kb-count mono">{t('kb.tableCount', { n: filteredTables.length })}</span>
                 </div>
 
                 <div className="rv-table-list kb-docs">
@@ -976,8 +1023,8 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                             <>
                               <span className="desc-text">{tbl.comment || <span className="kb-none">{t('kb.noDesc')}</span>}</span>
                               <span className="mini-acts">
-                                <button onClick={() => beginEdit(tbl.name, tbl.comment)} title={t('kb.editNoteTitle')}>✎</button>
-                                {tbl.comment_status === 'draft' && (
+                                <button onClick={() => beginEdit(tbl.name, tbl.comment)} title={t('kb.editNoteTitle')}><IconEdit size={11} /></button>
+                                {tbl.comment_status === 'draft' && overview?.kb_status !== 'pending_review' && (
                                   <>
                                     <button onClick={() => confirmComment(currentId, tbl.name)}>{t('common.confirm')}</button>
                                     <button onClick={() => rejectComment(currentId, tbl.name)}>{t('kb.reject')}</button>
@@ -994,23 +1041,24 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
                               onReject={() => rejectTag(currentId, tg.name)} />
                           ))}
                           {adding === tbl.name ? (
-                            <select
+                            <Dropdown
                               autoFocus
                               className="tag-add"
+                              style={{ width: 140 }}
                               value=""
-                              onChange={(e) => {
-                                if (e.target.value) void assignTags(currentId, tbl.name, [...tbl.tags.map((x) => x.name), e.target.value])
+                              placeholder="…"
+                              options={[
+                                { value: '', label: '…' },
+                                ...confirmedTags.filter((c) => !tbl.tags.some((x) => x.name === c.name)).map((c) => ({ value: c.name, label: c.name })),
+                              ]}
+                              onChange={(v) => {
+                                if (v) void assignTags(currentId, tbl.name, [...tbl.tags.map((x) => x.name), v])
                                 setAdding(null)
                               }}
-                              onBlur={() => setAdding(null)}
-                            >
-                              <option value="">…</option>
-                              {confirmedTags.filter((c) => !tbl.tags.some((x) => x.name === c.name)).map((c) => (
-                                <option key={c.name} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
+                              onClose={() => setAdding(null)}
+                            />
                           ) : (
-                            <button className="tag-add-btn" onClick={() => setAdding(tbl.name)}>＋</button>
+                            <button className="tag-add-btn" onClick={() => setAdding(tbl.name)}><IconPlus size={10} /></button>
                           )}
                         </div>
                       </div>
@@ -1044,60 +1092,13 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
         <EditTagDialog connId={currentId} tag={editTag} onClose={() => setEditTag(null)} />
       )}
 
-      {/* 历史记录抽屉：审计 origin=kb_build 留痕 */}
+      {/* {t('kb.history')}抽屉：审计 origin=kb_build 留痕 */}
       <KbHistoryDrawer
         open={historyOpen}
         connId={currentId}
         connName={connName}
         onClose={() => setHistoryOpen(false)}
       />
-
-      {/* 批量操作二次确认：确认启用（不可逆）/ 放弃本轮 */}
-      {batchConfirm && (
-        <div className="kb-dialog-mask" onClick={() => setBatchConfirm(false)}>
-          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="kb-dialog-title">{t('kb.batchConfirmTitle')}</div>
-            <p className="kb-dialog-sub">{t('kb.batchConfirmDesc')}</p>
-            <div className="kb-dialog-actions">
-              <button className="btn ghost" onClick={() => setBatchConfirm(false)}>{t('kb.dialogCancel')}</button>
-              <button className="btn save" disabled={busy} onClick={() => void doBatchConfirm()}>
-                {t('kb.confirmAll')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {batchDiscard && (
-        <div className="kb-dialog-mask" onClick={() => setBatchDiscard(false)}>
-          <div className="kb-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="kb-dialog-title">{t('kb.batchDiscardTitle')}</div>
-            <p className="kb-dialog-sub">{t('kb.batchDiscardDesc')}</p>
-            <div className="kb-dialog-actions">
-              <button className="btn ghost" onClick={() => setBatchDiscard(false)}>{t('kb.dialogCancel')}</button>
-              <button className="btn danger" disabled={busy} onClick={() => void doBatchDiscard()}>
-                {t('kb.discardAll')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 确认启用：版本写入等待遮罩（同步等待向量写入/清理/生效，完成后自动消失） */}
-      {confirming && (
-        <div className="kb-version-mask">
-          <div className="kb-version-card">
-            <div className="kb-version-spinner" />
-            <div className="kb-version-title">{t('kb.enablingVersion')}</div>
-            <ol className="kb-version-steps mono">
-              <li>{t('kb.vStepArchive')}</li>
-              <li>{t('kb.vStepVector')}</li>
-              <li>{t('kb.vStepClean')}</li>
-              <li>{t('kb.vStepActivate')}</li>
-            </ol>
-            <div className="kb-version-hint">{t('kb.enablingHint')}</div>
-          </div>
-        </div>
-      )}
     </div>
   )
 

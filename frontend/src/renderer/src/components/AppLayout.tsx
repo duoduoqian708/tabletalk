@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
+import { getSettings } from '@renderer/api/settings'
 import { tags as fetchTags } from '@renderer/api/knowledge'
 import { assignUniqueColors } from '@renderer/utils/tagColors'
 import { tagColorForTable } from '@renderer/lib/colors'
@@ -11,10 +12,13 @@ import { useUi, type View } from '@renderer/store/ui'
 import { useI18n } from '@renderer/store/i18n'
 import { previewTable } from '@renderer/api/schema'
 import { useAuditSignal } from '@renderer/store/auditSignal'
+import { CloseBtn } from './ui/buttons'
+import { IconGear } from './ui/icons'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
 import { KbBuildConfirmDialog } from './KbBuildConfirmDialog'
+import { useKbGateBusy } from './kbBusy'
 import { Graph3D } from './Graph3D'
 import { GraphSearch } from './GraphSearch'
 import { TagBar } from './TagBar'
@@ -95,6 +99,8 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const [modalOpen, setModalOpen] = useState(false)
   const [editingConnId, setEditingConnId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 设置抽屉打开时落到的分区：sys-btn 默认数据源管理；知识库引导等可指定 'llm' */
+  const [settingsSec, setSettingsSec] = useState('dsm')
   const list = useConnections((s) => s.list)
   const currentId = useConnections((s) => s.currentId)
   const create = useConnections((s) => s.create)
@@ -113,6 +119,21 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const rt = getRuntime()
   const [loginIsInitial, setLoginIsInitial] = useState(false)
   const showLogin = !rt?.token
+  // 首启大模型引导：chat/emb 任一未配置 → 弹一次提示
+  const [aiMiss, setAiMiss] = useState(false)
+  useEffect(() => {
+    if (!rt?.token) return
+    let alive = true
+    void getSettings().then((s) => {
+      if (!alive) return
+      const ok = (m?: { provider?: string; base_url?: string }): boolean =>
+        !!m && !!String(m.provider ?? '').trim() && (String(m.provider) === 'mock' || !!String(m.base_url ?? '').trim())
+      const chat = s.ai_models.find((m) => m.id === s.default_ai_model) ?? s.ai_models[0]
+      const emb = s.embedding_models.find((m) => m.id === s.default_embedding_model) ?? s.embedding_models[0]
+      if (!ok(chat) || !ok(emb)) setAiMiss(true)
+    }).catch(() => undefined)
+    return () => { alive = false }
+  }, [rt?.token])
 
   const active = tabs.find((t) => t.id === activeId) ?? null
   const activeReport = active?.kind === 'report' ? active.report : null
@@ -123,7 +144,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     [schemaData]
   )
   const graphEdges = useMemo(
-    () => schemaData?.foreign_keys.map((f) => ({ table: f.table, ref_table: f.ref_table })) ?? [],
+    () => schemaData?.foreign_keys.map((f) => ({ from: f.table, to: f.ref_table, from_col: f.column, to_col: f.ref_column, source: 'fk' as const })) ?? [],
     [schemaData]
   )
   const [nodeSel, setNodeSel] = useState<string | null>(null)
@@ -178,6 +199,9 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   useEffect(() => {
     try { sessionStorage.setItem('tabletalk-graph-paused', graphPaused ? '1' : '0') } catch {}
   }, [graphPaused])
+  // 知识库构建进行中 → 图谱自动暂停（canvas 60fps 渲染与构建进度 UI 叠加是卡顿主因）
+  const kbBusy = useKbGateBusy()
+  const effectiveGraphPaused = graphPaused || kbBusy
   // 左右分栏：右轨宽度（px），默认 1/4
   const wsRef = useRef<HTMLDivElement>(null)
   const g3dWrapRef = useRef<HTMLDivElement>(null)
@@ -301,8 +325,8 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         </nav>
         <span className="cur-table mono" title={t('ui.currentView')}>{subject}</span>
         <span className="spacer" />
-        <button className="sys-btn" title={t('settings.title')} onClick={() => setSettingsOpen(true)}>
-          <span className="gear">⚙</span>
+        <button className="sys-btn" title={t('settings.title')} onClick={() => { setSettingsSec('dsm'); setSettingsOpen(true) }}>
+          <span className="gear"><IconGear size={14} /></span>
         </button>
       </header>
 
@@ -353,7 +377,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                           selectedName={nodeSel}
                           mini={!!nodeData}
                           dimmedTables={dimmedTables}
-                          paused={graphPaused}
+                          paused={effectiveGraphPaused}
                           onTogglePause={() => setGraphPaused((v) => !v)}
                           onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
                           onClearSelection={() => { setNodeSel(null); setNodePos(null) }}
@@ -383,12 +407,13 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                         })()}
                       </div>
                       <button
-                        className={`g3d-pause g3d-pause-external ${graphPaused ? 'is-paused' : ''}`}
-                        title={graphPaused ? t('graph.resume') : t('graph.pause')}
-                        onClick={() => setGraphPaused((v) => !v)}
-                        aria-label={graphPaused ? t('graph.resume') : t('graph.pause')}
+                        className={`g3d-pause g3d-pause-external ${effectiveGraphPaused ? 'is-paused' : ''}`}
+                        title={kbBusy ? t('graph.kbBuilding') : (effectiveGraphPaused ? t('graph.resume') : t('graph.pause'))}
+                        onClick={() => { if (!kbBusy) setGraphPaused((v) => !v) }}
+                        aria-label={kbBusy ? t('graph.kbBuilding') : (effectiveGraphPaused ? t('graph.resume') : t('graph.pause'))}
+                        style={kbBusy ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
                       >
-                        {graphPaused ? '▶' : '⏸'}
+                        {effectiveGraphPaused ? '▶' : '⏸'}
                       </button>
                     </>
                   ) : (
@@ -399,14 +424,10 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                             <span key={tab.id} className={`ws-tab${tab.id === activeId ? ' on' : ''}`} onClick={() => activate(tab.id)}>
                               <span className="ws-tab-ic">{tab.kind === 'report' ? '▤' : '◈'}</span>
                               <span className="ws-tab-t">{tab.kind === 'report' ? `${t('app.tab.report')} · ${tab.title}` : tab.name ? `${t('app.tab.data')} · ${tab.name}` : tab.title}</span>
-                              <button
-                                className="ws-tab-x"
-                                title={t('common.close')}
-                                onClick={(e) => {
+                              <CloseBtn className="ws-tab-x" title={t('common.close')} onClick={(e) => {
                                   e.stopPropagation()
                                   closeTab(tab.id)
-                                }}
-                              >✕</button>
+                                }} />
                             </span>
                           ))}
                         </div>
@@ -463,11 +484,33 @@ export function AppLayout({ health }: Props): React.JSX.Element {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        initialSec={settingsSec as 'dsm' | 'llm' | 'privacy' | 'general'}
         // 编辑/新建弹窗盖在抽屉上（modal z-index 高于抽屉）：保存后回到设置页
         onNewConnection={() => { setEditingConnId(null); setModalOpen(true) }}
         onEditConnection={(id) => { setEditingConnId(id); setModalOpen(true) }}
+        // 默认向量模型切换后「现在重构」：关抽屉进知识库页（overview 加载即自动 reembed）
+        onNavigateToKnowledge={() => { setSettingsOpen(false); setView('knowledge') }}
       />
-      <KbBuildGate />
+      <KbBuildGate
+        onOpenSettings={(sec) => { setSettingsSec(sec); setSettingsOpen(true) }}
+      />
+      {aiMiss && (
+        <div className="modal-mask open" onClick={(e) => { if (e.target === e.currentTarget) setAiMiss(false) }}>
+          <div className="modal confirm" style={{ width: 420 }}>
+            <div className="mh">
+              <span className="t">⚠ {t('app.aiRequired.title')}</span>
+              <CloseBtn className="close" title={t('common.close')} onClick={() => setAiMiss(false)} />
+            </div>
+            <div className="mb">
+              <div className="del-text">{t('app.aiRequired.desc')}</div>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setAiMiss(false)}>{t('app.aiRequired.later')}</button>
+              <button className="btn save" onClick={() => { setAiMiss(false); setSettingsSec('llm'); setSettingsOpen(true) }}>{t('app.aiRequired.go')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <KbBuildConfirmDialog />
       <LoginDialog
         open={showLogin}

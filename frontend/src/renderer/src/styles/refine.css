@@ -64,12 +64,8 @@
   background: var(--accent);
   box-shadow: 0 0 8px var(--accent-glow);
 }
-.appbar .gw,
-.appbar .cur-table {
+.appbar .gw, .appbar .cur-table {
   font-size: 12px;
-}
-.gw-provider {
-  color: var(--ink-strong);
 }
 
 /* ── 按钮体系 ── */
@@ -112,8 +108,7 @@
   color: var(--ink);
   background: var(--void-4);
 }
-.btn:disabled,
-.btn[disabled] {
+.btn:disabled, .btn[disabled] {
   opacity: 0.45;
   cursor: not-allowed;
   transform: none;
@@ -141,11 +136,7 @@
 }
 
 /* ── 输入框 ── */
-.rs-input,
-.kb-search input,
-.modal input[type='text'],
-.modal input[type='password'],
-.modal input:not([type]) {
+.rs-input, .kb-search input, .modal input[type='text'], .modal input[type='password'], .modal input:not([type]) {
   font-size: 13px;
   padding: 9px 12px;
   border-radius: 10px;
@@ -154,15 +145,12 @@
   color: var(--ink);
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
-.rs-input:focus,
-.kb-search input:focus,
-.modal input:focus {
+.rs-input:focus, .kb-search input:focus, .modal input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
-.modal input::placeholder,
-.rs-input::placeholder {
+.modal input::placeholder, .rs-input::placeholder {
   color: var(--ink-faint);
   opacity: 1;
 }
@@ -232,16 +220,6 @@
 }
 
 /* ── 对话轮次 ── */
-.turn-text {
-  font-size: 13.5px;
-  line-height: 1.65;
-  color: var(--ink);
-}
-.turn-user {
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--ink-strong);
-}
 
 /* ── SQL 卡 ── */
 .sql {
@@ -254,19 +232,6 @@
 .sql:hover {
   border-color: var(--line-strong);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
-}
-.sql .sq-badge {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  padding: 3px 10px;
-  border-radius: 99px;
-}
-.sql .sq-sql {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--ink);
 }
 .sql.allow { border-left: 3px solid var(--green); }
 .sql.review { border-left: 3px solid var(--amber); }
@@ -298,20 +263,6 @@
 }
 
 /* ── 数据表 ── */
-.dt-head th {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--ink-dim);
-  background: var(--void-2);
-}
-.dt-body td {
-  font-size: 13px;
-  line-height: 1.5;
-}
-.dt-row:hover {
-  background: var(--void-3);
-}
 
 /* ── 知识库页 ── */
 .kb-topbar {
@@ -320,8 +271,7 @@
   background: var(--void-1);
   padding: 10px 14px;
 }
-.kb-left,
-.kb-right {
+.kb-left, .kb-right {
   border-radius: 14px;
   border: 1px solid var(--line-strong);
 }
@@ -339,10 +289,6 @@
 }
 .rv-col .cname {
   font-size: 12px;
-}
-.rv-col .ccomment {
-  font-size: 12px;
-  color: var(--ink-dim);
 }
 
 /* ── 图谱画布 ── */
@@ -364,8 +310,7 @@
 }
 
 /* ── 徽标 / 状态点 ── */
-.kb-badge,
-.emb-state {
+.kb-badge, .emb-state {
   font-size: 11px;
   padding: 3px 10px;
   border-radius: 99px;
@@ -400,9 +345,7 @@
 }
 
 /* ── 面板标题统一 ── */
-.rv-panel-head,
-.kb-tabs,
-.rr-h {
+.rv-panel-head, .kb-tabs, .rr-h {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -462,31 +405,7 @@
 }
 
 /* ── 工作台图谱：节点/边精修（CSS 覆盖 SVG presentation 属性） ── */
-.g-node rect {
-  transition: filter 160ms var(--ease), stroke 160ms var(--ease);
-}
-.g-node:hover rect {
-  filter: drop-shadow(0 4px 14px rgba(24, 28, 38, 0.16));
-  stroke: var(--g-edge-hot) !important;
-  stroke-width: 1.4 !important;
-}
-.g-node text {
-  font-family: var(--font-sans);
-}
-.g-node .g-node-name {
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-}
-.g-node .g-node-sub {
-  font-size: 11px;
-  opacity: 0.92;
-}
-.g-node rect[stroke-dasharray] {
-  stroke-dasharray: 5 3;
-}
 /* 边：悬停加宽 */
-.g-node + path,
 .g-svg path {
   transition: stroke 160ms var(--ease), stroke-width 160ms var(--ease);
 }

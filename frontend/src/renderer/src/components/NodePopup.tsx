@@ -1,4 +1,5 @@
 import { useI18n } from '@renderer/store/i18n'
+import { CloseBtn } from './ui/buttons'
 
 interface Props {
   table: string
@@ -19,7 +20,7 @@ export function NodePopup({ table, kind, rowCount, columnCount, fkCount, x, y, o
       <div className="np-head">
         <span className="np-title">{t('node.tableLabel')} <b>{table}</b></span>
         {kind === 'view' && <span className="np-view-badge">view</span>}
-        <button className="np-x" onClick={onClose} title={t('common.close')}>✕</button>
+        <CloseBtn className="np-x" title={t('common.close')} onClick={onClose} />
       </div>
       <div className="np-stats">
         <div className="np-stat"><span className="np-num">{rowCount.toLocaleString()}</span><span className="np-lab">{t('node.rowLabel')}</span></div>

@@ -107,13 +107,12 @@ export interface ReportRef {
   row_count: number
 }
 
+// 引擎合一（2026-09）：后端只发 table/chart 两种 block；sql_editor/confirm/choice
+// 是旧 chat_stream 时代的替代显示物（卡片挂载修复后无发射方），已删。
 export type Block =
   | { kind: 'text'; text: string }
-  | { kind: 'sql_editor'; sql: string; dialect?: string; editable?: boolean }
   | { kind: 'table'; columns: string[]; rows: unknown[][]; title?: string }
   | { kind: 'chart'; chartType: 'bar' | 'line' | 'pie'; title?: string; data: unknown[][]; columns?: string[] }
-  | { kind: 'confirm'; prompt: string; confirmLabel?: string; cancelLabel?: string }
-  | { kind: 'choice'; prompt: string; multiple: boolean; options: { label: string; value: string }[] }
 
 export type AiEvent =
   | { type: 'turn_start'; connection: string }
@@ -137,11 +136,78 @@ export type AiEvent =
   | { type: 'plan_stopped'; reason: string }
   // 报告模式事件
   | { type: 'report_start'; connection: string; report_id: string; snapshot_ts: string }
-  | { type: 'clarify'; question: string; field?: string; options?: string[] }
+  | { type: 'clarify'; question: string; field?: string; options?: string[]; origin?: 'ask_user' | 'report' }
   | { type: 'plan'; sections: ReportSection[] }
   | ({ type: 'section' } & ReportSectionResult)
   | { type: 'narration'; section_id: string | null; text: string; refs: ReportRef[] }
   | { type: 'report_done'; report_id: string; section_count: number }
+  // 受控计划（propose_plan → 人审 → 分段执行）
+  | { type: 'plan_pending'; plan_id: string; title: string; steps: { action: string; description: string; sql?: string }[]; expires_in: number }
+  | { type: 'plan_started'; plan_id: string; title: string; steps: number }
+  | { type: 'plan_awaiting'; plan_id: string; remaining: number }
+  | { type: 'plan_done'; plan_id: string; completed: number }
+  | { type: 'plan_failed'; plan_id: string; completed: number }
+
+/** 受控计划确认：SSE 流式执行下一段（task_* / sql_card / plan_* 事件）。
+ *  signal：停止按钮/墙钟超时兜底（AbortError 向调用方抛出，由其静默处理）。 */
+export async function confirmPlanStream(
+  planId: string,
+  sessionId: string,
+  onEvent: (ev: AiEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const rt = getRuntime()
+  const locale = useI18n.getState().locale
+  const res = await fetch(`/api/v1/ai/plans/${encodeURIComponent(planId)}/confirm`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(rt?.token ? { 'X-TableTalk-Token': rt.token } : {}),
+      ...(locale ? { 'X-Locale': locale } : {})
+    },
+    body: JSON.stringify({ session_id: sessionId }),
+    ...(signal ? { signal } : {})
+  })
+  if (!res.ok || !res.body) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const body = (await res.json()) as { detail?: string }
+      if (body.detail) msg = body.detail
+    } catch {
+      /* 非 JSON 错误体 */
+    }
+    throw new Error(msg)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      const t = line.trim()
+      if (!t.startsWith('data:')) continue
+      const payload = t.slice(5).trim()
+      if (payload === '[DONE]') return
+      try {
+        onEvent(JSON.parse(payload) as AiEvent)
+      } catch {
+        /* 跳过非 JSON 事件 */
+      }
+    }
+  }
+}
+
+/** 受控计划拒绝：标记 rejected 并写系统消息（模型下轮可见） */
+export async function rejectPlan(planId: string, sessionId: string): Promise<void> {
+  await request(`/api/v1/ai/plans/${encodeURIComponent(planId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId })
+  })
+}
 
 export interface AiToolLog {
   id: string
@@ -192,9 +258,10 @@ export async function testGateway(p: {
   baseUrl?: string
   apiKey?: string
   model?: string
+  onStep?: (step: string, ok: boolean, value?: number | null) => void
 }): Promise<{
   ok: boolean
-  provider: string
+  provider?: string
   latency_ms?: number
   error?: string
   reply?: string
@@ -208,7 +275,56 @@ export async function testGateway(p: {
   if (p.apiKey) params.set('api_key', p.apiKey)
   if (p.model) params.set('model', p.model)
   const qs = params.toString()
-  return request(`/api/v1/ai/test${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  const rt = getRuntime()
+  if (!rt) throw new Error(useI18n.getState().t('api.sidecarNotReady'))
+  const locale = useI18n.getState().locale
+  const res = await fetch(`${rt.baseUrl}/api/v1/ai/test${qs ? `?${qs}` : ''}`, {
+    method: 'POST',
+    headers: {
+      ...(rt.token ? { 'X-TableTalk-Token': rt.token } : {}),
+      ...(locale ? { 'X-Locale': locale } : {})
+    }
+  })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const body = (await res.json()) as { detail?: string }
+      if (body.detail) msg = body.detail
+    } catch { /* 非 JSON */ }
+    throw new Error(msg)
+  }
+  const contentType = res.headers.get('content-type') ?? ''
+  // mock/early-error 返回 JSON（非 SSE）
+  if (!contentType.includes('text/event-stream')) {
+    return res.json() as Promise<any>
+  }
+  // SSE 流式：逐事件回调 onStep，返回最后一个 done 事件
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  let doneResult: any = { ok: false }
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const lines = buf.split('\n')
+    buf = lines.pop() ?? ''
+    for (const line of lines) {
+      const t = line.trim()
+      if (!t.startsWith('data:')) continue
+      const payload = t.slice(5).trim()
+      if (!payload) continue
+      try {
+        const ev = JSON.parse(payload)
+        if (ev.step === 'done') {
+          doneResult = ev
+        } else if (p.onStep) {
+          p.onStep(ev.step, ev.ok, ev.value ?? null)
+        }
+      } catch { /* 忽略解析错误 */ }
+    }
+  }
+  return doneResult
 }
 
 /** 嵌入模型连通性 + 维度探测测试。 */
@@ -237,6 +353,45 @@ export async function testEmbedding(p: {
   return request(`/api/v1/ai/embedding/test${qs ? `?${qs}` : ''}`, { method: 'POST' })
 }
 
+export interface BuiltinProvider {
+  /** 规范名（存库值，后端别名归一到 adapter） */
+  name: string
+  /** 下拉显示名（火山有按量/Agent Plan 双条目，display 唯一） */
+  display: string
+  adapter: string
+  /** URL 预设（自动带出，可改） */
+  base_url: string
+  /** "|" 分隔的推荐模型候选（拉取失败时的预设兜底） */
+  models: string
+  /** 默认向量维度（仅向量清单有，选中时预填） */
+  dimensions?: string
+}
+
+/** 内置供应商下拉清单（含 URL 预设与推荐模型）。 */
+export async function getBuiltinProviders(): Promise<BuiltinProvider[]> {
+  const r = await request<{ providers: BuiltinProvider[] }>('/api/v1/ai/providers')
+  return r.providers
+}
+
+/** 内置向量供应商下拉清单（三家 + 火山双路 + 自定义）。 */
+export async function getBuiltinEmbeddingProviders(): Promise<BuiltinProvider[]> {
+  const r = await request<{ providers: BuiltinProvider[] }>('/api/v1/ai/embedding/providers')
+  return r.providers
+}
+
+/** 代理拉取上游 /models（key 服务端持有；不支持时 ok=false，前端回退自由输入）。 */
+export async function fetchUpstreamModels(p: {
+  baseUrl: string
+  apiKey?: string
+  modelId?: string
+}): Promise<{ ok: boolean; models?: string[]; error?: string }> {
+  const params = new URLSearchParams()
+  params.set('base_url', p.baseUrl)
+  if (p.apiKey) params.set('api_key', p.apiKey)
+  if (p.modelId) params.set('model_id', p.modelId)
+  return request(`/api/v1/ai/upstream/models?${params.toString()}`)
+}
+
 /** 选中 SQL 解释/优化/风险（/ai/selection）。 */
 export async function selection(p: {
   connection_id: string
@@ -257,16 +412,24 @@ export async function setSessionTitle(sessionId: string, title: string): Promise
   })
 }
 
-/** SSE 流式聊天：逐事件回调。服务端无状态，前端带完整消息历史。 */
-export async function chatStream(params: ChatParams, onEvent: (ev: AiEvent) => void): Promise<void> {
+/** SSE 流式聊天：逐事件回调。服务端无状态，前端带完整消息历史。
+ *  signal：停止按钮/墙钟超时兜底（AbortError 向调用方抛出，由其静默处理）。 */
+export async function chatStream(
+  params: ChatParams,
+  onEvent: (ev: AiEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
   const rt = getRuntime()
   if (!rt) throw new Error(useI18n.getState().t('api.sidecarNotReady'))
+  const locale = useI18n.getState().locale
   const res = await fetch(`${rt.baseUrl}/api/v1/ai/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(rt.token ? { 'X-TableTalk-Token': rt.token } : {})
+      ...(rt.token ? { 'X-TableTalk-Token': rt.token } : {}),
+      ...(locale ? { 'X-Locale': locale } : {})
     },
+    ...(signal ? { signal } : {}),
     body: JSON.stringify({
       connection_id: params.connection_id,
       messages: params.messages,

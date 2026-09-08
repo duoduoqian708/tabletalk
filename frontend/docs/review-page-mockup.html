@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>审核页交互 Demo · 知识库审查重构</title>
+<style>
+  :root {
+    --bg:#0a0e14; --panel:#11161f; --void2:#161c26; --void3:#1b2230;
+    --line:#232a36; --line-strong:#2e3846;
+    --ink:#d5dae2; --ink-dim:#8b93a1; --ink-faint:#5a6272;
+    --accent:#34f5c5; --accent-dim:rgba(52,245,197,.14);
+    --amber:#f5b942; --amber-dim:rgba(245,185,66,.12);
+    --red:#f5636e; --red-dim:rgba(245,99,110,.12); --green:#4ade80;
+    --blue:#57c7e0; --violet:#b08bf5;
+    --mono:'JetBrains Mono','SF Mono',Menlo,monospace;
+    --sans:-apple-system,'PingFang SC','Segoe UI',sans-serif;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:13px; }
+  .mono { font-family:var(--mono); }
+  .mk-head { position:sticky; top:0; z-index:40; background:linear-gradient(180deg,#0c1119 94%,transparent); padding:14px 20px 10px; backdrop-filter:blur(4px); }
+  .mk-title { font-size:15px; font-weight:700; }
+  .mk-title small { color:var(--ink-faint); font-weight:400; margin-left:10px; font-size:11px; }
+  .mk-tabs { display:flex; gap:8px; margin-top:10px; }
+  .mk-tab { border:1px solid var(--line-strong); background:var(--panel); color:var(--ink-dim); border-radius:9px; padding:6px 14px; cursor:pointer; font-size:12.5px; transition:all .18s; }
+  .mk-tab.on { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 45%,transparent); background:var(--accent-dim); }
+  .mk-note { margin-top:8px; font-size:12px; color:var(--ink-dim); min-height:18px; }
+  main { max-width:1180px; margin:0 auto; padding:10px 20px 70px; }
+  .mk-view { display:none; }
+  .mk-view.on { display:block; }
+
+  /* ── 模态弹窗 ── */
+  .modal-mask { position:fixed; inset:0; background:rgba(2,4,8,.7); z-index:80; display:none; align-items:center; justify-content:center; }
+  .modal-mask.on { display:flex; }
+  .modal { width:min(440px,92%); background:var(--panel); border:1px solid color-mix(in srgb,var(--amber) 50%,transparent); border-radius:14px; padding:20px 22px; box-shadow:0 24px 60px rgba(0,0,0,.55); }
+  .modal-h { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; color:var(--amber); }
+  .modal-p { margin:10px 0 16px; font-size:12.5px; color:var(--ink-dim); line-height:1.7; }
+  .modal-p b { color:var(--ink); }
+  .modal-a { display:flex; gap:10px; justify-content:flex-end; }
+  .btn { border-radius:9px; padding:8px 16px; font-size:12.5px; cursor:pointer; border:1px solid var(--line-strong); background:transparent; color:var(--ink-dim); }
+  .btn.save { background:var(--accent); color:#04241a; border:0; font-weight:600; }
+  .btn.warn { background:var(--amber); color:#2a1d04; border:0; font-weight:600; }
+  .btn:hover { filter:brightness(1.08); }
+  .demo-sim { margin-top:12px; font-size:11.5px; color:var(--ink-faint); }
+  .demo-sim button { background:var(--void2); border:1px solid var(--line-strong); color:var(--ink-dim); border-radius:8px; padding:5px 12px; cursor:pointer; font-size:11.5px; }
+
+  /* ── 审核页顶栏 ── */
+  .rv-top { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .rv-top .ttl { font-size:16px; font-weight:700; }
+  .rv-top .cnt { font-family:var(--mono); font-size:11.5px; color:var(--amber); background:var(--amber-dim); border:1px solid color-mix(in srgb,var(--amber) 40%,transparent); border-radius:999px; padding:3px 12px; }
+  .rv-top .sp { flex:1; }
+  .rv-sec-h { font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.05em; margin:20px 0 10px; display:flex; align-items:center; gap:10px; }
+  .rv-sec-h .ln { flex:1; height:1px; background:var(--line); }
+
+  /* ── 标签两栏对比 ── */
+  .tagcmp { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .tagcol { border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .tagcol-h { display:flex; align-items:center; gap:8px; padding:9px 13px; background:var(--void2); font-size:12px; font-weight:600; }
+  .tagcol-h .mini { margin-left:auto; font-size:10.5px; color:var(--accent); cursor:pointer; font-weight:400; }
+  .tagcol-h .mini.old { color:var(--ink-faint); }
+  .tagrow { display:flex; align-items:center; gap:9px; padding:7px 13px; border-top:1px solid var(--line); cursor:pointer; }
+  .tagrow:hover { background:var(--void3); }
+  .tagrow input { accent-color:var(--accent); }
+  .tagrow .nm { font-size:12.5px; }
+  .tagrow .ds { font-size:11px; color:var(--ink-faint); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tagrow.checked .nm { color:var(--accent); }
+  .tagcmp-foot { margin-top:10px; font-size:12px; color:var(--ink-dim); }
+  .tagcmp-foot b { color:var(--accent); }
+
+  /* ── 徽章 ── */
+  .bdg { font-family:var(--mono); font-size:9.5px; border-radius:5px; padding:1px 7px; flex:none; }
+  .bdg.new { color:var(--green); background:color-mix(in srgb,var(--green) 13%,transparent); border:1px solid color-mix(in srgb,var(--green) 35%,transparent); }
+  .bdg.del { color:var(--red); background:var(--red-dim); border:1px solid color-mix(in srgb,var(--red) 35%,transparent); }
+  .bdg.mod { color:var(--amber); background:var(--amber-dim); border:1px solid color-mix(in srgb,var(--amber) 35%,transparent); }
+  .bdg.cols { color:var(--blue); background:color-mix(in srgb,var(--blue) 12%,transparent); border:1px solid color-mix(in srgb,var(--blue) 30%,transparent); }
+
+  /* ── 表卡片流 ── */
+  .tcards { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:10px; }
+  .tcard { border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:8px; position:relative; }
+  .tcard.del { opacity:.55; }
+  .tcard-h { display:flex; align-items:center; gap:8px; }
+  .tcard-h .tn { font-family:var(--mono); font-weight:600; font-size:13px; }
+  .tcard-h .sp { flex:1; }
+  .tcard .desc { font-size:12px; color:var(--ink-dim); line-height:1.65; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .tcard .acts { display:flex; gap:8px; align-items:center; }
+  .tcard .cbtn { border:1px solid var(--line-strong); background:transparent; color:var(--ink-dim); border-radius:8px; padding:4px 12px; font-size:11px; cursor:pointer; }
+  .tcard .cbtn:hover { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 40%,transparent); }
+
+  /* ── 对比弹层 ── */
+  .cmp-mask { position:fixed; inset:0; background:rgba(2,4,8,.72); z-index:70; display:none; justify-content:center; padding:30px 16px; overflow-y:auto; }
+  .cmp-mask.on { display:flex; }
+  .cmp { width:min(860px,100%); background:var(--panel); border:1px solid var(--line-strong); border-radius:14px; height:fit-content; }
+  .cmp-h { display:flex; align-items:center; gap:10px; padding:14px 18px; border-bottom:1px solid var(--line); font-weight:700; }
+  .cmp-h .sp { flex:1; }
+  .cmp-h .x { cursor:pointer; color:var(--ink-dim); border:1px solid var(--line-strong); border-radius:6px; padding:2px 10px; font-size:12px; }
+  .cmp-b { padding:16px 18px; display:flex; flex-direction:column; gap:16px; }
+  .cmp-sec-t { font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.05em; }
+  .radio-pair { display:flex; flex-direction:column; gap:8px; }
+  .rline { display:flex; gap:9px; align-items:flex-start; padding:9px 12px; border:1px solid var(--line); border-radius:10px; cursor:pointer; }
+  .rline.sel { border-color:color-mix(in srgb,var(--accent) 45%,transparent); background:var(--accent-dim); }
+  .rline input { accent-color:var(--accent); margin-top:2px; }
+  .rline .k { font-family:var(--mono); font-size:9.5px; border-radius:4px; padding:1px 7px; flex:none; margin-top:1px; }
+  .rline.old .k { color:var(--ink-faint); border:1px solid var(--line-strong); }
+  .rline.new .k { color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 40%,transparent); }
+  .rline .v { font-size:12.5px; line-height:1.65; }
+  .rline.old .v { color:var(--ink-faint); }
+  .ddlcmp { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .ddlbox { background:var(--bg); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .ddlbox-h { padding:6px 12px; font-size:10.5px; font-family:var(--mono); color:var(--ink-faint); border-bottom:1px solid var(--line); display:flex; gap:8px; align-items:center; }
+  .ddlbox pre { padding:10px 12px; font-family:var(--mono); font-size:10.8px; line-height:1.6; color:var(--ink-dim); overflow-x:auto; }
+  .ddladd { color:var(--green); background:color-mix(in srgb,var(--green) 9%,transparent); display:block; }
+  .ddlmod { color:var(--amber); background:var(--amber-dim); display:block; }
+  .fldrow { display:flex; align-items:center; gap:10px; padding:8px 12px; border:1px solid var(--line); border-radius:10px; margin-bottom:6px; }
+  .fldrow .fn { font-family:var(--mono); font-size:12px; width:130px; flex:none; }
+  .fldrow .ftype { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); width:90px; flex:none; }
+  .fldrow .fv { flex:1; font-size:11.5px; color:var(--ink-dim); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fldrow label { display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer; flex:none; }
+  .fldrow label input { accent-color:var(--accent); }
+  .fldrow label.olds { color:var(--ink-faint); }
+  .fldrow.newf { border-color:color-mix(in srgb,var(--green) 30%,transparent); }
+  .fldrow.delf { opacity:.5; }
+  .cmp-f { border-top:1px solid var(--line); padding:13px 18px; display:flex; justify-content:flex-end; gap:10px; }
+
+  /* ── 边卡片 ── */
+  .ecards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:10px; }
+  .ecard { border:1px solid var(--line); border-radius:12px; padding:11px 14px; display:flex; flex-direction:column; gap:7px; }
+  .ecard-h { display:flex; align-items:center; gap:8px; }
+  .ecard .path { font-family:var(--mono); font-size:12.5px; }
+  .ecard .meta { font-size:11px; color:var(--ink-faint); }
+  .ecard .acts { display:flex; gap:8px; }
+  .ecard .acts .btn { padding:4px 12px; font-size:11px; border-radius:7px; }
+  .ecard .btn.pin { color:var(--green); border-color:color-mix(in srgb,var(--green) 40%,transparent); }
+  .ecard .btn.rm { color:var(--red); border-color:color-mix(in srgb,var(--red) 35%,transparent); }
+
+  .toast { position:fixed; bottom:26px; left:50%; transform:translateX(-50%) translateY(80px); background:#0f2a22; color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 40%,transparent); padding:10px 20px; border-radius:10px; font-size:12.5px; z-index:99; opacity:0; transition:all .3s cubic-bezier(.2,.9,.3,1.2); font-family:var(--mono); max-width:80vw; }
+  .toast.on { transform:translateX(-50%) translateY(0); opacity:1; }
+</style>
+</head>
+<body>
+<header class="mk-head">
+  <div class="mk-title">审核页交互 Demo <small>知识库审查重构 · 演示数据 · 纯静态 · 按钮可点</small></div>
+  <div class="mk-tabs">
+    <button class="mk-tab on" data-v="v1">① 进页弹窗提醒</button>
+    <button class="mk-tab" data-v="v2">② 审核页（三区）</button>
+  </div>
+  <div class="mk-note" id="mkNote"></div>
+</header>
+
+<main>
+  <!-- ① 弹窗演示 -->
+  <section class="mk-view on" id="v1">
+    <div class="modal-mask on" id="demoModal">
+      <div class="modal">
+        <div class="modal-h">⚠ 本轮知识库待审核</div>
+        <div class="modal-p">构建已完成：<b>128 项注释</b> · <b>8 个新标签</b> · <b>5 条边变更</b>。<br>新内容尚未生效，请进入审核页处理后应用。</div>
+        <div class="modal-a">
+          <button class="btn" onclick="closeModal()">稍后</button>
+          <button class="btn warn" onclick="closeModal();showTab('v2')">去审核</button>
+        </div>
+      </div>
+    </div>
+    <div style="padding:40px 0; text-align:center; color:var(--ink-faint);">
+      <div class="mono" style="font-size:12px;">▲ 进页弹窗（pending_review 期间每次点击「知识库」都会弹出）</div>
+      <div class="demo-sim">模拟操作：<button onclick="openModal()">再次点击知识库（重弹）</button>　<button onclick="showTab('v2')">直接进审核页 →</button></div>
+    </div>
+  </section>
+
+  <!-- ② 审核页 -->
+  <section class="mk-view" id="v2">
+    <div class="rv-top">
+      <span class="ttl">审核页</span>
+      <span class="cnt">待审 128 项注释 · 8 新标签 · 5 边变更</span>
+      <span class="sp"></span>
+      <button class="btn" onclick="toast('演示：放弃本轮（旧知识继续生效）')">放弃本轮</button>
+      <button class="btn save" onclick="applyAll()">应用选择</button>
+    </div>
+
+    <div class="rv-sec-h">标签整体对比 <span class="ln"></span></div>
+    <div class="tagcmp">
+      <div class="tagcol">
+        <div class="tagcol-h">旧标签（当前生效 12）<span class="mini old" onclick="checkAll('oldcol',false)">全不选</span></div>
+        <div id="oldcol"></div>
+      </div>
+      <div class="tagcol">
+        <div class="tagcol-h">新标签（本轮识别 8）<span class="mini" onclick="checkAll('newcol',true)">全选</span></div>
+        <div id="newcol"></div>
+      </div>
+    </div>
+    <div class="tagcmp-foot">应用后将生效 <b id="tagSum">—</b>（未勾选的旧标签将被淘汰，含表绑定解绑）</div>
+
+    <div class="rv-sec-h">表变更（卡片流）<span class="ln"></span></div>
+    <div class="tcards" id="tcards"></div>
+
+    <div class="rv-sec-h">边变更（关系）<span class="ln"></span></div>
+    <div class="ecards" id="ecards"></div>
+  </section>
+</main>
+
+<!-- 表对比弹层 -->
+<div class="cmp-mask" id="cmpMask">
+  <div class="cmp">
+    <div class="cmp-h">orders · 新旧对比 <span class="bdg mod">2 字段变更</span><span class="sp"></span><span class="x" onclick="closeCmp()">✕</span></div>
+    <div class="cmp-b">
+      <div>
+        <div class="cmp-sec-t">表描述（默认采用新版）</div><br>
+        <div class="radio-pair">
+          <label class="rline new sel"><input type="radio" name="tdesc" checked onchange="rlineSel(this)"><span class="k">新</span><span class="v">销售订单主单据，每笔订单一行，客户下单后生成，关联明细与发货；常查金额、发货进度、退换。又称：销售单</span></label>
+          <label class="rline old"><input type="radio" name="tdesc" onchange="rlineSel(this)"><span class="k">旧</span><span class="v">存储订单相关信息</span></label>
+        </div>
+      </div>
+      <div>
+        <div class="cmp-sec-t">DDL 对比（辅助判断结构变化；仅展示，不可选）</div><br>
+        <div class="ddlcmp">
+          <div class="ddlbox"><div class="ddlbox-h">旧版 DDL <span class="bdg del">v3</span></div><pre>CREATE TABLE orders (
+  id          INTEGER PRIMARY KEY,
+  customer_id INTEGER REFERENCES customers(id),
+  status      TEXT,
+  amount      DECIMAL(10,2),
+  <span class="ddlmod">-- created_at 不存在</span>
+  note        TEXT
+)</pre></div>
+          <div class="ddlbox"><div class="ddlbox-h">新版 DDL <span class="bdg new">v4</span></div><pre>CREATE TABLE orders (
+  id          INTEGER PRIMARY KEY,
+  customer_id INTEGER REFERENCES customers(id),
+  status      TEXT,
+  <span class="ddlmod">amount      DECIMAL(12,2)  -- 精度变更</span>
+  <span class="ddladd">created_at  TIMESTAMP,     -- 新增</span>
+  note        TEXT
+)</pre></div>
+        </div>
+      </div>
+      <div>
+        <div class="cmp-sec-t">字段明细（每项默认采用新版）</div><br>
+        <div id="cmpFields"></div>
+      </div>
+    </div>
+    <div class="cmp-f">
+      <button class="btn" onclick="closeCmp()">取消</button>
+      <button class="btn save" onclick="toast('演示：按当前选择应用 orders（新描述 + 字段默认新版）')">按选择应用</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+/* JS_PART */
+/* ══════════ Tab 与弹窗 ══════════ */
+const NOTES = {
+  v1: '<b>① 进页弹窗</b>：pending_review 期间，每次点击「知识库」tab 都会弹出此弹窗——不审核就一直提醒。「去审核」进入审核页。',
+  v2: '<b>② 审核页</b>：标签整体对比（默认采用新版，可混选旧标签保留）→ 表卡片流（new/del/字段变更徽章，[对比] 看旧版 vs 新版详表，DDL 辅助判断结构变化）→ 边变更卡片（new/modified/del，del 可保留/移除）。底部「应用选择」按各项选择执行。',
+}
+function showTab(vid) {
+  document.querySelectorAll('.mk-tab').forEach(b => b.classList.toggle('on', b.dataset.v === vid))
+  document.querySelectorAll('.mk-view').forEach(v => v.classList.toggle('on', v.id === vid))
+  document.getElementById('mkNote').innerHTML = NOTES[vid]
+  if (vid === 'v1') openModal()
+}
+document.querySelectorAll('.mk-tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.v)))
+function openModal() { document.getElementById('demoModal').classList.add('on') }
+function closeModal() { document.getElementById('demoModal').classList.remove('on') }
+
+let toastTimer = null
+function toast(msg) {
+  const t = document.getElementById('toast')
+  t.textContent = msg
+  t.classList.add('on')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => t.classList.remove('on'), 2600)
+}
+
+/* ══════════ 标签两栏对比 ══════════ */
+const OLD_TAGS = [
+  ['订单数据', '销售订单与明细'], ['发货物流', '发货与物流跟踪'], ['用户权限', '用户与角色授权'],
+  ['系统配置', '系统参数与字典'], ['支付结算', '支付流水与对账'], ['商品服务', '商品与类目'],
+  ['日志审计', '操作与审计日志'], ['营销活动', '活动与优惠券'],
+]
+const NEW_TAGS = [
+  ['销售订单', '订单主单据与状态流转（原：订单数据）'], ['物流履约', '发货、运输与签收（原：发货物流）'],
+  ['客户主数据', '客户档案与租户归属'], ['支付对账', '支付流水、退款与对账（原：支付结算）'],
+  ['接口日志', '对外 HTTP 请求流水。又称：API日志'], ['模型管理', '主数据模型与属性'],
+  ['权限角色', '角色-资源-授权关系（原：用户权限）'], ['审计合规', '操作审计与敏感操作留痕'],
+]
+function tagRowHTML([nm, ds], checked, isOld) {
+  return `<label class="tagrow ${checked ? 'checked' : ''}" data-nm="${nm}">
+    <input type="checkbox" ${checked ? 'checked' : ''} onchange="tagChange(this)">
+    <span class="nm">${nm}</span><span class="ds">${ds}</span></label>`
+}
+document.getElementById('oldcol').innerHTML = OLD_TAGS.map(t => tagRowHTML(t, false, true)).join('')
+document.getElementById('newcol').innerHTML = NEW_TAGS.map(t => tagRowHTML(t, true, false)).join('')
+function tagChange(input) { input.closest('.tagrow').classList.toggle('checked', input.checked); tagSum() }
+function checkAll(colId, val) {
+  document.querySelectorAll(`#${colId} input`).forEach(i => { i.checked = val; i.closest('.tagrow').classList.toggle('checked', val) })
+  tagSum()
+}
+function tagSum() {
+  const o = document.querySelectorAll('#oldcol input:checked').length
+  const n = document.querySelectorAll('#newcol input:checked').length
+  document.getElementById('tagSum').textContent = `${n + o} 个标签（新 ${n} + 保留旧 ${o}）`
+}
+tagSum()
+
+/* ══════════ 表卡片流 ══════════ */
+const TABLES = [
+  { n: 'orders', t: 'mod', pend: 12, desc: '销售订单主单据，每笔订单一行，客户下单后生成，关联明细与发货；常查金额、发货进度、退换。又称：销售单', cmp: true },
+  { n: 'order_items', t: 'mod', pend: 5, desc: '订单行明细，记录每行商品、数量与成交单价；随订单主单据联动。又称：订单明细', cmp: true },
+  { n: 'shipments', t: 'mod', pend: 4, desc: '发货单主表，记录包裹出库、承运方与签收状态；常查发货时效与滞留。又称：发货单', cmp: true },
+  { n: 'customers', t: 'ok', pend: 0, desc: '客户主数据，租户内唯一档案，含联系方式与归属销售；被订单/合同引用。又称：客户档案', cmp: false },
+  { n: 'agent_http_request_log', t: 'new', pend: 25, desc: '系统对外 HTTP 请求流水账，用于接口监控、性能分析和问题排查，是排查系统问题的审计依据。又称：API日志', cmp: false },
+  { n: 'agent_llm_session_detail', t: 'new', pend: 27, desc: 'LLM 会话逐轮明细，记录每轮模型调用、token 用量与延迟，用于成本分析。又称：模型调用明细', cmp: false },
+  { n: 'sys_operation_log', t: 'del', pend: 0, desc: '（表已删除）原系统操作日志', cmp: false },
+  { n: 'campaigns', t: 'mod', pend: 7, desc: '营销活动主档，含预算、投放渠道与有效期；常查 ROI 与活动效果。又称：活动档案', cmp: true },
+]
+const TBADGE = { ok: '', new: '<span class="bdg new">new</span>', del: '<span class="bdg del">del</span>', mod: '<span class="bdg mod">字段变更</span>' }
+document.getElementById('tcards').innerHTML = TABLES.map(d => `
+  <div class="tcard ${d.t === 'del' ? 'del' : ''}">
+    <div class="tcard-h"><span class="tn">${d.n}</span>${TBADGE[d.t]}${d.t === 'mod' ? `<span class="bdg cols">${d.pend} 项待审</span>` : ''}<span class="sp"></span></div>
+    <div class="desc">${d.desc}</div>
+    <div class="acts"><span class="sp" style="flex:1"></span>
+      ${d.cmp ? `<button class="cbtn" onclick="openCmp('${d.n}')">对比（旧版 vs 新版）</button>` : ''}
+      ${d.t === 'ok' ? '<span class="mono" style="font-size:10px;color:var(--ink-faint)">无变化</span>' : ''}
+      ${d.t === 'del' ? '<span class="mono" style="font-size:10px;color:var(--red)">结构已移除 · 无需操作</span>' : ''}
+      ${d.t === 'new' ? '<button class="cbtn" onclick="toast(\'演示：接受全新表 ' + d.n + '（' + d.pend + ' 项提案，默认全收）\')">接受（默认新版）</button>' : ''}
+    </div>
+  </div>`).join('')
+
+/* ══════════ 对比弹层 ══════════ */
+function openCmp(name) { document.getElementById('cmpMask').classList.add('on') }
+function closeCmp() { document.getElementById('cmpMask').classList.remove('on') }
+function rlineSel(input) {
+  input.closest('.radio-pair').querySelectorAll('.rline').forEach(l => l.classList.remove('sel'))
+  input.closest('.rline').classList.add('sel')
+}
+const FIELDS = [
+  { n: 'id', t: 'INTEGER', old: '订单唯一编号', nw: '订单唯一编号，自增主键', st: '' },
+  { n: 'customer_id', t: 'INTEGER', old: '', nw: '下单客户，关联客户表', st: '<span class="bdg new">new</span>' },
+  { n: 'status', t: 'TEXT', old: '订单状态', nw: '订单流转阶段（P=待付款；S=已发货；R=已退货）', st: '' },
+  { n: 'amount', t: 'DECIMAL(12,2)', old: '金额', nw: '订单应付总金额（元）；本版精度 10,2 → 12,2', st: '<span class="bdg mod">类型已变</span>' },
+  { n: 'note', t: 'TEXT', old: '备注', nw: '买家留言备注', st: '' },
+]
+document.getElementById('cmpFields').innerHTML = FIELDS.map((f, i) => `
+  <div class="fldrow ${f.st.includes('new') ? 'newf' : ''} ${f.st.includes('del') ? 'delf' : ''}">
+    <span class="fn">${f.n}</span><span class="ftype">${f.t}</span>${f.st}
+    <span class="fv" title="${f.nw}">${f.nw}</span>
+    <label class="news"><input type="radio" name="f${i}" checked>新版</label>
+    <label class="olds"><input type="radio" name="f${i}" ${f.old ? '' : 'disabled'}>旧版</label>
+  </div>`).join('')
+
+/* ══════════ 边卡片 ══════════ */
+const EDGES = [
+  { t: 'new', from: 'orders.customer_id', to: 'customers.id', meta: '基数 n:1 · 依据：外键推断 + 命名重合' },
+  { t: 'new', from: 'order_items.order_id', to: 'orders.id', meta: '基数 1:n · 依据：外键推断' },
+  { t: 'mod', from: 'orders.id', to: 'shipments.order_id', meta: '基数 1:1 → 1:n（新版依据：拆单发货场景）' },
+  { t: 'del', from: 'sys_user.dept_id', to: 'sys_dept.id', meta: '本轮未重新提案（表结构变化后失联）· 保留 = 豁免自动移除' },
+  { t: 'del', from: 'legacy_sync.status', to: 'sys_dict.id', meta: '本轮未重新提案' },
+]
+const EBADGE = { new: '<span class="bdg new">new</span>', mod: '<span class="bdg mod">modified</span>', del: '<span class="bdg del">del</span>' }
+document.getElementById('ecards').innerHTML = EDGES.map((e, i) => `
+  <div class="ecard">
+    <div class="ecard-h">${EBADGE[e.t]}<span class="path">${e.from} → ${e.to}</span></div>
+    <div class="meta">${e.meta}</div>
+    ${e.t === 'del'
+      ? `<div class="acts"><button class="btn pin" onclick="toast('演示：保留该边（pin 豁免自动移除）');this.textContent='已保留';this.disabled=true">保留</button>
+         <button class="btn rm" onclick="toast('演示：确认移除该边');this.closest('.ecard').style.opacity=.35;this.disabled=true;this.previousElementSibling.disabled=true">移除</button></div>`
+      : `<div class="acts"><button class="btn save" style="padding:4px 12px;font-size:11px" onclick="toast('演示：接受该${e.t === 'new' ? '新边' : '边修改'}')">接受</button></div>`}
+  </div>`).join('')
+
+/* ══════════ 应用选择 ══════════ */
+function applyAll() {
+  const o = document.querySelectorAll('#oldcol input:checked').length
+  const n = document.querySelectorAll('#newcol input:checked').length
+  const fNew = document.querySelectorAll('#cmpFields .news input:checked').length
+  toast(`演示：按选择应用 —— 标签 ${n + o} 个（新 ${n} + 旧 ${o}）· 表按 radio 汇总（字段新版 ${fNew} 项）· 边按卡片动作 · 向量同步重嵌`)
+}
+showTab('v1')
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch();
+const p = await b.newPage({ viewport: {width:1440,height:900} });
+const errs = [];
+p.on('pageerror', e => errs.push('pageerror: ' + e.message));
+p.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
+await p.goto('http://127.0.0.1:8777/');
+await p.waitForTimeout(2500);
+const bodyText = await p.evaluate(() => document.body.innerText.slice(0, 120).replace(/\n/g, ' | '));
+console.log(JSON.stringify({ errs: errs.slice(0, 5), bodyText }, null, 1));
+await b.close();

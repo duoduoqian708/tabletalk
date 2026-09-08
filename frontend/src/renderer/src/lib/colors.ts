@@ -1,10 +1,10 @@
 import { getTagColor } from '@renderer/utils/tagColors'
 
 /** 无标签表的基准灰 */
-export const BASE_UNTAGGED = '#5a6a7e'
+const BASE_UNTAGGED = '#5a6a7e'
 
 /** 将多个十六进制颜色混合（RGB 通道取均值） */
-export function blendColors(hexes: string[]): string {
+function blendColors(hexes: string[]): string {
   if (hexes.length === 0) return BASE_UNTAGGED
   if (hexes.length === 1) return hexes[0]
   let r = 0, g = 0, b = 0

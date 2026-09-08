@@ -13,6 +13,6 @@ export interface HealthStatus {
   ai_model: string
   ai_provider_name: string
   ai_effective_provider: string
-  ai_mock_downgraded: boolean
+  ai_using_mock: boolean
   connections: number
 }

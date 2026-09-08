@@ -58,7 +58,7 @@ try {
   // 无连接时点"使用演示库"
   const onboard = await page.$('.onboarding .primary')
   if (onboard) {
-    await onboard.click()
+    await onboard.click({ force: true })
     await page.waitForSelector('.appbar', { timeout: 20000 })
   }
   await buildAndConfirm(page)
@@ -69,7 +69,7 @@ try {
 
   const genBtn = await page.$('button:has-text("AI 生成标签")')
   if (genBtn) {
-    await genBtn.click()
+    await genBtn.click({ force: true })
     await page.waitForTimeout(3500)
   }
 

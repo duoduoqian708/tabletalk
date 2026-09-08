@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import type { GraphEdge } from '@renderer/api/types'
 import { MIN_R, colorFor, radiusFor, spherePositions, project } from '@renderer/lib/sphere'
 import { graphFontBasis } from '@renderer/lib/graphFont'
 import { useI18n } from '@renderer/store/i18n'
+import { IconX } from './ui/icons'
 
 export interface GraphNode {
   name: string
@@ -10,10 +12,8 @@ export interface GraphNode {
   kind?: 'table' | 'view'
 }
 
-export interface GraphEdge {
-  table: string
-  ref_table: string
-}
+/** 边数据 = API GraphEdge（from/to + guard/cols/kinds 等完整形态），宿主透传 overview.graph.edges */
+export type { GraphEdge }
 
 interface Props {
   tables: GraphNode[]
@@ -38,9 +38,13 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
   miniRef.current = mini
   const selectedRef = useRef<number | null>(null)
   const { t } = useI18n()
-
-  // D1: search（搜索框已上移至工作台工具栏，见 GraphSearch.tsx；此处保留 flyTo 高亮）
   const [searchFlash, setSearchFlash] = useState<string | null>(null)
+
+  // 边只读弹窗（3D 纯查看）：点边弹出详情，点空白/节点/✕ 关闭
+  const [selEdge, setSelEdge] = useState<{ edge: GraphEdge; x: number; y: number } | null>(null)
+  const selEdgeIdxRef = useRef<number | null>(null)
+  // 绘制帧缓存的边线段屏幕投影（命中检测复用，思路同 hit() 的 projBy 复用）
+  const segsRef = useRef<{ idx: number; ax: number; ay: number; bx: number; by: number }[]>([])
 
   // D2: pause - 受控时由外层驱动（按钮外置避免随 g3d-wrap 位移），否则内部自治
   const [internalPaused, setInternalPaused] = useState(() => {
@@ -107,7 +111,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
     selectedRef.current = selectedName
       ? propsRef.current.tables.findIndex((t) => t.name === selectedName)
       : null
-    // 已去掉拉伸：保持原位，不再外扩
     scatterTargetRef.current = 0
   }, [selectedName])
 
@@ -340,8 +343,8 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const mp = idxMapRef.current
       // 优先走索引映射，O(1) 查找，回退 findIndex 兼容旧路径
       fks.forEach((fk) => {
-        const a = mp.get(fk.table) ?? propsRef.current.tables.findIndex((t) => t.name === fk.table)
-        const b = mp.get(fk.ref_table) ?? propsRef.current.tables.findIndex((t) => t.name === fk.ref_table)
+        const a = mp.get(fk.from) ?? propsRef.current.tables.findIndex((t) => t.name === fk.from)
+        const b = mp.get(fk.to) ?? propsRef.current.tables.findIndex((t) => t.name === fk.to)
         if (a === idx && b >= 0) set.add(b)
         if (b === idx && a >= 0) set.add(a)
       })
@@ -415,8 +418,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           }
         }
       }
-
-      // 已去掉拉伸：保持原位
       scatterRef.current = 0
 
       // 搜索闪烁过期清理
@@ -461,8 +462,6 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         return radiusFor(tt.row_count, minC0, maxC0)
       })
       const COLORS = tbl.map((tt) => propsRef.current.colorOverride?.[tt.name] ?? colorFor(tt.name))
-
-      // 已去掉拉伸：保持原位，仅高亮
       const focus = selectedRef.current
       const hlSet = focus != null ? neighborsOf(focus) : null
       const POS: [number, number, number][] = basePos
@@ -519,24 +518,27 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const flashName = searchFlashRef.current && now < flashUntilRef.current ? searchFlashRef.current : null
       const flashIdx = flashName ? tbl.findIndex((tt) => tt.name === flashName) : -1
 
-      fks.forEach((fk) => {
-        const a = idxMap.get(fk.table) ?? tbl.findIndex((t) => t.name === fk.table)
-        const b = idxMap.get(fk.ref_table) ?? tbl.findIndex((t) => t.name === fk.ref_table)
+      const segs: { idx: number; ax: number; ay: number; bx: number; by: number }[] = []
+      fks.forEach((fk, k) => {
+        const a = idxMap.get(fk.from) ?? tbl.findIndex((t) => t.name === fk.from)
+        const b = idxMap.get(fk.to) ?? tbl.findIndex((t) => t.name === fk.to)
         if (a < 0 || b < 0) return
         const A = projBy[a], B = projBy[b]
         const lit = focus != null && (a === focus || b === focus)
+        const isSel = selEdgeIdxRef.current === k
         // 自环（表内自关联，如 parent_id）：节点上方画椭圆环 + 流动粒子，代替退化的零长度线
         if (a === b) {
           const r2 = Math.max(MIN_R, RADII[a] * Math.min(1.5, A.p.scale))
           const lr = Math.max(9, Math.min(16, r2 * 0.62))         // 环随节点大小缩放但保上下限
           const lx = A.p.x, ly = A.p.y - r2 - lr * 0.8 - 2         // 环心在节点正上方
-          ctx.strokeStyle = lit ? 'rgba(52,245,197,0.8)' : 'rgba(150,170,220,0.45)'
-          ctx.lineWidth = lit ? 1.8 : 1.2
+          ctx.strokeStyle = isSel ? 'rgba(255,255,255,0.95)' : (lit ? 'rgba(52,245,197,0.8)' : 'rgba(150,170,220,0.45)')
+          ctx.lineWidth = isSel ? 2.2 : (lit ? 1.8 : 1.2)
           ctx.beginPath(); ctx.ellipse(lx, ly, lr, lr * 0.8, 0, 0, Math.PI * 2); ctx.stroke()
           const ph = (t / 1600 + a * 0.13) % 1
           const ang = ph * Math.PI * 2
-          ctx.fillStyle = lit ? 'rgba(52,245,197,.95)' : 'rgba(150,170,220,.55)'
+          ctx.fillStyle = isSel || lit ? 'rgba(52,245,197,.95)' : 'rgba(150,170,220,.55)'
           ctx.beginPath(); ctx.arc(lx + lr * Math.cos(ang), ly + lr * 0.8 * Math.sin(ang), lit ? 2.1 : 1.4, 0, 7); ctx.fill()
+          segs.push({ idx: k, ax: lx - lr, ay: ly, bx: lx + lr, by: ly })
           return
         }
         const ra = Math.max(MIN_R, RADII[a] * Math.min(1.5, A.p.scale))
@@ -549,14 +551,16 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           ax = A.p.x + ux * (ra + gap); ay = A.p.y + uy * (ra + gap)
           bx = B.p.x - ux * (rb + gap); by = B.p.y - uy * (rb + gap)
         }
-        ctx.strokeStyle = lit ? 'rgba(52,245,197,0.75)' : 'rgba(120,150,205,0.22)'
-        ctx.lineWidth = lit ? 1.8 : 1
+        ctx.strokeStyle = isSel ? 'rgba(255,255,255,0.9)' : (lit ? 'rgba(52,245,197,0.75)' : 'rgba(120,150,205,0.22)')
+        ctx.lineWidth = isSel ? 2.2 : (lit ? 1.8 : 1)
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke()
         const tm = (t / 1600 + (a * 0.13 + b * 0.07)) % 1
         const qx = ax + (bx - ax) * tm, qy = ay + (by - ay) * tm
-        ctx.fillStyle = lit ? 'rgba(52,245,197,.95)' : 'rgba(120,150,205,.3)'
+        ctx.fillStyle = isSel || lit ? 'rgba(52,245,197,.95)' : 'rgba(120,150,205,.3)'
         ctx.beginPath(); ctx.arc(qx, qy, lit ? 2.1 : 1.2, 0, 7); ctx.fill()
+        segs.push({ idx: k, ax, ay, bx, by })
       })
+      segsRef.current = segs
 
       // 每帧读一次档位 → 基准字号（档位变化下一帧即生效；不随画布缩放）
       const fontBasis = graphFontBasis()
@@ -655,6 +659,24 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       return null
     }
 
+    // 点到线段距离（边命中用）
+    const distToSeg = (px: number, py: number, ax: number, ay: number, bx: number, by: number): number => {
+      const dx = bx - ax, dy = by - ay
+      const l2 = dx * dx + dy * dy
+      const tt = l2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0
+      return Math.hypot(px - (ax + tt * dx), py - (ay + tt * dy))
+    }
+
+    /** 边命中：返回命中的 foreignKeys 下标（复用绘制帧缓存线段，阈值 6px，取最近） */
+    const hitEdge = (px: number, py: number): number | null => {
+      let best: { i: number; d: number } | null = null
+      for (const s of segsRef.current) {
+        const d = distToSeg(px, py, s.ax, s.ay, s.bx, s.by)
+        if (d <= 6 && (best == null || d < best.d)) best = { i: s.idx, d }
+      }
+      return best?.i ?? null
+    }
+
     // offsetX/offsetY 由浏览器直接给出（相对目标元素），免去每次事件 getBoundingClientRect 的布局查询
     const pt = (e: PointerEvent | MouseEvent): { x: number; y: number } => {
       return { x: e.offsetX, y: e.offsetY }
@@ -686,7 +708,7 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const p = pt(e)
       if (!dragging) {
         hover = hit(p.x, p.y)
-        cv.style.cursor = hover != null ? 'pointer' : 'grab'
+        cv.style.cursor = (hover != null || hitEdge(p.x, p.y) != null) ? 'pointer' : 'grab'
         return
       }
       lastAct = performance.now()
@@ -715,6 +737,9 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
       const i = downHit
       hover = i
       if (i != null) {
+        // 点节点 → 关边弹窗，走节点选中逻辑
+        selEdgeIdxRef.current = null
+        setSelEdge(null)
         if (selectedRef.current === i) {
           // 再点已点亮的点 → 取消点亮
           selectedRef.current = null
@@ -730,10 +755,21 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
           propsRef.current.onSelectNode(propsRef.current.tables[i].name, q.x, q.y)
           popPending = now
         }
-      } else if (propsRef.current.onClearSelection) {
-        propsRef.current.onClearSelection()
-        selectedRef.current = null
-        scatterTargetRef.current = 0
+      } else {
+        // 无节点命中 → 试边命中（只读弹窗）；都没有 → 清空所有选中
+        const ke = downPt ? hitEdge(downPt.x, downPt.y) : null
+        if (ke != null && downPt) {
+          selEdgeIdxRef.current = ke
+          setSelEdge({ edge: propsRef.current.foreignKeys[ke], x: downPt.x, y: downPt.y })
+          return
+        }
+        selEdgeIdxRef.current = null
+        setSelEdge(null)
+        if (propsRef.current.onClearSelection) {
+          propsRef.current.onClearSelection()
+          selectedRef.current = null
+          scatterTargetRef.current = 0
+        }
       }
     }
     const onDblClick = (e: MouseEvent): void => {
@@ -815,9 +851,49 @@ export function Graph3D({ tables, foreignKeys, onSelectNode, selectedName, onCle
         >
           <span className="g3d-onboard-dot" />
           <span>{t('graph.onboarding')}</span>
-          <span className="g3d-onboard-dismiss">✕</span>
+          <span className="g3d-onboard-dismiss"><IconX size={8} /></span>
         </div>
       )}
+      {/* 边只读弹窗（3D 纯查看）：锚定点击处，点空白/节点/✕ 关闭 */}
+      {selEdge && (() => {
+        const e = selEdge.edge
+        const kinds = e.kinds ?? e.type ?? []
+        const kindLabel: Record<string, string> = {
+          self: t('trg2d.legendSelf'),
+          guarded: t('trg2d.legendGuarded'),
+          composite: t('trg2d.legendComposite'),
+        }
+        const colPairs = (e.cols && e.cols.length > 1)
+          ? e.cols
+          : (e.from_col || e.to_col ? [[e.from_col || '*', e.to_col || '*']] : [])
+        return (
+          <div className="edge-pop" style={{ left: selEdge.x + 14, top: selEdge.y + 14 }}
+            onPointerDown={(ev) => ev.stopPropagation()}>
+            <div className="edge-pop-head">
+              <b>{e.from}</b><span className="edge-pop-arrow">→</span><b>{e.to}</b>
+              <button type="button" className="edge-pop-x" aria-label="close"
+                onClick={() => { setSelEdge(null); selEdgeIdxRef.current = null }}><IconX size={9} /></button>
+            </div>
+            {colPairs.length > 0 && (
+              <div className="edge-pop-row"><span>{t('graph.edgeCols')}</span>
+                <span className="mono">{colPairs.map(([a, b]) => `${a} = ${b}`).join('，')}</span></div>
+            )}
+            <div className="edge-pop-row"><span>{t('trg2d.card')}</span>
+              <span className="mono">{e.cardinality ?? 'n:1'}</span></div>
+            {kinds.length > 0 && (
+              <div className="edge-pop-row"><span>{t('trg2d.legendTitle')}</span>
+                <span>{kinds.map((k) => kindLabel[k] ?? k).join(' · ')}</span></div>
+            )}
+            {e.guard && (
+              <div className="edge-pop-row"><span>{t('trg2d.guard')}</span>
+                <span className="mono">{e.guard}</span></div>
+            )}
+            <div className="edge-pop-row"><span>source</span>
+              <span className="mono">{e.source}{e.confidence != null ? ` · ${e.confidence}` : ''}</span></div>
+            {e.reason && <div className="edge-pop-reason">{e.reason}</div>}
+          </div>
+        )
+      })()}
     </>
   )
 }

@@ -14,13 +14,13 @@ export const TAG_COLORS = [
 
 const COLOR_MAP_KEY = 'tabletalk-tag-colors'
 
-export function hashTag(s: string): number {
+function hashTag(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0
   return h
 }
 
-export function loadColorMap(): Record<string, string> {
+function loadColorMap(): Record<string, string> {
   try {
     return JSON.parse(localStorage.getItem(COLOR_MAP_KEY) || '{}')
   } catch {
@@ -28,7 +28,7 @@ export function loadColorMap(): Record<string, string> {
   }
 }
 
-export function saveColorMap(m: Record<string, string>): void {
+function saveColorMap(m: Record<string, string>): void {
   try {
     localStorage.setItem(COLOR_MAP_KEY, JSON.stringify(m))
   } catch { /* ignore */ }

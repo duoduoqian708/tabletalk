@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { previewTable } from '@renderer/api/schema'
 import type { TablePreview } from '@renderer/api/types'
 import { useI18n } from '@renderer/store/i18n'
+import { IconArrowLeft } from './ui/icons'
 
 interface Props {
   connId: string
@@ -30,7 +31,7 @@ export function TableDataView({ connId, table, closing, onClose }: Props): React
         <span className="tdv-title">{t('node.tableLabel')} <b>{table}</b></span>
         <span className="tdv-sub mono">{data ? `${data.total} ${t('table.rows')}` : t('common.loading')}</span>
         <span className="spacer" />
-        <button className="tdv-back" onClick={onClose}>← {t('table.backToGraph')}</button>
+        <button className="tdv-back" onClick={onClose}><IconArrowLeft size={11} /> {t('table.backToGraph')}</button>
       </div>
       <div className="tdv-body">
         {err && <div className="tdv-err">{t('table.loadFail')}: {err}</div>}

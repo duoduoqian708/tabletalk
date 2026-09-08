@@ -1,6 +1,6 @@
 /**
  * 星图 / 知识图谱共享的 3D 球面投影工具。
- * Graph3D（首页星图）与 GraphEditor（知识图谱编辑器）共用同一套：
+ * Graph3D（首页星图）使用：
  * 调色板、按表名稳定取色、按行数算半径、fibonacci 球面布点、透视投影。
  * 两者各自的事件/绘制差异（编辑连线、工具栏跟随等）保留在各组件内。
  */
@@ -8,7 +8,7 @@
 export const SPHERE_PALETTE = ['#4cc9f0', '#34f5c5', '#ffc46b', '#8b7cf8', '#ff8fb3']
 
 export const MIN_R = 5
-export const MAX_R = MIN_R * 5 // 直径比封顶 5 倍
+const MAX_R = MIN_R * 5 // 直径比封顶 5 倍
 
 export function colorFor(name: string): string {
   let h = 0

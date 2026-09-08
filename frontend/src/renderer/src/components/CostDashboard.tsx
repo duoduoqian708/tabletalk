@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { USE_MOCK, mockDaily, getMockSessions, getMockCalls, getMockCallDetail, getMockSummary } from './__mocks__/costMock'
 import { fmtDT } from '@renderer/lib/timefmt'
+import { useI18n } from '@renderer/store/i18n'
 
 /* ── types ── */
 interface DailyRow { date: string; calls: number; sessions: number; input_tokens: number; output_tokens: number; total_tokens: number; elapsed_ms_avg: number }
@@ -35,8 +36,8 @@ const shortTime = (ts: string) => {
   return sameDay ? fmtDT(ts, 'time') : fmtDT(ts, 'date')
 }
 /** '__none__'/空/null → 系统调用组（无会话的 KB 构建/嵌入等），否则原样显示 */
-const sysLabel = (v: string | null | undefined, max = 10) =>
-  v === '__none__' || v === null || v === '' ? '系统调用' : String(v).slice(0, max)
+const sysLabel = (v: string | null | undefined, t: (k: string) => string, max = 10) =>
+  v === '__none__' || v === null || v === '' ? t('cost.sysCall') : String(v).slice(0, max)
 const h = () => ({ 'X-TableTalk-Token': localStorage.getItem('tt_token') || '' })
 
 const SKILL_COLORS: Record<string, string> = {
@@ -51,8 +52,8 @@ const SKILL_BG: Record<string, string> = {
 }
 
 /* ── JSON pretty print ── */
-function JsonBlock({ data, label }: { data: unknown; label: string }) {
-  if (!data) return <div style={s.jsonEmpty}>无数据</div>
+function JsonBlock({ data, label, noData }: { data: unknown; label: string; noData: string }) {
+  if (!data) return <div style={s.jsonEmpty}>{noData}</div>
   const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
   return (
     <div style={s.jsonBlock}>
@@ -65,7 +66,7 @@ function JsonBlock({ data, label }: { data: unknown; label: string }) {
 /* ── recharts dual-line chart ── */
 const fmtK = (v: number) => v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(1)}K` : String(v)
 
-function DualLineChart({ data, height = 180 }: { data: DailyRow[]; height?: number }) {
+function DualLineChart({ data, height = 180, t }: { data: DailyRow[]; height?: number; t: (k: string) => string }) {
   if (data.length === 0) return null
 
   const chartData = data.map(d => ({
@@ -104,12 +105,12 @@ function DualLineChart({ data, height = 180 }: { data: DailyRow[]; height?: numb
           wrapperStyle={{ fontSize: 10, color: '#8fa0b4', paddingTop: 4 }}
         />
         <Line
-          yAxisId="tok" type="monotone" dataKey="tokens" name="Token 总量"
+          yAxisId="tok" type="monotone" dataKey="tokens" name={t ? t('cost.kpi.tokens') : 'Tokens'}
           stroke="#35d99a" strokeWidth={2} dot={{ r: 3, fill: '#0f1520', stroke: '#35d99a', strokeWidth: 1.5 }}
           activeDot={{ r: 5, fill: '#35d99a', stroke: '#0f1520', strokeWidth: 2 }}
         />
         <Line
-          yAxisId="ses" type="monotone" dataKey="sessions" name="会话数"
+          yAxisId="ses" type="monotone" dataKey="sessions" name={t ? t('cost.kpi.sessions') : 'Sessions'}
           stroke="#ff6b81" strokeWidth={2} dot={{ r: 3, fill: '#0f1520', stroke: '#ff6b81', strokeWidth: 1.5 }}
           activeDot={{ r: 5, fill: '#ff6b81', stroke: '#0f1520', strokeWidth: 2 }}
         />
@@ -119,6 +120,7 @@ function DualLineChart({ data, height = 180 }: { data: DailyRow[]; height?: numb
 }
 
 export function CostDashboard(): React.JSX.Element {
+  const { t } = useI18n()
   const [period, setPeriod] = useState<Period>('7d')
   const [daily, setDaily] = useState<DailyRow[]>([])
   const [sessions, setSessions] = useState<SessionRow[]>([])
@@ -232,10 +234,10 @@ export function CostDashboard(): React.JSX.Element {
   }, [sessions, search])
 
   const kpis = [
-    { label: '调用次数', value: fmt(summary?.total_calls ?? 0), color: 'var(--accent)' },
-    { label: '总 Token', value: fmt(summary?.total_tokens ?? 0), color: 'var(--blue)' },
-    { label: '输入', value: fmt(summary?.input_tokens ?? 0), color: 'var(--green)' },
-    { label: '输出', value: fmt(summary?.output_tokens ?? 0), color: 'var(--violet)' },
+    { label: t('cost.kpi.calls'), value: fmt(summary?.total_calls ?? 0), color: 'var(--accent)' },
+    { label: t('cost.kpi.tokens'), value: fmt(summary?.total_tokens ?? 0), color: 'var(--blue)' },
+    { label: t('cost.kpi.input'), value: fmt(summary?.input_tokens ?? 0), color: 'var(--green)' },
+    { label: t('cost.kpi.output'), value: fmt(summary?.output_tokens ?? 0), color: 'var(--violet)' },
   ]
 
   return (
@@ -248,7 +250,7 @@ export function CostDashboard(): React.JSX.Element {
               ...s.periodBtn,
               background: period === p ? 'var(--accent)' : 'transparent',
               color: period === p ? 'var(--accent-ink)' : 'var(--ink-dim)',
-            }}>{p === 'today' ? '今天' : p === '7d' ? '1 周' : '1 月'}</button>
+            }}>{p === 'today' ? t('cost.today') : p === '7d' ? t('cost.week1') : t('cost.month1')}</button>
           ))}
         </div>
       </div>
@@ -271,17 +273,17 @@ export function CostDashboard(): React.JSX.Element {
           {/* Line chart */}
           {daily.length > 0 && (
             <div style={s.chartCard}>
-              <div style={s.sectionLabel}>每日统计</div>
-              <DualLineChart data={daily} height={180} />
+              <div style={s.sectionLabel}>{t('cost.daily')}</div>
+              <DualLineChart data={daily} height={180} t={t} />
             </div>
           )}
 
           {/* Session list */}
           <div style={s.sessionCard}>
             <div style={s.sessionHeader}>
-              <span style={s.sectionLabel}>会话 · {filteredSessions.length}</span>
+              <span style={s.sectionLabel}>{t('cost.sessions', { n: filteredSessions.length })}</span>
               <input
-                placeholder="搜索会话 ID / 技能..."
+                placeholder={t('cost.search')}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 style={s.searchInput}
@@ -289,7 +291,7 @@ export function CostDashboard(): React.JSX.Element {
             </div>
             <div style={s.sessionList}>
               {filteredSessions.length === 0 && (
-                <div style={s.empty}>暂无数据</div>
+                <div style={s.empty}>{t('cost.empty')}</div>
               )}
               {filteredSessions.map(ses => {
                 const active = ses.session_id === selectedSid
@@ -306,18 +308,18 @@ export function CostDashboard(): React.JSX.Element {
                   >
                     <div style={s.sessionRowTop}>
                       <span style={{ ...s.sessionId, color: active ? 'var(--accent-bright)' : 'var(--ink)' }}>
-                        {sysLabel(ses.session_id)}
+                        {sysLabel(ses.session_id, t)}
                       </span>
-                      <span style={s.callBadge}>{ses.calls} 次调用</span>
+                      <span style={s.callBadge}>{t('cost.calls', { n: ses.calls })}</span>
                     </div>
                     <div style={s.sessionStats}>
-                      <span style={{ color: 'var(--green)' }}>输入 {fmt(ses.input_tokens)}</span>
-                      <span style={{ color: 'var(--violet)' }}>输出 {fmt(ses.output_tokens)}</span>
-                      <span style={{ color: 'var(--blue)' }}>合计 {fmt(ses.total_tokens)}</span>
+                      <span style={{ color: 'var(--green)' }}>{t('cost.kpi.input')} {fmt(ses.input_tokens)}</span>
+                      <span style={{ color: 'var(--violet)' }}>{t('cost.kpi.output')} {fmt(ses.output_tokens)}</span>
+                      <span style={{ color: 'var(--blue)' }}>{t('cost.kpiTotal')} {fmt(ses.total_tokens)}</span>
                     </div>
                     <div style={s.sessionRowMid}>
                       <span>{shortTime(ses.first_ts)} – {shortTime(ses.last_ts)}</span>
-                      {ses.conn_id && <span>连接 {ses.conn_id}</span>}
+                      {ses.conn_id && <span>{t('cost.conn', { id: ses.conn_id })}</span>}
                     </div>
                     {skills.length > 0 && (
                       <div style={s.skillRow}>
@@ -336,13 +338,13 @@ export function CostDashboard(): React.JSX.Element {
         {/* ═══ RIGHT ═══ */}
         <div style={s.right}>
           {!selectedSid ? (
-            <div style={s.emptyFull}>← 选择左侧会话查看 LLM 调用详情</div>
+            <div style={s.emptyFull}>{t('cost.selectHint')}</div>
           ) : (
             <div style={s.detailPanel}>
               <div style={s.detailHeader}>
                 <span style={s.sectionLabel}>
-                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{sysLabel(selectedSid, 12)}</span>
-                  {' · '}{calls.length} 次调用
+                  <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>{sysLabel(selectedSid, t, 12)}</span>
+                  {' · '}{t('cost.calls', { n: calls.length })}
                 </span>
               </div>
               <div style={s.callList}>
@@ -350,7 +352,7 @@ export function CostDashboard(): React.JSX.Element {
                   <div style={s.emptyFull}><div style={s.spinner} /></div>
                 )}
                 {!loadingCalls && calls.length === 0 && (
-                  <div style={s.emptyFull}>无 LLM 调用记录</div>
+                  <div style={s.emptyFull}>{t('cost.noCalls')}</div>
                 )}
                 {!loadingCalls && calls.map((c, i) => {
                   const isActive = c.id === selectedCallId
@@ -373,10 +375,10 @@ export function CostDashboard(): React.JSX.Element {
                         <span style={s.callTime}>{shortTime(c.ts)}</span>
                       </div>
                       <div style={s.sessionStats}>
-                        <span style={{ color: 'var(--green)' }}>输入 {fmt(c.input_tokens)}</span>
-                        <span style={{ color: 'var(--violet)' }}>输出 {fmt(c.output_tokens)}</span>
-                        <span style={{ color: 'var(--ink-dim)' }}>合计 {fmt(c.input_tokens + c.output_tokens)}</span>
-                        <span style={{ color: 'var(--ink-faint)' }}>耗时 {fmtMs(c.elapsed_ms)}</span>
+                        <span style={{ color: 'var(--green)' }}>{t('cost.kpi.input')} {fmt(c.input_tokens)}</span>
+                        <span style={{ color: 'var(--violet)' }}>{t('cost.kpi.output')} {fmt(c.output_tokens)}</span>
+                        <span style={{ color: 'var(--ink-dim)' }}>{t('cost.kpiTotal')} {fmt(c.input_tokens + c.output_tokens)}</span>
+                        <span style={{ color: 'var(--ink-faint)' }}>{t('cost.latency')} {fmtMs(c.elapsed_ms)}</span>
                       </div>
                       {isActive && (
                         <div style={s.callDetailInline}>
@@ -384,11 +386,11 @@ export function CostDashboard(): React.JSX.Element {
                             <div style={{ padding: 12, textAlign: 'center' }}><div style={s.spinner} /></div>
                           ) : callDetail ? (
                             <div style={s.jsonSplit}>
-                              <JsonBlock data={callDetail.request_json} label="请求" />
-                              <JsonBlock data={callDetail.response_json} label="响应" />
+                              <JsonBlock data={callDetail.request_json} label={t('cost.request')} noData={t('cost.empty')} />
+                              <JsonBlock data={callDetail.response_json} label={t('cost.response')} noData={t('cost.empty')} />
                             </div>
                           ) : (
-                            <div style={{ padding: 12, color: 'var(--ink-faint)', fontSize: 11 }}>加载失败</div>
+                            <div style={{ padding: 12, color: 'var(--ink-faint)', fontSize: 11 }}>{t('cost.loadFail')}</div>
                           )}
                         </div>
                       )}

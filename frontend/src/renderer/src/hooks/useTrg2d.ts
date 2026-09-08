@@ -21,12 +21,12 @@ export function trgTables(ov: KnowledgeOverview): Trg2dTable[] {
   }))
 }
 
-/** graph.edges + llm_draft_edges → 组件边（draft 边 kind=llm + status=draft 虚线琥珀） */
+/** graph.edges + llm_draft_edges → 组件边（draft 边 source=llm + status=draft 虚线琥珀） */
 export function trgEdges(ov: KnowledgeOverview): GraphEdge[] {
   const drafts: GraphEdge[] = (ov.graph.llm_draft_edges ?? []).map((d) => ({
     from: d.from_table, from_col: d.from_col,
     to: d.to_table, to_col: d.to_col,
-    kind: 'llm', status: 'draft', reason: d.reason, diff: d.diff,
+    source: 'llm', status: 'draft', reason: d.reason, diff: d.diff,
   }))
   return [...(ov.graph.edges ?? []), ...drafts]
 }
@@ -63,12 +63,12 @@ export function useTrg2dActions(connId: string | null): Trg2dActions {
 
   const onDeleteEdge = useCallback(async (e: Trg2dDeleteEdge) => {
     if (!connId) return
-    if (e.kind === 'llm' && e.status === 'draft') {
+    if (e.source === 'llm' && e.status === 'draft') {
       // draft 边不在正式图谱里：✕ = 拒绝草案（同原列表 ✕）
       await rejectGraphDraft(connId, e.from_table)
       return
     }
-    await removeEdge(connId, { from_table: e.from_table, to_table: e.to_table, kind: e.kind })
+    await removeEdge(connId, { from_table: e.from_table, to_table: e.to_table, source: e.source })
     toastMsg(t('kb.relDeletedToast', { from: e.from_table, to: e.to_table }))
   }, [connId, removeEdge, rejectGraphDraft, t])
 

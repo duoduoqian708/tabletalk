@@ -1,4 +1,3 @@
-// locales/index.ts
 import { zhCN } from './zh-CN'
 import type { Messages } from './zh-CN'
 import { enUS } from './en-US'

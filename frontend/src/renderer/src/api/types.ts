@@ -204,10 +204,14 @@ export interface KbTableView {
   /** 2026-09：本轮表级提案（对比/取新/保持当前） */
   proposed_comment?: string
   columns: KbColumnView[]
-  /** 向量化片段（可读表描述）：人工覆盖优先，否则构建合成文本 */
+  /** 向量化片段（可读表描述）：人工覆盖 > AI 画像 > 空（零代码拼接） */
   vector_text: string
-  /** 人工覆盖的向量化片段；null = 未覆盖（用构建合成） */
+  /** 人工覆盖的向量化片段；null = 未覆盖（用 AI 画像） */
   vector_override: string | null
+  /** AI 表画像（审核确认后的向量文本）；null = 尚未生成 */
+  vector_profile?: string | null
+  /** 本轮 AI 画像提案（confirm 后提升为 vector_profile） */
+  proposed_profile?: string | null
 }
 
 /** 边 v2：字段级端点 + 基数；from 恒为多侧 */
@@ -216,10 +220,23 @@ export interface GraphEdge {
   from_col?: string | null
   to: string
   to_col?: string | null
-  kind: 'fk' | 'overlap' | 'user' | 'llm' | 'naming' | 'value_overlap' | 'query_log'
-  cardinality?: 'n:1' | '1:1'
+  /** 边来源（source）：fk|naming|llm|query_log|user——这条边由哪个通道产生 */
+  source: 'fk' | 'llm' | 'naming' | 'query_log' | 'user'
+  /** 边形态类型（kinds，派生）：normal|self|guarded|composite 的可叠加组合（后端 to_dict 输出） */
+  kinds?: string[]
+  /** 主形态（kind，派生）：guarded > composite > self > normal */
+  kind?: string
+  /** 兼容旧字段名 type（= kinds）；后端不再产出，仅旧数据回读 */
+  type?: string[]
+  cardinality?: 'n:1' | '1:1' | '1:N' | 'N:M'
   reason?: string
   weight?: number | null
+  /** 守卫谓词（多态关联条件，如 "X.type = 1"） */
+  guard?: string | null
+  /** 完整列对列表（复合边）；from_col/to_col 仅取第一对，cols 才是全部 */
+  cols?: [string, string][] | null
+  /** 置信度（后端 to_dict 输出；fk=1.0 / naming=0.6 / llm 按 AI 评估） */
+  confidence?: number | null
   /** draft=LLM 未确认边（宿主合并 llm_draft_edges 时标记）；缺省视为 confirmed */
   status?: 'draft' | 'confirmed'
   /** 图 diff（2026-09）：removed=本轮未重新提案的已确认边（红） */
@@ -241,6 +258,25 @@ export interface GraphDraftEdge {
 /** 2D 图布局坐标（表名 → 画布中心点；overview 回读 / 拖拽写回） */
 export type GraphLayout = Record<string, { x: number; y: number }>
 
+export interface RoundDiff {
+  tables: { added: string[]; removed: string[]; renamed: [string, string][] }
+  columns: { added: string[]; removed: string[]; changed: string[] }
+}
+export interface RoundTag {
+  name: string
+  description: string
+  tables?: string[]
+  /** 锚点模式：AI 提议的改名/合并映射（审核镜头展示"新名（原：旧名）"） */
+  renamed_from?: string
+  merged_from?: string[]
+}
+export interface RoundBaselineColumn { comment?: string; values?: string; example?: string }
+export interface RoundBaseline {
+  comment?: string
+  ddl?: string
+  columns?: Record<string, RoundBaselineColumn>
+}
+
 export interface KnowledgeOverview {
   built?: boolean
   kb_status?: string
@@ -254,6 +290,8 @@ export interface KnowledgeOverview {
   draft_count: number
   tag_draft_count: number
   embedding_provider: string
+  /** 本轮对比区（审核页数据源）：构建模式 + 结构 diff + 新版标签全集 + 注释失败表 */
+  round?: { mode?: 'full' | 'incr'; diff?: RoundDiff | null; tags_new?: RoundTag[]; failed_tables?: string[] }
 }
 
 /** 字段历史版本（版本制：确认时归档，供「版本回溯」复用旧值） */

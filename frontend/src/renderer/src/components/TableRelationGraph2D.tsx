@@ -1,7 +1,9 @@
 import { useEffect, useId, useMemo, useReducer, useRef, useState } from 'react'
 import type { GraphEdge } from '@renderer/api/types'
 import { colorFor } from '@renderer/lib/sphere'
+import { Dropdown } from './Dropdown'
 import { useI18n } from '@renderer/store/i18n'
+import { IconCheck, IconX } from './ui/icons'
 
 /* ═══════════════════════════════════════════════════════════════
    TableRelationGraph2D — 手写 SVG 可编辑表关系图（spec §6 右栏）
@@ -24,7 +26,11 @@ export interface Trg2dAddEdge {
   from_col: string
   to_table: string
   to_col: string
-  cardinality: 'n:1' | '1:1'
+  cardinality: 'n:1' | '1:1' | '1:N' | 'N:M'
+  /** 守卫谓词（多态关联条件，可空） */
+  guard?: string | null
+  /** 复合边的额外列对（from_col/to_col 是第一对，此为其余对） */
+  extra_cols?: [string, string][]
 }
 
 export interface Trg2dDeleteEdge {
@@ -32,7 +38,7 @@ export interface Trg2dDeleteEdge {
   from_col?: string
   to_table: string
   to_col?: string
-  kind: string
+  source: string
   /** draft 边宿主据此分流（llm+draft → 拒绝/确认草案，其余 → 删边） */
   status?: string
 }
@@ -42,7 +48,7 @@ export type Trg2dLayout = Record<string, Trg2dPoint>
 
 interface Props {
   tables: Trg2dTable[]
-  /** 含 fk/llm/user 边；llm 未确认边由宿主映射为 kind:'llm' + status:'draft' */
+  /** 含 fk/llm/user 边；llm 未确认边由宿主映射为 source:'llm' + status:'draft' */
   edges: GraphEdge[]
   /** 连线面板两端字段下拉的数据源：表名 → 列名列表 */
   columnsByTable: Record<string, string[]>
@@ -67,7 +73,28 @@ interface Props {
 
 /** 边唯一 key（与内部 edgeGeoms 同源，供外部列表联动定位） */
 export function graphEdgeKey(e: GraphEdge): string {
-  return `${e.from}|${e.from_col ?? ''}|${e.to}|${e.to_col ?? ''}|${e.kind}|${e.status ?? 'confirmed'}`
+  return `${e.from}|${e.from_col ?? ''}|${e.to}|${e.to_col ?? ''}|${e.source}|${e.status ?? 'confirmed'}`
+}
+
+/** 边形态类型 → CSS class 后缀（normal 隐式不标；type 数组由后端 graph() 派生，
+ *  本地按端点/守卫兜底推导 self（自环可即时判定））。 */
+export function edgeTypeCls(e: GraphEdge): string {
+  // kinds 优先（后端 to_dict 输出），回退旧 type 字段
+  const types = [...(e.kinds ?? e.type ?? [])]
+  if (e.from && e.to && e.from === e.to && !types.includes('self')) types.push('self')
+  return types.length ? ` type-${types.join(' type-')}` : ''
+}
+
+/** 边形态类型列表（kinds 优先，回退 type；端点同表兜底 self） */
+export function edgeKinds(e: GraphEdge): string[] {
+  const types = [...(e.kinds ?? e.type ?? [])]
+  if (e.from && e.to && e.from === e.to && !types.includes('self')) types.push('self')
+  return types
+}
+
+/** cardinality 缩写（线上精简标签用） */
+export function cardShort(card?: string | null): string {
+  return card ?? 'n:1'
 }
 
 /* ── 几何常量 ── */
@@ -173,7 +200,8 @@ interface EdgeGeom {
   /** 近垂直边标签保持水平、贴线右侧放置（避免竖排长条） */
   horizontal: boolean
   labelW: number
-  labelFull: string   // "from.table.from_col → to.table.to_col (n:1)"
+  labelFull: string   // "from.table.from_col → to.table.to_col (n:1) ·N列 [guard]"
+  labelShort: string  // 线上精简标签："n:1" / "1:1" / "n:1 ·2"
   /** 二次贝塞尔均匀采样折线（命中检测用，弦距近似在弓高下会漏检） */
   pts: Trg2dPoint[]
 }
@@ -247,8 +275,10 @@ export function TableRelationGraph2D({
       const horizontal = Math.abs(angle) > 55   // 近垂直边：标签水平放置
       if (!horizontal && (angle > 90 || angle < -90)) angle += 180   // 沿线标签保持正立
       const fc = e.from_col || '*', tc = e.to_col || '*'
-      const cardStr = e.cardinality === '1:1' ? '1:1' : 'n:1'
-      const labelFull = `${e.from}.${fc} → ${e.to}.${tc} (${cardStr})`
+      const cardStr = cardShort(e.cardinality)
+      const colCount = (e.cols?.length ?? 1)
+      const labelShort = colCount > 1 ? `${cardStr} ·${colCount}` : cardStr
+      const labelFull = `${e.from}.${fc} → ${e.to}.${tc} (${cardStr})${colCount > 1 ? ` ·${colCount}列` : ''}${e.guard ? ` [${e.guard}]` : ''}`
       // 命中折线采样：B(t)=(1-t)²P0+2(1-t)tC+t²P2，16 段足够 7px 阈值
       const pts: Trg2dPoint[] = []
       for (let i = 0; i <= 16; i++) {
@@ -259,7 +289,7 @@ export function TableRelationGraph2D({
         key: graphEdgeKey(e),
         edge: e, draft: e.status === 'draft', diff: e.diff,
         d: `M ${pa.x} ${pa.y} Q ${cx} ${cy} ${pb.x} ${pb.y}`,
-        mid, angle, horizontal, labelW: (fc.length + tc.length) * 5.2 + 30, labelFull, pts,
+        mid, angle, horizontal, labelW: labelShort.length * 5.2 + 20, labelFull, labelShort, pts,
       })
     }
     return out
@@ -275,7 +305,9 @@ export function TableRelationGraph2D({
   const [link, setLink] = useState<{ from: string; cur: Trg2dPoint; target: string | null } | null>(null)
   const [panel, setPanel] = useState<{
     from_table: string; to_table: string; anchor: Trg2dPoint
-    from_col: string; to_col: string; cardinality: 'n:1' | '1:1'; busy: boolean; error: string
+    from_col: string; to_col: string; cardinality: 'n:1' | '1:1' | '1:N' | 'N:M'
+    guard: string; extra_cols: [string, string][]
+    busy: boolean; error: string
   } | null>(null)
 
   type Gesture =
@@ -506,7 +538,9 @@ export function TableRelationGraph2D({
     const guessTo = dstCols.find((c) => /^id$/i.test(c)) ?? ''
     setPanel({
       from_table: from, to_table: to, anchor: anchorWorld,
-      from_col: guessFrom, to_col: guessTo, cardinality: 'n:1', busy: false, error: '',
+      from_col: guessFrom, to_col: guessTo, cardinality: 'n:1',
+      guard: '', extra_cols: [],
+      busy: false, error: '',
     })
   }
 
@@ -518,6 +552,8 @@ export function TableRelationGraph2D({
       await onAddEdge({
         from_table: panel.from_table, from_col: panel.from_col,
         to_table: panel.to_table, to_col: panel.to_col, cardinality: panel.cardinality,
+        guard: panel.guard.trim() || null,
+        extra_cols: panel.extra_cols.filter(([a, b]) => a && b),
       })
       setPanel(null)
     } catch (err) {
@@ -532,7 +568,7 @@ export function TableRelationGraph2D({
     setSelKey(null)
     void Promise.resolve(onDeleteEdge({
       from_table: e.from, from_col: e.from_col ?? undefined,
-      to_table: e.to, to_col: e.to_col ?? undefined, kind: e.kind, status: e.status,
+      to_table: e.to, to_col: e.to_col ?? undefined, source: e.source, status: e.status,
     })).catch(() => {})
   }
 
@@ -544,7 +580,7 @@ export function TableRelationGraph2D({
     setSelKey(null)
     void Promise.resolve(onConfirmEdge({
       from_table: e.from, from_col: e.from_col ?? undefined,
-      to_table: e.to, to_col: e.to_col ?? undefined, kind: e.kind, status: e.status,
+      to_table: e.to, to_col: e.to_col ?? undefined, source: e.source, status: e.status,
     })).catch(() => {})
   }
 
@@ -582,7 +618,7 @@ export function TableRelationGraph2D({
         <g ref={(el) => { viewGRef.current = el; if (el) requestAnimationFrame(applyView) }}>
           {/* ── 边层 ── */}
           {edgeGeoms.map((g) => (
-            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${g.diff ? ` diff-${g.diff}` : ''}${selKey === g.key ? ' is-sel' : ''}${highlightKey === g.key ? ' is-highlight' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
+            <g key={g.key} className={`trg2d-edge${g.draft ? ' is-draft' : ''}${g.diff ? ` diff-${g.diff}` : ''}${edgeTypeCls(g.edge)}${selKey === g.key ? ' is-sel' : ''}${highlightKey === g.key ? ' is-highlight' : ''}${editable ? ' is-edit' : (g.draft ? '' : ' is-flow')}`}>
               <path className="trg2d-edge-hit" d={g.d} />
               <path className="trg2d-edge-line" d={g.d}
                 markerEnd={editable ? `url(#${arrowId})` : undefined} />
@@ -605,11 +641,11 @@ export function TableRelationGraph2D({
                   <text className="trg2d-edge-label"
                     x={g.horizontal ? 9 : 0}
                     textAnchor={g.horizontal ? 'start' : 'middle'}>
-                    {`${g.edge.from_col || '*'} → ${g.edge.to_col || '*'}`}
+                    {g.labelShort}
                   </text>
                 </g>
               )}
-              <title>{[g.labelFull, g.edge.reason, g.draft ? t('kb.badgePending') : null].filter(Boolean).join(' · ')}</title>
+              <title>{[g.labelFull, g.edge.reason, edgeKinds(g.edge).join('/'), g.draft ? t('kb.badgePending') : null].filter(Boolean).join(' · ')}</title>
             </g>
           ))}
 
@@ -651,20 +687,29 @@ export function TableRelationGraph2D({
       </svg>
 
       {/* ── 操作提示 ── */}
-      <div className="trg2d-hint">{editable ? t('trg2d.hint') : '展示态 · 只读方向流动 · 切「编辑」可拖线连表'}</div>
+      <div className="trg2d-hint">{editable ? t('trg2d.hint') : t('trg2d.readonlyHint')}</div>
 
       {/* ── 缩放指示 ── */}
       <div className="trg2d-zoom">{Math.round(v.k * 100)}%</div>
+
+      {/* ── 边类型图例 ── */}
+      <div className="trg2d-legend">
+        <span className="trg2d-legend-title mono">{t('trg2d.legendTitle')}</span>
+        <span className="trg2d-legend-item"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="var(--g-edge)" strokeWidth="1.3" /></svg>{t('trg2d.legendNormal')}</span>
+        <span className="trg2d-legend-item"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="var(--accent, #34f5c5)" strokeWidth="2" strokeDasharray="6 4" /></svg>{t('trg2d.legendSelf')}</span>
+        <span className="trg2d-legend-item"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="var(--g-guarded, #b08bf5)" strokeWidth="1.5" strokeDasharray="1.5 4" strokeLinecap="round" /></svg>{t('trg2d.legendGuarded')}</span>
+        <span className="trg2d-legend-item"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="var(--g-composite, #57c7e0)" strokeWidth="2.6" /></svg>{t('trg2d.legendComposite')}</span>
+      </div>
 
       {/* ── 选中边的操作按钮（draft 边多一个 ✓ 确认） ── */}
       {selGeom && delScreen && (
         <>
           {selGeom.draft && onConfirmEdge && (
             <button type="button" className="trg2d-okbtn" style={{ left: delScreen.x - 15, top: delScreen.y }}
-              title={t('trg2d.confirmEdge')} onClick={confirmSelected}>✓</button>
+              title={t('trg2d.confirmEdge')} onClick={confirmSelected}><IconCheck size={11} /></button>
           )}
           <button type="button" className="trg2d-delbtn" style={{ left: delScreen.x + (selGeom.draft && onConfirmEdge ? 15 : 0), top: delScreen.y }}
-            title={t('trg2d.del')} onClick={deleteSelected}>✕</button>
+            title={t('trg2d.del')} onClick={deleteSelected}><IconX size={11} /></button>
         </>
       )}
 
@@ -679,24 +724,79 @@ export function TableRelationGraph2D({
             </div>
             <label className="trg2d-panel-field">
               <span>{t('trg2d.from')}</span>
-              <select value={panel.from_col} onChange={(e) => setPanel({ ...panel, from_col: e.target.value })}>
-                {!srcCols.length && <option value="">{t('trg2d.noCols')}</option>}
-                {srcCols.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <Dropdown
+                style={{ width: '100%' }}
+                value={panel.from_col}
+                options={srcCols.length ? srcCols.map((c) => ({ value: c, label: c })) : [{ value: '', label: t('trg2d.noCols') }]}
+                onChange={(v) => setPanel({ ...panel, from_col: v })}
+              />
             </label>
             <label className="trg2d-panel-field">
               <span>{t('trg2d.card')}</span>
-              <select value={panel.cardinality} onChange={(e) => setPanel({ ...panel, cardinality: e.target.value as 'n:1' | '1:1' })}>
-                <option value="n:1">n:1</option>
-                <option value="1:1">1:1</option>
-              </select>
+              <Dropdown
+                style={{ width: '100%' }}
+                value={panel.cardinality}
+                options={[
+                  { value: 'n:1', label: 'n:1' },
+                  { value: '1:1', label: '1:1' },
+                  { value: '1:N', label: '1:N' },
+                  { value: 'N:M', label: 'N:M' },
+                ]}
+                onChange={(v) => setPanel({ ...panel, cardinality: v as 'n:1' | '1:1' | '1:N' | 'N:M' })}
+              />
             </label>
             <label className="trg2d-panel-field">
               <span>{t('trg2d.to')}</span>
-              <select value={panel.to_col} onChange={(e) => setPanel({ ...panel, to_col: e.target.value })}>
-                {!dstCols.length && <option value="">{t('trg2d.noCols')}</option>}
-                {dstCols.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <Dropdown
+                style={{ width: '100%' }}
+                value={panel.to_col}
+                options={dstCols.length ? dstCols.map((c) => ({ value: c, label: c })) : [{ value: '', label: t('trg2d.noCols') }]}
+                onChange={(v) => setPanel({ ...panel, to_col: v })}
+              />
+            </label>
+            {/* 复合边：额外列对编辑器（第一对是 from_col/to_col，其余在此增删） */}
+            {panel.extra_cols.map((pair, i) => (
+              <div className="trg2d-panel-colpair" key={i}>
+                <Dropdown
+                  style={{ flex: 1 }}
+                  value={pair[0]}
+                  options={srcCols.map((c) => ({ value: c, label: c }))}
+                  onChange={(v) => {
+                    const next = [...panel.extra_cols]
+                    next[i] = [v, next[i][1]]
+                    setPanel({ ...panel, extra_cols: next })
+                  }}
+                />
+                <span className="trg2d-panel-arrow">→</span>
+                <Dropdown
+                  style={{ flex: 1 }}
+                  value={pair[1]}
+                  options={dstCols.map((c) => ({ value: c, label: c }))}
+                  onChange={(v) => {
+                    const next = [...panel.extra_cols]
+                    next[i] = [next[i][0], v]
+                    setPanel({ ...panel, extra_cols: next })
+                  }}
+                />
+                <button type="button" className="trg2d-btn ghost trg2d-colpair-del"
+                  title={t('trg2d.del')}
+                  onClick={() => setPanel({ ...panel, extra_cols: panel.extra_cols.filter((_, j) => j !== i) })}><IconX size={9} /></button>
+              </div>
+            ))}
+            <button type="button" className="trg2d-btn ghost trg2d-add-colpair"
+              onClick={() => setPanel({ ...panel, extra_cols: [...panel.extra_cols, ['', '']] })}>
+              + {t('trg2d.addColPair')}
+            </button>
+            {/* 守卫谓词（多态关联条件，可空） */}
+            <label className="trg2d-panel-field">
+              <span>{t('trg2d.guard')}</span>
+              <input
+                type="text"
+                className="trg2d-panel-input"
+                placeholder={t('trg2d.guardPh')}
+                value={panel.guard}
+                onChange={(e) => setPanel({ ...panel, guard: e.target.value })}
+              />
             </label>
             {panel.error && <div className="trg2d-panel-error">{panel.error}</div>}
             <div className="trg2d-panel-acts">

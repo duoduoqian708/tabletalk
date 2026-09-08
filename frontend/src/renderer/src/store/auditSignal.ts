@@ -3,7 +3,7 @@ import { auditSignal } from '@renderer/api/audit'
 import { useConnections } from '@renderer/store/connections'
 
 /** 轮询间隔：用户要求易于调整（可能改 10s），改这一个常量即可 */
-export const SIGNAL_POLL_INTERVAL = 30_000
+const SIGNAL_POLL_INTERVAL = 30_000
 
 interface SignalState {
   unread: number

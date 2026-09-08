@@ -1,4 +1,3 @@
-/** CostDashboard mock 数据 — 已被真实数据接管（USE_MOCK=false，走 /api/v1/cost）；mock 函数保留供回归参考。 */
 
 export const USE_MOCK = false
 
@@ -111,7 +110,7 @@ function mockCallDetail(id: number, skill: string, model: string) {
     conn_id: 'demo',
     skill,
     model,
-    provider: 'cloud',
+    provider: 'deepseek',
     session_id: '',
     input_tokens: input,
     output_tokens: output,
@@ -135,7 +134,7 @@ function mockCalls(sid: string, n: number) {
       conn_id: 'demo',
       skill,
       model,
-      provider: 'cloud',
+    provider: 'deepseek',
       session_id: sid,
       input_tokens: input,
       output_tokens: output,

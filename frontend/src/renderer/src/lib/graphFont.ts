@@ -4,7 +4,7 @@
  * 档位即真实渲染字号：3D（canvas）每帧重读，2D（SVG）经 CSS 变量 --graph-node-font 实时生效，均不随画布缩放。
  */
 export const GRAPH_FONT_LEVELS = [13.5, 15, 16.5, 18, 19.5] as const
-export const GRAPH_FONT_DEFAULT = 1 // 默认第 1 档 = 当前字号，改动前页面无感知
+const GRAPH_FONT_DEFAULT = 1 // 默认第 1 档 = 当前字号，改动前页面无感知
 
 const KEY = 'tabletalk-graph-font'
 const CSS_VAR = '--graph-node-font'
@@ -28,7 +28,7 @@ export function graphFontBasis(level = getGraphFontLevel()): number {
 }
 
 /** 把当前档位写进 CSS 变量：2D 图 SVG 节点名经 var(--graph-node-font) 实时重绘 */
-export function applyGraphFontDom(level = getGraphFontLevel()): void {
+function applyGraphFontDom(level = getGraphFontLevel()): void {
   try { document.documentElement.style.setProperty(CSS_VAR, `${graphFontBasis(level)}px`) } catch { /* ignore */ }
 }
 

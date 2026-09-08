@@ -4,8 +4,7 @@
    单一来源：所有组件只允许引用本文件变量，禁止硬编码色值。
    ============================================================ */
 
-:root,
-:root[data-theme='dark'] {
+:root, :root[data-theme='dark'] {
   /* ── 表面层级（夜空黑，蓝调递进） ── */
   --void-0: #05070b;   /* 应用底色（最深） */
   --void-1: #0b0f16;   /* 面板 */
@@ -40,6 +39,7 @@
   --amber-dim: rgba(255, 180, 84, 0.13);
   --red: #ff6b81;
   --red-dim: rgba(255, 107, 129, 0.13);
+  --red-ink: #2b0a10;
   --blue: #63c8ff;
   --blue-dim: rgba(99, 200, 255, 0.13);
   --violet: #b18cff;
@@ -151,6 +151,7 @@
   --amber-dim: rgba(178, 106, 0, 0.12);
   --red: #d64545;
   --red-dim: rgba(214, 69, 69, 0.12);
+  --red-ink: #ffffff;
   --blue: #2b7fd4;
   --blue-dim: rgba(43, 127, 212, 0.12);
   --violet: #7a5af0;
@@ -194,9 +195,7 @@
   padding: 0;
 }
 
-html,
-body,
-#root {
+html, body, #root {
   height: 100%;
 }
 
@@ -241,8 +240,7 @@ button {
   font-family: inherit;
 }
 
-input,
-textarea {
+input, textarea {
   font-family: inherit;
 }
 

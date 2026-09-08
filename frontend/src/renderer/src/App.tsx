@@ -61,6 +61,15 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     if (rt) void loadConns()
+    // 默认数据源以后端持久化值为事实源（跨浏览器/origin 一致）；
+    // 后端未设置时不动本地 localStorage 降级值（兼容本功能上线前的旧设置）
+    if (rt) {
+      void import('@renderer/api/settings').then(({ getSettings }) => getSettings())
+        .then((s) => {
+          if (s.default_connection) useConnections.getState().applyBackendDefault(s.default_connection)
+        })
+        .catch(() => undefined)
+    }
   }, [rt, loadConns])
 
   useEffect(() => {
