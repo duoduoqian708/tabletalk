@@ -63,8 +63,8 @@ Browser does this via `src/renderer/src/hooks/useBootstrap.ts`.
 
 ## AI gateway
 
-Default `TABLETALK_AI_PROVIDER=mock` needs no API key and runs the full flow.
-`cloud`/`local` use any OpenAI-compatible endpoint (`TABLETALK_AI_BASE_URL/API_KEY/MODEL`).
+`TABLETALK_AI_PROVIDER` = supplier name (e.g. `deepseek`, `glm`, `openai`) or `mock` (test-only built-in simulator).
+Any OpenAI-compatible endpoint (`TABLETALK_AI_BASE_URL/API_KEY/MODEL`). Leave `TABLETALK_AI_PROVIDER` empty → AI unavailable (first-run引导配置).
 
 ## First-run behavior
 
@@ -80,9 +80,10 @@ Backend env via `backend/.env` (see `.env.example`): `TABLETALK_PORT`,
 `TABLETALK_POOL_SIZE`, `TABLETALK_QUERY_MAX_ROWS`. Runtime AI/gate settings are
 overridable via `PUT /api/v1/settings`.
 
-> **Gotcha:** `TABLETALK_GATE_REVIEW_THRESHOLD` and `gate_rules` are configurable
-> and persisted, but **no gate code reads them** — writes are always `REVIEW`
-> regardless of row count. Don't assume a threshold auto-allows writes.
+> **Gotcha:** `gate_rules`（规则覆盖，只许收严）与 `policy.threshold`（只读扫描行数
+> 成本阈值，超阈升 REVIEW）真实生效；规则/阈值配置 UI 在审计页 RulesDrawer。
+> 写操作永远 `REVIEW`，无行数自动放行——不要假设阈值会自动 ALLOW 写入。
+> `gate_review_threshold` 已删除（曾被 policy.threshold 恒遮蔽的死配置）。
 
 ## 会话死规矩（用户强制要求，务必自动执行，不等提醒）
 

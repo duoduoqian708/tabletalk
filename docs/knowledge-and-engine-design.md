@@ -4,6 +4,7 @@
 > 修订：2026-08-31 -- §9.2 表级过滤器执行点调整：引擎不参与 SQL 内容组成（校验拦截/安全审计/执行之外不改写 SQL），过滤器改为 context 提示消费，见 §9.2 与 D13。
 > 修订：2026-08-31 -- §6/§7/D11/D12 建边管线简化：构建来源收敛为三类（FK/命名推断/LLM 识别），值重叠与判别器检测删除；**一切边（含置信度 1.0 的 FK）经人工确认才生效**；人工连线与查询日志挖掘是生命周期机制（非构建来源），其中日志挖掘产出的边同样过确认闸门。
 > 修订：2026-09 -- 意图识别移除关键词层（§13/D6）：意图统一由 LLM 产出 TaskPlan；mock/离线确定性降级；未来向量层做语义沉淀（相同语义问题直接复用执行路径，跳过 LLM）。
+> 修订：2026-09（引擎合一）-- **§12–§15 重写**：TaskPlan 意图层与 skill 路由层退役，harness 单循环为唯一 ReAct 执行引擎（意图在循环内自主分解 + preflight 准备层）；报告/受控计划是同一循环核心上的产品配置（execute_plan 外层只服务受控计划与报告）。D6/D7/D8/D17 由本修订取代（§20 已标注）。
 
 ---
 
@@ -384,171 +385,61 @@ NL 问题
 
 # 第二部分 · 引擎设计
 
-## 12. 总体架构：Plan-and-Execute + ReAct
+## 12. 总体架构：唯一 ReAct 循环（2026-09 引擎合一）
 
-整个引擎 = **Plan-and-Execute（先规划再执行）+ ReAct（思考-行动-观察循环）**。
-
-```
-用户请求
-  → 意图层（Plan）：分解成任务列表 TaskPlan
-  → 任务循环（Execute 外层）：顺序执行每个任务
-       → 路由决策：任务剖面 → 一个 skill
-       → ReAct 循环（内层）：skill 内反复 思考→调工具→观察，直到终止条件
-  → 结果组装（编号列表）
-```
-
-三层性质（**不是三层循环**）：
-
-| 层级 | 本质 | 是否循环 |
-|---|---|---|
-| 任务 | 分解出的工作单元 | ✅ 任务循环（顺序执行器） |
-| skill | 该任务的执行方案 | ✅ ReAct 循环 |
-| tool | 原子执行单元 | ❌ 一次调用一次返回 |
-
-- **路由（任务 → skill）是决策，不是循环**
-- **安全闸门横切所有层**，不属于任何一层
-
-## 13. 意图层：任务分解 + 三轴剖面
-
-### 13.1 输出：TaskPlan（任务列表，长度 ≥ 1）
+整个引擎 = **一个通用 ReAct 循环（harness）**，没有独立的意图层/任务层。
 
 ```
-TaskPlan = [
-  { action, trust, modality, target },
-  { action, trust, modality, target },
-  ...
-]
+用户请求 → preflight（准备层：脱敏/清单/tags/追问检测）
+  → 问题库快路径（命中 → 零模型确认卡，不进循环）
+  → harness 单循环：模型自主 意图分解 → 调工具 → 观察 → 直到给出答案
+       工具面 = 全部 readonly 工具 + ask_user（澄清）+ propose_plan（受控流入口）
+       mutating 工具不在场——写操作走 propose_plan 先审后动
+  → 受控计划（propose_plan → 人审确认）→ execute_plan 外层 for + 循环核心（工具面收窄）
 ```
 
-- 单意图请求 → 长度 1
-- 复合请求 → 长度 > 1（不需要单独的 compound 布尔）
+三个执行入口共用一套循环核心（`app/ai/harness.py` 的 `run_react_loop`）：
 
-### 13.2 三轴剖面
+| 入口 | 用途 | 工具面 | 交互 |
+|---|---|---|---|
+| harness_stream | 默认对话流 | readonly 全集（trust 元数据过滤）+ ask_user/propose_plan | ✅ |
+| controlled_step_stream | 受控计划步骤 | 按步骤动作查表（write 步骤带 run_dml + DML 确认流） | ❌ |
+| report_stream | 报告管线（非循环：澄清/规划/成文三次单发 LLM + 直接执行） | — | 澄清 |
 
-```
-action    : query | write | ddl | kb | schedule | system | unknown   ← 封闭枚举
-modality  : answer | analyze | report | automate                     ← 有序枚举（可升降级）
-trust     : read | write | ddl                                       ← 派生值（不分类）
-target    : {concept?, tables?}                                       ← 自由抽取（非枚举）
-```
+**为什么放弃 Plan-and-Execute 意图层**：当代模型在单循环内自主分解意图已稳定（真实模型实测）；
+独立意图层 = 每请求多一次 LLM 调用（成本/延迟/新失败点）+ 计划与循环内新发现脱节的经典病。
+计划这种东西的存在理由是「给人审」或「驱动结构化产物」——恰好就是 propose_plan（人审）与报告
+（结构化文档），它们保留显式计划；自由问答不需要中间 TaskPlan。
 
-**关键设计**：
+## 13. （已退役）意图层——三轴剖面降级为审计词汇
 
-1. **trust 不分类，由 action 查表派生**（query→read, write→write, ddl→ddl），避免识别出矛盾状态
-2. **action 是封闭枚举，必须带 `unknown` 兜底值**
-3. **modality 是有序枚举**：`answer ⊂ analyze ⊂ report ⊂ automate`，呈包含关系，可沿尺度升降级
-4. **target 是自由抽取**，与路由无关，只影响 prompt 组装
+原设计：LLM 产出 TaskPlan（任务列表 + action/modality/trust 三轴剖面，D6）。引擎合一后：
 
-### 13.3 分解要语义判断，不能按标点拆
+- 意图分解在循环内由模型自主完成；preflight 只做准备字段（tags/追问检测/skip_retrieval）
+- 三轴剖面（action/modality/trust）不再驱动路由，降级为**审计与事件词汇**（task_start 事件的
+  action 字段、受控步骤工具面查表的 key）
+- TaskPlan/TaskSpec 数据结构与 execute_plan 外层保留，只服务受控计划与报告模式
 
-- "查一下 xxx，顺便看下 xxx" → 拆 2 个任务（不同操作）
-- "查每个季度的销售额**和**利润" → **1 个任务**（同一 SQL 取两列）
+## 14. 任务循环的执行规则（受控计划专用）
 
-依据是"**是否独立操作**"：不同表/不同动作 → 拆；同一查询取多指标 → 不拆。
+execute_plan（外层 for）只出现在两个受控流：
 
-### 13.4 意图澄清闸门（2026-09 草案）
+- **propose_plan 确认后的分段执行**（plans.py）：顺序跑步骤，遇 DML 确认卡挂起（plan_awaiting），
+  确认后续段；失败即停（剩余含写任务则停）
+- **报告模式**：单任务外层（task_start/task_result/task_done 包住报告管线）
 
-**场景**：意图**不完整/不清晰**——缺目标（"帮我查一下"无对象）、范围不明（"最近"到
-多久）、空指代、或信息冲突。此时不应盲目执行或硬塞进 query。
+三条硬规则不变：一步骤一循环（步骤不嵌套）；顺序执行（共享 Context 传前序结果）；失败即停
+（写任务依赖的读必须先成功）。
 
-```
-用户：帮我查一下
-  → decompose（LLM）判定意图不完整 → 产出 clarify 信号 + 候选问题（1~3 个）
-  → 引擎暂停执行，发澄清卡片（不进任务循环/工具/检索）
-  → 用户回答 → 并入上下文重新 decompose（或带澄清继续原计划）→ 正常执行
-```
+## 15. （已退役）Skill 层——工具面查表
 
-**关键点**：
-- 这是 decompose 的新输出态（区别于 `unknown`=offtopic；新增 `clarify` 通道），
-  LLM 判定"意图不完整"本身要克制——只对缺关键目标/范围时触发，避免每问必澄清
-- 澄清交互接入 §19.5 continuation gate（用户回答作为 new_question + 澄清上下文）
-- 执行前刹停（不发 task_start），与 report 澄清（流程中途）层级不同
+原设计：skill = 声明式配置（8 个内置技能，路由查表，D8）。引擎合一后：
 
-## 14. 任务循环的执行规则
-
-```
-for task in TaskPlan:
-    route(task) → skill          # 一个任务对应【一个】skill
-    skill 内部 ReAct：用【多个】tool 反复 思考→调用→观察
-    结果写入共享 Context（前序任务结果对后续可见）
-```
-
-三条硬规则：
-
-1. **一任务一 skill**（skill 不调 skill）——避免在任务和 skill 之间再引入编排层
-2. **顺序执行**：按用户顺序，不过度设计并行；跨任务依赖靠共享 Context 传递
-3. **失败即停**：前序任务失败 → 后续任务停，**尤其任何写任务之前必须确认依赖的读都成功**
-
-## 15. Skill 设计：声明式配置（数据，不是代码）
-
-### 15.1 第一原则
-
-**skill = 配置数据，不是代码类。** 真正的执行器是**一个通用 ReAct 循环**，读配置跑。
-
-- 加新 skill = 加一条配置，不改执行代码
-- 配置可 schema 校验、可 diff、可 review
-
-### 15.2 Skill 完整结构
-
-```yaml
-name: report
-description: "生成带叙述的报表（聚合数据 + 数字可追溯）"
-
-# ① 路由匹配条件
-match:
-  action: query
-  modality: report
-
-# ② 能力边界
-trust: read                                   # 声明信任姿态
-tools: [get_schema, kb_read, graph_read, run_query]   # 白名单
-
-# ③ 场景指导（说明书正文）
-system_prompt: |
-  你是报表生成场景。流程：
-  1) 查知识库确认口径
-  2) 写聚合 SQL
-  3) 执行并核对数字
-  4) 写成带叙述的报表，数字可追溯
-  ...
-
-# ④ 循环控制（一等字段，别忘）
-termination:
-  done_when: "报表已产出且数字已核对"
-  max_turns: 6
-
-degradation: "知识库无命中 → 退回纯 schema 生成；行数超限 → 提示收窄条件"
-```
-
-### 15.3 Skill 集合（7 个，按工具边界/信任姿态划分）
-
-| # | Skill | 信任 | 工具白名单 | 说明 |
-|---|---|---|---|---|
-| 1 | query | read | get_schema, kb_read, graph_read, run_query, query_audit | 即席查询/分析，输出表格 |
-| 2 | report | read | get_schema, kb_read, graph_read, run_query | 聚合 + 叙述，强制 include_data |
-| 3 | write | write | run_query, get_schema, run_dml | DML 草稿 + 确认，永不自动执行 |
-| 4 | ddl | ddl | get_schema, draft_ddl | DDL 草稿，**无执行工具** |
-| 5 | kb | write | kb_read, kb_write, graph_read, graph_write, get_schema | 知识库/图谱维护 |
-| 6 | schedule | write | manage_task, run_query, get_schema | 定时任务 CRUD |
-| 7 | general | read | get_schema, kb_read, graph_read, run_query | 兜底，只读低危，永不拒绝也不闯祸 |
-
-- **answer 和 analyze 共用 query skill**（差异只在循环轮数/终止条件），不为每个 modality 建 skill
-- **general 兜底必须有**：承接未知组合、置信度低、组合意图拆分失败的请求
-
-### 15.4 路由：查表 + 兜底
-
-```
-route(action, modality) → skill_name      # 纯函数，可穷举单测
-
-(query, answer/analyze) → query
-(query, report)         → report
-(query, automate)       → schedule
-(write, *)              → write
-(ddl, *)                → ddl
-(kb, *)                 → kb
-(schedule, *)           → schedule
-(unknown, *)            → general
-```
+- skill 路由/注册表/SQLite 持久化/管理 API 全部退役
+- 工具面收敛为两张查表：harness readonly 集（工具注册的 **trust 元数据过滤**，单一事实来源，
+  注册时强制标注）+ 受控步骤动作→工具集映射（write/query/kb/schedule 四行）
+- 场景指导书不再按技能分发：harness prompt 承载对话纪律（查证/澄清/先审后动），
+  受控步骤经指令注入（步骤 description + 参考 SQL）
 
 ## 16. 安全与隐私：横切 + 防御纵深
 
@@ -557,27 +448,33 @@ route(action, modality) → skill_name      # 纯函数，可穷举单测
 ### 16.1 两道独立的墙
 
 ```
-墙1（能力层）：skill 的 trust 声明 + 工具白名单
-              → 查询任务根本看不到写工具（减少攻击面 + 减少 LLM 选错）
+墙1（能力层）：工具 trust 元数据（注册强制项）+ 受控步骤工具面查表
+              → 默认对话流根本看不到写工具（减少攻击面 + 减少 LLM 选错）
 墙2（执行层）：全局安全闸门
               → 即使写被尝试，也要 preview + confirm（最后防线）
 ```
 
-- **skill 只声明信任，不负责执行检查**；闸门全局执行
-- 两道独立机制：skill 声明错了 trust，闸门仍拦得住；闸门有 bug，白名单还在兜底
-- **写任务永远过确认闸门**，复合请求绝不绕过
-- **注意**：SQL 闸门管不了非 SQL 工具（kb_write / graph_write / manage_task），这些工具的能力隔离**只能靠 skill 白名单**——这是 skill 白名单不可删的原因之一
+- **工具注册只声明信任，不负责执行检查**；闸门全局执行
+- 两道独立机制：工具面收窄漏了，闸门仍拦得住；闸门有 bug，工具不在场还在兜底
+- **写任务永远过确认闸门**，受控计划绝不绕过
+- **注意**：SQL 闸门管不了非 SQL 工具（kb_write / graph_write），这些工具只在受控步骤的
+  kb 动作工具面出现（对话流不可见）——受控步骤工具面查表是能力隔离的载体，不可删
 
 ### 16.2 硬性红线（产品护城河）
 
 1. **DDL 永不自动执行**：AI 只有 `draft_ddl`（生成草稿），执行永远靠人工
 2. **写操作永不自动执行**：DML 一律 preview + confirm
-3. **行数据最小出网**：默认只给模型结构（columns + rowcount），行数据是 request 级 opt-in（限 N 行）
-4. **每次模型调用可审计**：token/成本/调用链全程记录
+3. **行数据出网三档**（2026-09 引擎合一修订，M4 定版）：**strict** = 行数据一律不进模型
+   （对话与报告均骨架化）；**standard** = 对话探索默认携带封顶+脱敏后的聚合行（run_query
+   行数封顶 + redact，与报告模式既有先例一致），request 级 `include_data=false` 可显式关；
+   **open** = 同 standard 但脱敏名单外明文。默认档位 = privacy_mode 设置，出网清单如实展示
+   include_data 实际值（所见即所发）
+4. **每次模型调用可审计**：token/成本/调用链全程记录（含 suggest_followup / suggestions
+   等辅助调用——2026-09 补齐，统一走中央记账拦截器）
 
 ## 17. 审计：横切 + 调用链
 
-- 每次 tool 调用记录：**哪个 skill 触发的、参数、结果、verdict**
+- 每次 tool 调用记录：**哪个入口触发的（harness/受控步骤）、参数、结果、verdict**
 - skill → tool 调用链是调试数据和 L3 行为层的训练素材
 - 审计不属于任何一层，是公共约束
 
@@ -695,9 +592,9 @@ task_done{id,ok,...}                  → 任务收尾
 | D3 | 列节点 | 懒晋升——有边或有标签才成为节点 |
 | D4 | 双写架构 | 图管结构、知识库管语义，共用 (表,列) 身份 |
 | D5 | 概念字典 | 概念 + 规范枚举 + 成员列值映射，人工确认 + 采样防漂移 |
-| D6 | 意图识别 | 任务分解 + 三轴剖面（action 枚举 / modality 有序枚举 / trust 派生） |
-| D7 | 引擎 | Plan-and-Execute + ReAct；一任务一 skill；skill 不调 skill |
-| D8 | skill | 声明式配置（数据非代码），7 个，路由查表 + general 兜底 |
+| D6 | 意图识别 | ~~任务分解 + 三轴剖面~~（**已被 2026-09 引擎合一取代**：意图在 harness 循环内自主分解，剖面降级为审计词汇，见 §13） |
+| D7 | 引擎 | ~~Plan-and-Execute + ReAct~~（**已被 2026-09 引擎合一取代**：唯一 harness 单循环 + 受控计划外层，见 §12） |
+| D8 | skill | ~~声明式配置~~（**已被 2026-09 引擎合一取代**：skill 层退役，工具面 = trust 元数据过滤 + 受控步骤查表，见 §15） |
 | D9 | 安全 | 横切 + 防御纵深（skill 白名单 + 全局闸门），写永不自动执行 |
 | D10 | 复合请求 | 分解为主路径，失败即停，顺序执行，共享 Context |
 | D11 | 构建流程 | 确定性结构层（无 LLM）与 AI 语义层（LLM→draft）分离，图不靠 AI 造；一切边经人工确认才生效（2026-08-31） |
@@ -705,7 +602,7 @@ task_done{id,ok,...}                  → 任务收尾
 | D13 | 表级过滤器 | 定义在 L2、消费在 context 提示（引擎不改写 SQL、不强制注入；引擎只管校验拦截/安全审计/执行）；软删除表级、租户连接级默认+表级豁免 |
 | D15 | 追问/续流 | 统一 continuation gate（§19.5）：四种 type 分流；new_question 走完整意图分解，其余续旧上下文；协议层守 new/continuation 边界（2026-09 草案） |
 | D16 | 意图澄清 | decompose 新增 clarify 通道（§13.4）：意图不完整/不清晰时执行前刹停发澄清卡片，回答后重新分解；接入 continuation gate（2026-09 草案） |
-| D17 | 实时任务流 | 前端任务流改纯事件驱动动态树（§19.6）：替换 STEP_DEFS 静态步槽，复用 task_/subtask_ 事件，无场景固定模板（2026-09 草案） |
+| D17 | 实时任务流 | 前端任务流改纯事件驱动动态树（§19.6）：STEP_DEFS 静态步槽已删除（2026-09 引擎合一落地），渲染优先级 tasks > subtasks；task_/subtask_ 事件仅在报告/受控计划流出现 |
 | D14 | 会话变量 | 运行时变量（租户/用户/时间）用占位符，执行层替换，不进知识库 |
 
 ## 21. 待决事项（后续逐项细化）

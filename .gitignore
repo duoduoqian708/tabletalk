@@ -33,3 +33,4 @@ gate/dist/
 gate/*.egg-info/
 # Brainstorm artifacts
 .superpowers/
+.opencode/
