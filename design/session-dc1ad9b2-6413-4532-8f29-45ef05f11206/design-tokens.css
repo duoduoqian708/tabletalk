@@ -1,0 +1,23 @@
+/* ipw-theme:start */
+:root {
+  /* 星海 · 深空主题：Studio 编辑这些 token 会实时驱动关系星网页面 */
+  --ipw-color-bg: #05070d;
+  --ipw-color-surface: #0f1520;
+  --ipw-color-text: #e8eef7;
+  --ipw-color-muted: #9aa8bd;
+  --ipw-color-border: rgba(200, 220, 255, 0.12);
+  --ipw-color-primary: #34f5c5;
+  --ipw-color-secondary: #4cc9f0;
+  --ipw-color-accent: #8b7cf8;
+  --ipw-font-display: 'Instrument Sans', 'PingFang SC', sans-serif;
+  --ipw-font-body: 'Instrument Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --ipw-font-mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, monospace;
+  --ipw-content-width: 100%;
+  --ipw-page-padding: 0;
+  --ipw-section-space: 0;
+  --ipw-card-bg: rgba(16, 22, 34, 0.6);
+  --ipw-card-border: rgba(200, 220, 255, 0.12);
+  --ipw-card-radius: 18px;
+  --ipw-card-shadow: 0 20px 60px rgb(0 0 0 / 40%);
+}
+/* ipw-theme:end */
