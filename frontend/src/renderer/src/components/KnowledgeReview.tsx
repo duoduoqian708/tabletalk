@@ -1104,9 +1104,9 @@ const handleLayoutChange = (layout: Record<string, { x: number; y: number }>): v
 
   /* 局部辅助（必须在 render 内声明以便使用 currentId 等闭包） */
   function confirmGraphDraftSafe(fromTable: string): void {
-    if (currentId) void useKnowledge.getState().confirmGraphDraft(currentId, fromTable)
+    if (currentId) void useKnowledge.getState().confirmGraphDraft(currentId, { from_table: fromTable })
   }
   function rejectGraphDraftSafe(fromTable: string): void {
-    if (currentId) void useKnowledge.getState().rejectGraphDraft(currentId, fromTable)
+    if (currentId) void useKnowledge.getState().rejectGraphDraft(currentId, { from_table: fromTable })
   }
 }

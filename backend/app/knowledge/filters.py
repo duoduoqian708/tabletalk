@@ -108,6 +108,20 @@ class FilterStore:
         logger.info("[filters] conn=%s add table=%s scope=%s status=%s", conn_id, table, scope, status)
         return f
 
+    def add_ai(self, conn_id: str, table: str, predicate: str,
+               scope: str = "table", status: str = "draft") -> TableFilter | None:
+        """AI 裁决写入（P1-14）：已确认过滤器是人工资产，不被 AI draft 覆盖——返回 None=跳过。
+
+        此前 annotate_filters 直接 store.add（无条件覆盖），重建/增量后用户确认过的
+        租户/软删过滤器会被 AI 提案悄悄替换，查询注入静默失效。
+        """
+        cur = self._filters.get(conn_id, {}).get(table)
+        if cur is not None and cur.status == "confirmed":
+            logger.info("[filters] conn=%s table=%s 已有 confirmed 过滤器，AI 裁决跳过（人工资产保护）",
+                        conn_id, table)
+            return None
+        return self.add(conn_id, table, predicate, scope, status)
+
     # ---- 结构检测 → AI 预标记候选（S2-1：宽信号启发式，LLM 语义裁决为权威） ----
     def detect_candidates(self, schema: dict) -> list[TableFilter]:
         candidates: list[TableFilter] = []

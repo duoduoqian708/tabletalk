@@ -82,11 +82,16 @@ class KnowledgeBase:
         return st
 
     def _load_conn(self, conn_id: str) -> None:
-        """从存储后端恢复一个连接的知识库（v2 快照；旧版本工件已在存储层作废为空）。"""
+        """从存储后端恢复一个连接的知识库（v2 快照；旧版本工件已在存储层作废为空）。
+
+        空/作废快照也要写入哨兵（_auto/_user 置空表）——否则 ensure_loaded 的
+        成员判定永远不满足，每次调用都重读一次磁盘文件。"""
         if conn_id in self.semantic_store._user:
             return
         snap = self._storage(conn_id).load()
         if not snap.tables and not snap.auto and not snap.user and not snap.edges:
+            self._auto[conn_id] = []
+            self.semantic_store._user[conn_id] = []
             return
         def _docs_(items: list[dict]) -> list[KnowledgeDoc]:
             out = []
@@ -120,6 +125,11 @@ class KnowledgeBase:
         self.build_service._annotation_cache[conn_id] = dict(snap.annotation_cache or {})
         if snap.round:
             self.semantic_store.set_round(conn_id, **snap.round)
+        # P1-5：图 diff 基线恢复（与 round 同生命周期）
+        if snap.diff_base:
+            self.graph_store._diff_base[conn_id] = {tuple(k) for k in snap.diff_base}
+        if snap.diff_active:
+            self.graph_store._diff_active[conn_id] = True
         self._rebuild_vstore(conn_id)
 
     def _save_conn(self, conn_id: str) -> None:
@@ -153,6 +163,9 @@ class KnowledgeBase:
                 fewshot=self.fewshot_store.dump(conn_id),
                 annotation_cache=self.build_service._annotation_cache.get(conn_id, {}),
                 round=self.semantic_store.get_round(conn_id),
+                # P1-5：图 diff 基线随快照持久化（此前只在内存——重启后红边全灭转灰）
+                diff_base=[list(k) for k in self.graph_store._diff_base.get(conn_id, set())],
+                diff_active=bool(self.graph_store._diff_active.get(conn_id, False)),
             )
             self._storage(conn_id).save(snap)
         except Exception as e:
@@ -222,11 +235,25 @@ class KnowledgeBase:
         """红边保留：给匹配正式边打 pinned 标记（人工决策资产）。"""
         return self.graph_store.pin_edge(conn_id, frm, to, frm_col, to_col, self._save_conn)
 
-    def confirm_graph_edges(self, conn_id: str, from_table: str | None = None) -> int:
-        return self.graph_store.confirm_graph_edges(conn_id, from_table, self._save_conn)
+    def confirm_graph_edges(self, conn_id: str, from_table: str | None = None,
+                            to_table: str | None = None, from_col: str | None = None,
+                            to_col: str | None = None) -> int:
+        """确认 draft 边：无参=全部；只给表=按表双向批量；给全列对=精确单边（P1-3）。"""
+        return self.graph_store.confirm_graph_edges(
+            conn_id, from_table, self._save_conn,
+            to_table=to_table, from_col=from_col, to_col=to_col)
 
-    def reject_graph_edges(self, conn_id: str, from_table: str | None = None) -> int:
-        return self.graph_store.reject_graph_edges(conn_id, from_table, self._save_conn)
+    def reject_graph_edges(self, conn_id: str, from_table: str | None = None,
+                           to_table: str | None = None, from_col: str | None = None,
+                           to_col: str | None = None) -> int:
+        return self.graph_store.reject_graph_edges(
+            conn_id, from_table, self._save_conn,
+            to_table=to_table, from_col=from_col, to_col=to_col)
+
+    def apply_diff_removals(self, conn_id: str) -> int:
+        """P1-2 确认生效时移除未被保留(pin)的删除建议边。"""
+        return self.graph_store.apply_diff_removals(
+            conn_id, self.semantic_store._schema.get(conn_id), self._save_conn)
 
     def llm_graph_edges(self, conn_id: str) -> list[dict[str, Any]]:
         self.ensure_loaded(conn_id)
@@ -292,10 +319,15 @@ class KnowledgeBase:
         for name in list(self.semantic_store._tags.get(conn_id, {}).keys()):
             if self.confirm_tag(conn_id, name):
                 n_tags += 1
+        # P1-2：先移除未被保留(pin)的删除建议边（红边「确认后移除」），再确认 draft 边
+        self.apply_diff_removals(conn_id)
         n_edges = self.confirm_graph_edges(conn_id)
         self.graph_store.clear_diff_base(conn_id)
         self.semantic_store.clear_round(conn_id)  # 审核完成 → 清本轮对比区
         await self._embed_tables(conn_id, set(affected))
+        # P1-9：确认后重建向量索引——此前只更新 _table_vec 不重建 vstore，
+        # 检索/路由仍用确认前的旧向量评分（新画像、draft→confirmed 加分不生效）
+        self._rebuild_vstore(conn_id)
         self._storage(conn_id).bump_kb_version()
         await self._save_conn_async(conn_id)
         return {"docs": n_docs, "tags": n_tags, "edges": n_edges, "archived": archived,
@@ -433,7 +465,18 @@ class KnowledgeBase:
 
     # ---------- 公开方法：检索相关 ----------
     def is_built(self, conn_id: str) -> bool:
-        return conn_id in self._auto or self._storage(conn_id).exists()
+        """工件存在且版本未作废（P0-E：v1 旧工件存储层按空处理——这里同步视为未构建，
+        KB 端点据此 409 引导重建，而不是对着空内存静默操作）。"""
+        if conn_id in self._auto:
+            return bool(self._auto[conn_id]) or self._storage(conn_id).is_current()
+        return self._storage(conn_id).is_current()
+
+    def is_voided(self, conn_id: str) -> bool:
+        """工件存在但版本已作废（存储层按空处理）——P0-E 精确判定：
+        注册表可能仍标 ready/pending_review，但内容读不回来。区别于「无工件」
+        （历史路径/测试夹具，注册表状态说了算）。"""
+        st = self._storage(conn_id)
+        return st.exists() and not st.is_current()
 
     def ensure_loaded(self, conn_id: str) -> None:
         """重启后如有工件但未加载进内存，先恢复（overview/graph 等只读入口调用）。"""
@@ -547,6 +590,14 @@ class KnowledgeBase:
         self, conn_id: str, new_schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
         include_samples: bool | None = None,
+        on_progress: Any | None = None,
     ) -> dict[str, Any]:
         return await self.build_service.incremental_build(
-            self, conn_id, new_schema, samples, include_samples)
+            self, conn_id, new_schema, samples, include_samples, on_progress)
+
+    async def sync(self, conn_id: str, schema: dict[str, Any],
+                   samples: dict[str, dict[str, list[Any]]] | None = None,
+                   include_samples: bool | None = None,
+                   on_progress: Any | None = None) -> dict[str, Any]:
+        return await self.build_service.sync(
+            self, conn_id, schema, samples, include_samples, on_progress)

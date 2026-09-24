@@ -197,13 +197,17 @@ async def build_index(conn_id: str, body: BuildRequest | None = None) -> dict:
         trigger=body.trigger,
         include_samples=body.include_samples,
     )
+    # P0-D：先记录原状态再置 building——JobBusyError 时回退原状态而非硬编码 none
+    # （此前：ready 库被 409 后变"未构建"，apply_sync_result_status 只在 ready 流转，
+    #  之后永不恢复 → AI 断供直到手动重建）
+    prev_status = state.connections.get(conn_id).kb_status
     state.connections.set_kb_status(conn_id, "building")
     # 互斥（D1）：start() 同步校验占坑（无 await，检查+启动原子），
     # 前台操作（sync/confirm/discard）在跑时拒绝启动
     try:
         state.build_jobs.start(conn_id, _make_build_fn(state, conn_id, body))
     except JobBusyError:
-        state.connections.set_kb_status(conn_id, "none")
+        state.connections.set_kb_status(conn_id, prev_status or "none")
         raise HTTPException(status_code=409, detail="构建已在运行")
     logger.info(
         "[kb.api] conn=%s 启动构建 trigger=%s include_samples=%s",
@@ -349,17 +353,28 @@ async def build_cancel(conn_id: str) -> dict:
 
 @router.get("/{conn_id}/status")
 async def kb_status(conn_id: str) -> dict:
-    """状态机查询：{kb_status, kb_updated_at, synced_at, pending, building}。"""
+    """状态机查询：{kb_status, kb_updated_at, synced_at, pending, building, needs_rebuild}。
+
+    needs_rebuild（P0-E）：注册表说 ready/pending 但工件已作废（旧版本按空处理）——
+    前端据此弹重建引导，替代此前「内存空 KB + 标 ready」的静默不一致（AI 拿空上下文）。
+    """
     _have(conn_id)
     state = get_state()
     cfg = state.connections.get(conn_id)
     state.knowledge.ensure_loaded(conn_id)  # 重启后恢复内存态
+    needs_rebuild = cfg.kb_status != "none" and state.knowledge.is_voided(conn_id)
+    if needs_rebuild:
+        # 治愈注册表（工件已作废：状态机对齐存储现实，AI 门禁/前端门禁随即正确引导）
+        state.connections.set_kb_status(conn_id, "none")
+        logger.warning("[kb.api] conn=%s 工件版本已作废，kb_status %s → none（引导重建）",
+                       conn_id, cfg.kb_status)
     return {
-        "kb_status": cfg.kb_status,
+        "kb_status": "none" if needs_rebuild else cfg.kb_status,
         "kb_updated_at": cfg.kb_updated_at,
         "synced_at": state.knowledge.synced_at(conn_id),
         "pending": state.knowledge.pending_counts(conn_id),
         "building": state.build_jobs.is_running(conn_id),
+        "needs_rebuild": needs_rebuild,
     }
 
 
@@ -429,7 +444,7 @@ def _make_sync_fn(state, conn_id: str):
                     samples[t["name"]] = {}
                 done += 1
         report("增量构建", 30)
-        result = await state.knowledge.sync(conn_id, schema, samples)
+        result = await state.knowledge.sync(conn_id, schema, samples, on_progress=report)
         # 增量同步留痕（与 build/confirm/discard 同源 origin=kb_build）：历史抽屉可查每次变更
         if result.get("changed"):
             state.audit.log(
@@ -595,6 +610,13 @@ async def batch_review(conn_id: str, body: BatchReviewRequest) -> dict:
         sem = facade.semantic_store
         applied = 0
         affected: list[str] = []
+        # P2-15：确认前归档当前生效字段（与 confirm-all 对齐）——此前 batch-review 路径
+        # 不归档，经审核镜头裁决的字段变更在「版本回溯」里永远查不到
+        if body.action == "confirm" and body.tables:
+            try:
+                facade.build_service._archive_current_fields(conn_id, facade._storage)
+            except Exception as e:
+                logger.warning("[kb.api] conn=%s 字段归档失败（不阻塞裁决）：%s", conn_id, e)
         for t in dict.fromkeys(body.tables):
             tk = sem._tables.get(conn_id, {}).get(t)
             if tk is None:
@@ -635,9 +657,13 @@ def _maybe_finalize(state, conn_id: str) -> tuple[str, int]:
     draft_edges = len(facade.graph_store._llm_graph_edges.get(conn_id, []) or [])
     if pending["draft_docs"] > 0 or pending["draft_tags"] > 0 or draft_edges > 0:
         return "pending_review", facade.current_version(conn_id)
+    # P1-2：审核收尾 = 确认生效，未 pin 的删除建议边（红边）在此移除
+    facade.apply_diff_removals(conn_id)
     facade.graph_store.clear_diff_base(conn_id)
     sem.clear_round(conn_id)  # 审核完成 → 清本轮对比区
     facade._storage(conn_id).bump_kb_version()
+    # P2-15：收尾必须落盘——此前只 bump 版本不 save，重启后已收尾的库又显示陈旧本轮对比区
+    facade._save_conn(conn_id)
     state.connections.set_kb_status(conn_id, "ready")
     version = facade.current_version(conn_id)
     state.audit.log(
@@ -784,7 +810,11 @@ class GraphPinRequest(BaseModel):
 
 
 class GraphConfirmRequest(BaseModel):
-    from_table: str | None = None   # None = 确认全部
+    from_table: str | None = None   # None = 确认/拒绝全部
+    # P1-3 单边粒度：四个字段齐备时精确匹配单条 draft 边（方向可反）
+    to_table: str | None = None
+    from_col: str | None = None
+    to_col: str | None = None
 
 
 @router.post("/{conn_id}/graph/edges/pin")
@@ -802,14 +832,20 @@ async def pin_graph_edge(conn_id: str, body: GraphPinRequest) -> dict:
 
 @router.post("/{conn_id}/graph/confirm")
 async def confirm_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = None) -> dict:
-    """确认 LLM 发现的 draft 边 → 写入正式图谱（from_table=None 则确认全部）。"""
+    """确认 draft 边 → 写入正式图谱。
+
+    - 无参：确认全部；只给 from_table：该表双向批量（旧语义）
+    - 给全 from_table/to_table/from_col/to_col：精确单边（P1-3 逐边裁决）
+    """
     _have(conn_id)
     state = get_state()
     if not state.knowledge.is_built(conn_id):
         raise HTTPException(status_code=409, detail="知识库未就绪")
     state.knowledge.ensure_loaded(conn_id)
-    ft = body.from_table if body else None
-    added = state.knowledge.confirm_graph_edges(conn_id, from_table=ft)
+    b = body or GraphConfirmRequest()
+    added = state.knowledge.confirm_graph_edges(
+        conn_id, from_table=b.from_table, to_table=b.to_table,
+        from_col=b.from_col, to_col=b.to_col)
     # 一并回传最新正式边：确认后的 llm 边立即可见（前端图无需整页刷新）
     return {"confirmed": added, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id),
             "edges": state.knowledge.graph(conn_id)["edges"]}
@@ -817,14 +853,16 @@ async def confirm_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = 
 
 @router.post("/{conn_id}/graph/reject")
 async def reject_graph_drafts(conn_id: str, body: GraphConfirmRequest | None = None) -> dict:
-    """拒绝待确认 draft 边（从 draft 列表移除；重建时 LLM 会重新提案）。"""
+    """拒绝 draft 边（从 draft 列表移除；重建时重新提案）。粒度同 confirm。"""
     _have(conn_id)
     state = get_state()
     if not state.knowledge.is_built(conn_id):
         raise HTTPException(status_code=409, detail="知识库未就绪")
     state.knowledge.ensure_loaded(conn_id)
-    ft = body.from_table if body else None
-    removed = state.knowledge.reject_graph_edges(conn_id, from_table=ft)
+    b = body or GraphConfirmRequest()
+    removed = state.knowledge.reject_graph_edges(
+        conn_id, from_table=b.from_table, to_table=b.to_table,
+        from_col=b.from_col, to_col=b.to_col)
     return {"rejected": removed, "llm_draft_edges": state.knowledge.llm_graph_edges(conn_id),
             "edges": state.knowledge.graph(conn_id)["edges"]}
 

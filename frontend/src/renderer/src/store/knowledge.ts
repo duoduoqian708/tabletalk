@@ -67,8 +67,9 @@ interface KnowledgeState {
   /** 2D 图布局持久化（拖拽松手全量快照 → payload.layout） */
   saveLayout: (connId: string, layout: Record<string, { x: number; y: number }>) => Promise<void>
   /** LLM 图谱 draft 边确认/拒绝 */
-  confirmGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
-  rejectGraphDraft: (connId: string, fromTable?: string | null) => Promise<void>
+  confirmGraphDraft: (connId: string, sel?: import('@renderer/api/knowledge').EdgeSelector) => Promise<void>
+  rejectGraphDraft: (connId: string, sel?: import('@renderer/api/knowledge').EdgeSelector) => Promise<void>
+  pinGraphEdge: (connId: string, e: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }) => Promise<void>
 }
 
 /** 构建进度观测日志（prod 也开）：低频生命周期点，断线排查的前端证据源 */
@@ -115,14 +116,22 @@ async function readBuildEvents(connId: string, onProgress: (p: BuildProgressStat
 /** SSE 断线后的兜底：轮询 build/progress（与 SSE 帧同一份 job.progress，含 phases） */
 async function pollBuildProgress(connId: string, onProgress: (p: BuildProgressState) => void): Promise<void> {
   const started = Date.now()
+  let fails = 0
   for (;;) {
     let p: BuildProgressState
     try {
       p = await api.buildProgress(connId)
+      fails = 0
     } catch (e) {
-      // 轮询也断（sidecar 重启等）：job 已死（内存态），视为终态结束，交由上层刷新状态
-      kbLog(`轮询失败（${(e as Error).message}）→ 视为通道终止（进程可能重启，构建已失）`)
-      return
+      // P1-13：瞬时失败（锁屏/切网）不判死——此前一次失败即退出，门禁消失而后端仍在构建。
+      // 连续失败 5 次（约 15s）才视为通道终止，交由上层刷新状态（重启后 registry 已归位）。
+      fails += 1
+      if (fails >= 5) {
+        kbLog(`轮询连续失败 ${fails} 次（${(e as Error).message}）→ 视为通道终止`)
+        return
+      }
+      await new Promise((r) => setTimeout(r, 3000))
+      continue
     }
     onProgress(p)
     if (p.done) {
@@ -323,10 +332,10 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     } : {})
   },
 
-  async confirmGraphDraft(connId, fromTable) {
+  async confirmGraphDraft(connId, sel) {
     set({ busy: true })
     try {
-      const r = await api.confirmGraphDrafts(connId, fromTable)
+      const r = await api.confirmGraphDrafts(connId, sel)
       set((s) => s.overview ? {
         overview: {
           ...s.overview,
@@ -338,15 +347,28 @@ export const useKnowledge = create<KnowledgeState>((set, get) => ({
     }
   },
 
-  async rejectGraphDraft(connId, fromTable) {
+  async rejectGraphDraft(connId, sel) {
     set({ busy: true })
     try {
-      const r = await api.rejectGraphDrafts(connId, fromTable)
+      const r = await api.rejectGraphDrafts(connId, sel)
       set((s) => s.overview ? {
         overview: {
           ...s.overview,
           graph: { ...s.overview.graph, llm_draft_edges: r.llm_draft_edges, edges: r.edges },
         }
+      } : {})
+    } finally {
+      set({ busy: false })
+    }
+  },
+
+  async pinGraphEdge(connId, e) {
+    // 红边「保留」：pinned 后不再判红、确认生效时豁免自动移除（人工决策资产）
+    set({ busy: true })
+    try {
+      const r = await api.pinEdge(connId, e)
+      set((s) => s.overview ? {
+        overview: { ...s.overview, graph: { ...s.overview.graph, edges: r.graph.edges } }
       } : {})
     } finally {
       set({ busy: false })

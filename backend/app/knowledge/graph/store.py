@@ -37,8 +37,14 @@ class GraphStore:
         return _b.build_draft_edges(schema)
 
     def filter_confirmed_by_schema(self, conn_id: str, schema: dict[str, Any]) -> int:
-        """按 schema 校验已确认边：端点表/列不存在的边移除（schema 变更失效），返回移除数。"""
+        """按 schema 校验已确认边：端点表/列不存在的边移除（schema 变更失效），返回移除数。
+
+        空 schema 防御（P0-C 宁缺勿错）：零表一律视为上游异常，不判任何边失效。
+        """
         tables = {t["name"] for t in schema.get("tables", [])}
+        if not tables:
+            logger.warning("[graph_store] conn=%s schema 零表，跳过失效边判定（宁缺勿错）", conn_id)
+            return 0
         cols = {(c["table"], c["name"]) for c in schema.get("columns", [])}
         edges = self._graph.get(conn_id, {}).get("edges", [])
         keep = []
@@ -175,14 +181,32 @@ class GraphStore:
         """增量局部补边落库（兼容代理）：委托 merge_draft_edges。"""
         return self.merge_draft_edges(conn_id, new_edges, targets=set(targets))
 
-    def confirm_graph_edges(self, conn_id: str, from_table: str | None = None, save_conn_fn: Any = None) -> int:
-        """确认 LLM draft 边 → 写入正式图谱（from_table=None 则确认全部）。
+    @staticmethod
+    def _match_drafts(pending: list[dict], from_table: str | None, to_table: str | None = None,
+                      from_col: str | None = None, to_col: str | None = None) -> list[dict]:
+        """draft 边选择器（P1-3 单边粒度）：给全列对则精确匹配单边（方向可反），
+        只给表则保留旧的按表双向批量语义。"""
+        if from_col is not None and to_col is not None and from_table and to_table:
+            want = (from_table, from_col, to_table, to_col)
+            rev = (to_table, to_col, from_table, from_col)
+            return [e for e in pending
+                    if (e.get("from_table"), e.get("from_col"), e.get("to_table"), e.get("to_col")) in (want, rev)]
+        if from_table is not None:
+            return [e for e in pending
+                    if e.get("from_table") == from_table or e.get("to_table") == from_table]
+        return list(pending)
+
+    def confirm_graph_edges(self, conn_id: str, from_table: str | None = None, save_conn_fn: Any = None,
+                            to_table: str | None = None, from_col: str | None = None,
+                            to_col: str | None = None) -> int:
+        """确认 draft 边 → 写入正式图谱。
+
+        - 不给参数：确认全部
+        - 只给 from_table：该表为任一端点的全部 draft（旧批量语义）
+        - 给全 from_table/to_table/from_col/to_col：精确单边（P1-3 逐边裁决）
         """
         pending = self._llm_graph_edges.get(conn_id, [])
-        if from_table is not None:
-            to_confirm = [e for e in pending if e.get("from_table") == from_table or e.get("to_table") == from_table]
-        else:
-            to_confirm = list(pending)
+        to_confirm = self._match_drafts(pending, from_table, to_table, from_col, to_col)
         if not to_confirm:
             return 0
         confirmed_keys = {self._llm_edge_key(e) for e in to_confirm}
@@ -192,17 +216,28 @@ class GraphStore:
         ]
         # 写入正式图谱（边 v2：source + cardinality + reason）
         edges = self._graph.setdefault(conn_id, {"edges": []})["edges"]
-        existing = {(e["from"], e["to"], e.get("from_col"), e.get("to_col")) for e in edges}
+        by_key = {self._llm_edge_key(e): e for e in edges}
         added = 0
         for e in to_confirm:
-            key = (e.get("from_table"), e.get("to_table"), e.get("from_col"), e.get("to_col"))
-            if key in existing:
-                continue
             guard = e.get("guard") or None  # S2-4：守卫谓词透传（多态关联）
             cols = e.get("cols")
             if not cols and e.get("from_col") and e.get("to_col"):
                 cols = [[e["from_col"], e["to_col"]]]
-            edges.append({
+            # P3-2 黄边修复：同列对已确认（含反方向）→ 取新（更新基数/守卫/来源），
+            # 不再静默丢弃（同向）或追加反向平行边
+            hit = by_key.get(self._llm_edge_key(e))
+            if hit is not None:
+                hit["cardinality"] = e.get("cardinality") or hit.get("cardinality") or "n:1"
+                if guard:
+                    hit["guard"] = guard
+                if e.get("reason"):
+                    hit["reason"] = e["reason"]
+                hit["confidence"] = e.get("confidence", hit.get("confidence", 1.0))
+                if cols:
+                    hit["cols"] = cols
+                added += 1
+                continue
+            new_edge = {
                 "from": e["from_table"], "from_col": e.get("from_col"),
                 "to": e["to_table"], "to_col": e.get("to_col"),
                 "source": e.get("source") or "llm", "weight": 1.0,
@@ -212,19 +247,20 @@ class GraphStore:
                 "confidence": e.get("confidence", 1.0),
                 "provenance": e.get("provenance", ""),
                 "cols": cols,
-            })
+            }
+            edges.append(new_edge)
+            by_key[self._llm_edge_key(new_edge)] = new_edge
             added += 1
         if added and save_conn_fn:
             save_conn_fn(conn_id)
         return added
 
-    def reject_graph_edges(self, conn_id: str, from_table: str | None = None, save_conn_fn: Any = None) -> int:
-        """拒绝 LLM draft 边：从 draft 列表移除（重建时 LLM 重新提案）。"""
+    def reject_graph_edges(self, conn_id: str, from_table: str | None = None, save_conn_fn: Any = None,
+                           to_table: str | None = None, from_col: str | None = None,
+                           to_col: str | None = None) -> int:
+        """拒绝 draft 边（P1-3 支持精确单边）：从 draft 列表移除（重建时重新提案）。"""
         pending = self._llm_graph_edges.get(conn_id, [])
-        if from_table is not None:
-            to_reject = [e for e in pending if e.get("from_table") == from_table or e.get("to_table") == from_table]
-        else:
-            to_reject = list(pending)
+        to_reject = self._match_drafts(pending, from_table, to_table, from_col, to_col)
         if not to_reject:
             return 0
         reject_keys = {self._llm_edge_key(e) for e in to_reject}
@@ -247,6 +283,53 @@ class GraphStore:
         """确认全部/放弃后清除（审查结束，边全部恢复正常灰态）。"""
         self._diff_base.pop(conn_id, None)
         self._diff_active.pop(conn_id, None)
+
+    def _red_edges(self, conn_id: str, schema: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """红边集合（三色 diff 的"删除建议"）——graph() 标记与确认时移除共用同一判定：
+        diff 激活 ∧ 非 pinned ∧ 非人工连线 ∧ 端点仍存活 ∧ 不在 draft 队列 ∧ 不在重建基线。"""
+        if not self._diff_active.get(conn_id, False):
+            return []
+        edges = self._graph.get(conn_id, {"edges": []}).get("edges", [])
+        draft_keys = {self._llm_edge_key(d) for d in self._llm_graph_edges.get(conn_id, [])}
+        base = self._diff_base.get(conn_id, set())
+        tables = {t["name"] for t in schema.get("tables", [])} if schema else None
+        cols = {(c["table"], c["name"]) for c in schema.get("columns", [])} if schema else None
+
+        def endpoints_alive(e: dict) -> bool:
+            if tables is not None and (e.get("from") not in tables or e.get("to") not in tables):
+                return False
+            if cols is not None and e.get("from_col") and (e.get("from"), e.get("from_col")) not in cols:
+                return False
+            if cols is not None and e.get("to_col") and (e.get("to"), e.get("to_col")) not in cols:
+                return False
+            return True
+
+        out = []
+        for e in edges:
+            k = self._llm_edge_key(e)
+            if (not e.get("pinned") and e.get("source") != "user" and endpoints_alive(e)
+                    and k not in draft_keys and k not in base):
+                out.append(e)
+        return out
+
+    def apply_diff_removals(self, conn_id: str, schema: dict[str, Any] | None = None,
+                            save_conn_fn: Any = None) -> int:
+        """P1-2 红边「确认后移除」：确认生效时删除未被保留(pin)的删除建议边。
+
+        此前只有前端文案承诺移除，后端无任何按 diff 删边的路径——红边确认后原样留图、
+        下轮重新标红。返回移除条数。"""
+        red = self._red_edges(conn_id, schema)
+        if not red:
+            return 0
+        red_ids = {id(e) for e in red}
+        edges = self._graph.get(conn_id, {"edges": []}).get("edges", [])
+        self._graph.setdefault(conn_id, {"edges": []})["edges"] = [
+            e for e in edges if id(e) not in red_ids
+        ]
+        if save_conn_fn:
+            save_conn_fn(conn_id)
+        logger.info("[graph_store] conn=%s 确认生效：移除 %d 条删除建议边（未 pin）", conn_id, len(red))
+        return len(red)
 
     def pin_edge(self, conn_id: str, frm: str, to: str, frm_col: str | None,
                  to_col: str | None, save_conn_fn: Any = None) -> int:
@@ -273,26 +356,8 @@ class GraphStore:
         """
         edges = self._graph.get(conn_id, {"edges": []}).get("edges", [])
         drafts = self._llm_graph_edges.get(conn_id, [])
-        base = self._diff_base.get(conn_id, set())
-        diff_active = self._diff_active.get(conn_id, False)
-        draft_keys = {self._llm_edge_key(d) for d in drafts}
-
-        tables = {t["name"] for t in schema.get("tables", [])} if schema else None
-        cols = {(c["table"], c["name"]) for c in schema.get("columns", [])} if schema else None
-
-        def endpoints_alive(e: dict) -> bool:
-            if tables is not None and (e.get("from") not in tables or e.get("to") not in tables):
-                return False
-            if cols is not None and e.get("from_col") and (e.get("from"), e.get("from_col")) not in cols:
-                return False
-            if cols is not None and e.get("to_col") and (e.get("to"), e.get("to_col")) not in cols:
-                return False
-            return True
-
-        def key_of(e: dict) -> tuple:
-            return self._llm_edge_key(e)
-
-        confirmed_keys = {key_of(e) for e in edges}
+        confirmed_keys = {self._llm_edge_key(e) for e in edges}
+        red_ids = {id(e) for e in self._red_edges(conn_id, schema)}
 
         def _with_kinds(e: dict, diff: str | None) -> dict:
             # 形态字段三份输出：kinds/kind（新命名）+ type（旧名兼容），前端任取其一
@@ -300,14 +365,9 @@ class GraphStore:
             return {**e, "diff": diff,
                     "type": kinds, "kinds": kinds, "kind": primary_edge_type(kinds)}
 
-        out_edges = []
-        for e in edges:
-            red = (diff_active and not e.get("pinned") and e.get("source") != "user"
-                   and endpoints_alive(e)
-                   and key_of(e) not in draft_keys and key_of(e) not in base)
-            out_edges.append(_with_kinds(e, "removed" if red else None))
+        out_edges = [_with_kinds(e, "removed" if id(e) in red_ids else None) for e in edges]
         out_drafts = [
-            _with_kinds(d, "modified" if key_of(d) in confirmed_keys else "new")
+            _with_kinds(d, "modified" if self._llm_edge_key(d) in confirmed_keys else "new")
             for d in drafts
         ]
         return {"edges": out_edges, "llm_draft_edges": out_drafts}

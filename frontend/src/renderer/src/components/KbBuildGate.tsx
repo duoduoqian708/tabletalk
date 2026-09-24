@@ -48,31 +48,41 @@ export function KbBuildGate({ onOpenSettings }: { onOpenSettings?: (sec: string)
   /** 构建完成后转入待审 → 浮卡切"去审核"CTA（替代旧版悄悄消失，完成时有明确下一步） */
   const [builtPending, setBuiltPending] = useState(false)
 
-  // 进入 / 切换连接 → 查一次知识库状态（引导判断用，非构建感知）
+  // 进入/切换连接 → 查知识库状态（引导判断 + 构建重挂）；此后每 60s 轮询一次——
+  // 后台自动同步（默认 30 分钟）产出提案转 pending_review 时，无需手动刷新即可看到审核入口。
+  // （合并了此前两个 effect 对同一 currentId 的重复请求）
   useEffect(() => {
     if (!currentId) {
       setStatus(null)
       return
     }
     let alive = true
-    kbStatus(currentId)
-      .then((s) => alive && setStatus(s))
-      .catch(() => alive && setStatus(null))
+    const load = (): void => {
+      kbStatus(currentId)
+        .then((s) => {
+          if (!alive) return
+          setStatus(s)
+          // 刷新页面后若后端构建任务仍在跑 → 重挂 SSE 只吃剩余进度（store 内幂等防重）
+          if (s?.building) void reattachBuild(currentId)
+        })
+        .catch(() => alive && setStatus(null))
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
     return () => {
       alive = false
+      window.clearInterval(timer)
     }
-  }, [currentId])
-
-  // 刷新页面后若后端构建任务仍在跑 → 重挂 SSE 只吃剩余进度
-  useEffect(() => {
-    if (!currentId) return
-    let alive = true
-    kbStatus(currentId).then((s) => {
-      if (alive && s?.building) void reattachBuild(currentId)
-    }).catch(() => undefined)
-    return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentId])
+
+  // forceOpen（AI 收到 kb_not_built 时置位）：刷新状态——本地 status 过期时也要能弹出引导
+  useEffect(() => {
+    if (!currentId || forceConnId !== currentId) return
+    let alive = true
+    kbStatus(currentId).then((s) => alive && setStatus(s)).catch(() => undefined)
+    return () => { alive = false }
+  }, [currentId, forceConnId])
 
   // 构建前置检查：对话 + 嵌入模型都必须配置可用（缺失 → 引导去设置，禁止构建）
   const modelUsable = (m: { provider?: string; base_url?: string } | undefined): boolean =>
@@ -131,8 +141,11 @@ export function KbBuildGate({ onOpenSettings }: { onOpenSettings?: (sec: string)
   // 2026-09 复盘：pending_here 隐藏曾造成"重构完成零引导"（弹窗/横幅已删，卡片是唯一主动引导面）
   // → 恢复在知识库页也显示；知识库页另有完成自动跳审核 + 审核 Tab 计数徽章兜底
   const needsBuild = status !== null && status.kb_status === 'none'
+  // forceOpen 生效：AI 报 kb_not_built 时强制弹出（此前 show 不含 forceConnId → 空操作）
+  const forceOpen = forceConnId === currentId
+    && (needsBuild || status?.kb_status === 'pending_review')
   const show = currentId !== null && conn !== null
-    && (isBuilding || needsBuild || (builtPending && !dismissed))
+    && (isBuilding || needsBuild || forceOpen || (builtPending && !dismissed))
 
   if (!show) return null
 

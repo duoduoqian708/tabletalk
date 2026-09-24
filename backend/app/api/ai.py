@@ -512,11 +512,17 @@ async def ai_chat(req: ChatRequest) -> StreamingResponse:
     req.session_id = session_id  # 回写解析后的会话 id，供 loop / 工具（load_result 按 session 隔离工件）使用
 
     # 卡死边界：知识库未构建/未确认的数据源 AI 不可用（SSE 内报错，保持流式协议）
+    # P0-E：工件版本作废（存储层按空处理）时 registry 可能还标 ready——一并拦截，
+    # 避免「注册表说就绪、AI 拿空知识上下文」的静默不一致（前端凭 code 弹构建门禁）
     cfg = state.connections.get(req.connection_id)
-    if cfg.kb_status != "ready":
+    if cfg.kb_status != "ready" or state.knowledge.is_voided(req.connection_id):
+        # 区分「待审核」与「未构建」——此前统一文案让 pending_review 用户误以为 AI 坏了
+        _msg = ("该数据源知识库有待审核的变更，请先到知识库页审核确认后再提问"
+                if cfg.kb_status == "pending_review"
+                else "该数据源知识库未构建，请先构建并确认启用")
 
         async def gen_err():
-            yield f"data: {json.dumps({'type': 'error', 'code': 'kb_not_built', 'message': '该数据源知识库未构建，请先构建并确认启用'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'code': 'kb_not_built', 'message': _msg}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(gen_err(), media_type="text/event-stream")

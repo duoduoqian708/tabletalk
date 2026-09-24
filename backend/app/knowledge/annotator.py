@@ -1962,14 +1962,15 @@ async def annotate_filters(
     draft = 0
     for t, entry in by_table.items():
         if entry.get("exempt"):
-            store.add(conn_id, t, "", scope="exempt", status="draft")
-            draft += 1
+            if store.add_ai(conn_id, t, "", scope="exempt", status="draft") is not None:
+                draft += 1
             continue
         pred = " AND ".join(entry["preds"])
         if not pred:
             continue
         status = "confirmed" if entry["auto"] else "draft"
-        store.add(conn_id, t, pred, scope="table", status=status)
+        if store.add_ai(conn_id, t, pred, scope="table", status=status) is None:
+            continue  # P1-14：人工确认过的过滤器不覆盖
         if entry["auto"]:
             auto_confirmed += 1
         else:

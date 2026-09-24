@@ -65,7 +65,7 @@ export function useTrg2dActions(connId: string | null): Trg2dActions {
     if (!connId) return
     if (e.source === 'llm' && e.status === 'draft') {
       // draft 边不在正式图谱里：✕ = 拒绝草案（同原列表 ✕）
-      await rejectGraphDraft(connId, e.from_table)
+      await rejectGraphDraft(connId, { from_table: e.from_table })
       return
     }
     await removeEdge(connId, { from_table: e.from_table, to_table: e.to_table, source: e.source })
@@ -74,7 +74,7 @@ export function useTrg2dActions(connId: string | null): Trg2dActions {
 
   const onConfirmEdge = useCallback(async (e: Trg2dDeleteEdge) => {
     if (!connId) return
-    await confirmGraphDraft(connId, e.from_table)
+    await confirmGraphDraft(connId, { from_table: e.from_table })
   }, [connId, confirmGraphDraft])
 
   const onLayoutChange = useCallback((layout: GraphLayout) => {

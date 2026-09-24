@@ -207,19 +207,27 @@ export interface GraphDraftEdge {
   source: string
 }
 
-/** 确认 LLM draft 边 → 写入正式图谱（fromTable=null 确认全部）。返回新正式边供图即时刷新。 */
-export function confirmGraphDrafts(connId: string, fromTable?: string | null): Promise<{ confirmed: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
+/** 边选择器：只给表=按表双向批量（旧语义）；四字段齐备=精确单边（P1-3 逐边裁决）。 */
+export interface EdgeSelector {
+  from_table?: string | null
+  to_table?: string | null
+  from_col?: string | null
+  to_col?: string | null
+}
+
+/** 确认 draft 边 → 写入正式图谱。返回新正式边供图即时刷新。 */
+export function confirmGraphDrafts(connId: string, sel: EdgeSelector = {}): Promise<{ confirmed: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
   return request(`/api/v1/knowledge/${connId}/graph/confirm`, {
     method: 'POST',
-    body: JSON.stringify({ from_table: fromTable ?? null }),
+    body: JSON.stringify({ from_table: null, to_table: null, from_col: null, to_col: null, ...sel }),
   })
 }
 
-/** 拒绝 LLM draft 边（从 draft 列表移除）。 */
-export function rejectGraphDrafts(connId: string, fromTable?: string | null): Promise<{ rejected: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
+/** 拒绝 draft 边（从 draft 列表移除）。粒度同 confirmGraphDrafts。 */
+export function rejectGraphDrafts(connId: string, sel: EdgeSelector = {}): Promise<{ rejected: number; llm_draft_edges: GraphDraftEdge[]; edges: GraphEdge[] }> {
   return request(`/api/v1/knowledge/${connId}/graph/reject`, {
     method: 'POST',
-    body: JSON.stringify({ from_table: fromTable ?? null }),
+    body: JSON.stringify({ from_table: null, to_table: null, from_col: null, to_col: null, ...sel }),
   })
 }
 
@@ -279,7 +287,7 @@ export function reviewFinalize(connId: string): Promise<{ kb_status: string; ver
 }
 
 /** 红边"保留"（pin 豁免自动移除） */
-export function pinEdge(connId: string, e: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }): Promise<{ pinned: number }> {
+export function pinEdge(connId: string, e: { from_table: string; to_table: string; from_col?: string | null; to_col?: string | null }): Promise<{ pinned: number; graph: { edges: GraphEdge[] } }> {
   return request(`/api/v1/knowledge/${connId}/graph/edges/pin`, {
     method: 'POST',
     body: JSON.stringify(e),

@@ -68,6 +68,8 @@ class KbSnapshot:
     fewshot: list[dict] = field(default_factory=list)  # few-shot 库（T10）
     annotation_cache: dict[str, dict] = field(default_factory=dict)  # 表名 -> {input_hash, items, created_at}（注释缓存）
     round: dict = field(default_factory=dict)  # 本轮审核对比区（baseline/diff/tags_new/failed_tables，重启恢复用）
+    diff_base: list = field(default_factory=list)  # P1-5：图 diff 基线（本轮"重新主张过"的边键列表，重启恢复红边判定）
+    diff_active: bool = False                      # P1-5：三色 diff 是否激活（与 round 同生命周期）
 
 
 def _normalize_edge(e: dict) -> dict:
@@ -117,6 +119,7 @@ class KbStorage(Protocol):
     kind: str
 
     def exists(self) -> bool: ...
+    def is_current(self) -> bool: ...
 
     def load(self) -> KbSnapshot: ...
 
@@ -142,6 +145,16 @@ class JsonStorage:
 
     def exists(self) -> bool:
         return self._artifact_path.exists() or self._user_path.exists()
+
+    def is_current(self) -> bool:
+        """P0-E：artifact 版本是否为当前快照版本（用户手写标注文件跨版本稳定，不判作废）。"""
+        if not self._artifact_path.exists():
+            return self._user_path.exists()
+        try:
+            data = json.loads(self._artifact_path.read_text(encoding="utf-8"))
+            return data.get("version") == KB_SNAPSHOT_VERSION
+        except Exception:
+            return False
 
     def load(self) -> KbSnapshot:
         snap = KbSnapshot()
@@ -190,11 +203,24 @@ class JsonStorage:
                 snap.fewshot = data.get("fewshot", [])
                 snap.annotation_cache = data.get("annotation_cache", {})
                 snap.round = data.get("round", {})
+                snap.diff_base = data.get("diff_base", [])
+                snap.diff_active = bool(data.get("diff_active"))
             except Exception as e:
                 logger.warning("[kb.storage] %s artifact 读取失败（按空库处理）：%s", self._artifact_path.name, e)
         return snap
 
+    def _read_artifact_raw(self) -> dict:
+        if not self._artifact_path.exists():
+            return {}
+        try:
+            return json.loads(self._artifact_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
     def save(self, snap: KbSnapshot) -> None:
+        # 版本/字段归档键由 bump_kb_version/archive_fields 维护，全量快照不携带——
+        # 写盘前读回旧值合并，避免被覆盖（P2-10）
+        _prev = self._read_artifact_raw()
         # 用户标注写共享文件（保持旧格式兼容）
         if snap.user:
             try:
@@ -227,9 +253,70 @@ class JsonStorage:
                 "fewshot": snap.fewshot,
                 "annotation_cache": snap.annotation_cache,
                 "round": snap.round,
+                "diff_base": snap.diff_base,
+                "diff_active": snap.diff_active,
+                "kb_version": _prev.get("kb_version", 0),
+                "field_archive": _prev.get("field_archive", []),
             }, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    # ---- 版本机制（P2-10：此前 JSON 后端缺整套方法，confirm-all 归档第一步即 AttributeError 500） ----
+
+    def get_kb_version(self) -> int:
+        return int(self._read_artifact_raw().get("kb_version") or 0)
+
+    def bump_kb_version(self) -> int:
+        data = self._read_artifact_raw()
+        v = int(data.get("kb_version") or 0) + 1
+        data["kb_version"] = v
+        self._artifact_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return v
+
+    def archive_fields(self, batch_ts: str, version: int, rows: list[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        data = self._read_artifact_raw()
+        arr = data.setdefault("field_archive", [])
+        for r in rows:
+            arr.append({"batch_ts": batch_ts, "version": version, "kind": r["kind"],
+                        "table": r["table"], "column": r.get("column", ""),
+                        "payload": r["payload"]})
+        self._artifact_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return len(rows)
+
+    def field_history(self, table: str, column: str) -> list[dict[str, Any]]:
+        arr = self._read_artifact_raw().get("field_archive") or []
+        out = []
+        for i, r in enumerate(arr):
+            if r.get("kind") != "column" or r.get("table") != table or r.get("column") != column:
+                continue
+            p = r.get("payload") or {}
+            out.append({"id": i, "batch_ts": r.get("batch_ts", ""), "version": r.get("version", 0),
+                        "comment": p.get("comment", ""), "values": p.get("values", ""),
+                        "example": p.get("example", ""), "status": p.get("status", "")})
+        out.sort(key=lambda x: (x["version"], x["batch_ts"]), reverse=True)
+        return out
+
+    def archive_row(self, row_id: int) -> dict[str, Any] | None:
+        arr = self._read_artifact_raw().get("field_archive") or []
+        if not (0 <= int(row_id) < len(arr)):
+            return None
+        r = arr[int(row_id)]
+        return {"kind": r.get("kind", ""), "table": r.get("table", ""),
+                "column": r.get("column", ""), "payload": r.get("payload") or {}}
+
+    def trim_archive(self, keep_batches: int = 3) -> int:
+        data = self._read_artifact_raw()
+        arr = data.get("field_archive") or []
+        keep = max(1, int(keep_batches))
+        batches = sorted({r.get("batch_ts", "") for r in arr}, reverse=True)[:keep]
+        kept = [r for r in arr if r.get("batch_ts", "") in batches]
+        removed = len(arr) - len(kept)
+        if removed:
+            data["field_archive"] = kept
+            self._artifact_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return removed
 
     def hop_sql(self, table: str, hops: int) -> str:
         """JSON 后端没有 SQL——返回等价说明（内存 BFS 由上层提供）。"""
@@ -304,6 +391,7 @@ CREATE TABLE IF NOT EXISTS edges (
   weight REAL DEFAULT 1.0,
   reason TEXT DEFAULT '',
   metadata TEXT DEFAULT '{}',
+  pinned INTEGER DEFAULT 0,
   PRIMARY KEY (source_table, target_table, cols, guard)
 );
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_table);
@@ -341,6 +429,19 @@ class SqliteStorage:
     def exists(self) -> bool:
         return self._path.exists()
 
+    def is_current(self) -> bool:
+        """P0-E：artifact 版本是否为当前快照版本（v1 工件已按空处理，is_built 据此引导重建）。"""
+        if not self._path.exists():
+            return False
+        try:
+            conn = self._conn()
+            try:
+                return self._meta(conn, "version") == str(KB_SNAPSHOT_VERSION)
+            finally:
+                conn.close()
+        except Exception:
+            return False
+
     # ---- 连接管理 ----
     def _conn(self) -> Any:
         import sqlite3
@@ -368,6 +469,11 @@ class SqliteStorage:
             conn.execute("ALTER TABLE edges RENAME COLUMN relation TO source")
             conn.commit()
         conn.executescript(_EDGES_DDL)
+        # 旧库迁移：edges 表补 pinned 列（红边保留标记持久化，P2-1；已存在则跳过）
+        ecols2 = {row["name"] for row in conn.execute("PRAGMA table_info(edges)")}
+        if ecols2 and "pinned" not in ecols2:
+            conn.execute("ALTER TABLE edges ADD COLUMN pinned INTEGER DEFAULT 0")
+            conn.commit()
         # 旧库迁移：tags 表补 color 列（标签颜色后端持久化，已存在则跳过）
         tcols = {row["name"] for row in conn.execute("PRAGMA table_info(tags)")}
         if "color" not in tcols:
@@ -426,8 +532,8 @@ class SqliteStorage:
         """GraphEdge → 新 edges 表（INSERT OR REPLACE 幂等；guard 归一化 ''；cols JSON 保序）。"""
         conn.execute(
             "INSERT OR REPLACE INTO edges "
-            "(source_table, target_table, cols, cardinality, source, confidence, provenance, guard, weight, reason, metadata) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "(source_table, target_table, cols, cardinality, source, confidence, provenance, guard, weight, reason, metadata, pinned) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (e.source_table, e.target_table,
              json.dumps([list(p) for p in e.cols], ensure_ascii=False),
              e.cardinality or "n:1", e.source or "fk",
@@ -436,7 +542,8 @@ class SqliteStorage:
              e.guard or "",
              e.weight if e.weight is not None else 1.0,
              e.reason or "",
-             json.dumps(e.metadata or {}, ensure_ascii=False)),
+             json.dumps(e.metadata or {}, ensure_ascii=False),
+             1 if getattr(e, "pinned", False) else 0),
         )
 
     # ---- 读取 ----
@@ -492,6 +599,7 @@ class SqliteStorage:
                         "confidence": e.get("confidence") if e.get("confidence") is not None else 1.0,
                         "provenance": e.get("provenance") or "",
                         "cols": cols,
+                        "pinned": bool(e.get("pinned")),
                     })
                 for row in conn.execute("SELECT name, description, status, color FROM tags"):
                     snap.tags[row["name"]] = {
@@ -523,6 +631,10 @@ class SqliteStorage:
                 round_json = self._meta(conn, "round_json")
                 if round_json:
                     snap.round = json.loads(round_json)
+                diff_base_json = self._meta(conn, "diff_base")
+                if diff_base_json:
+                    snap.diff_base = json.loads(diff_base_json)
+                snap.diff_active = self._meta(conn, "diff_active") == "1"
                 concepts_json = self._meta(conn, "concepts")
                 if concepts_json:
                     self._migrate_meta_to_table(conn, "concepts", json.loads(concepts_json))
@@ -670,6 +782,10 @@ class SqliteStorage:
                 conn.execute("INSERT INTO meta (key, value) VALUES ('tables', ?)", (json.dumps(snap.tables, ensure_ascii=False),))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('annotation_cache', ?)",
                              (json.dumps(snap.annotation_cache, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('diff_base', ?)",
+                             (json.dumps(snap.diff_base, ensure_ascii=False),))
+                conn.execute("INSERT INTO meta (key, value) VALUES ('diff_active', ?)",
+                             ("1" if snap.diff_active else "0",))
                 conn.execute("INSERT INTO meta (key, value) VALUES ('round_json', ?)",
                              (json.dumps(snap.round, ensure_ascii=False),))
                 # vec0 虚拟表同步（sqlite-vec 可用时；维度 256，超长截断由 embedder 维度决定）

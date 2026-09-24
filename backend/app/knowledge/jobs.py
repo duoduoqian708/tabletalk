@@ -466,6 +466,21 @@ class SyncLoop:
                 result = await state.knowledge.sync(c.id, schema, samples)
                 apply_sync_result_status(state, c.id, result)
                 if result.get("changed"):
+                    # P1-11：自动同步留痕——此前「三无」（无 job/无进度/无审计），
+                    # 历史抽屉永远看不到自动同步，用户对 pending_review 无感
+                    try:
+                        state.audit.log(
+                            connection=c.name, origin="kb_build", tier="read", verdict="allow",
+                            status="synced", source="auto_sync",
+                            sql=(f"-- kb sync (auto) +{result.get('tables_added', 0)}表 "
+                                 f"-{result.get('tables_removed', 0)}表 "
+                                 f"变更{result.get('tables_changed', 0)}表"),
+                            added_tables=result.get("tables_added", 0),
+                            removed_tables=result.get("tables_removed", 0),
+                            changed_tables=result.get("tables_changed", 0),
+                        )
+                    except Exception:
+                        pass
                     logger.info(
                         "[kb.sync] %s(%s) 增量同步：+%s表 -%s表 变更%s表",
                         c.name, c.id, result.get("tables_added", 0),

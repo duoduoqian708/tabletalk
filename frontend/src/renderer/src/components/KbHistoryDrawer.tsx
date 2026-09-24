@@ -58,7 +58,11 @@ function describe(e: AuditEntry, tr: (k: string, v?: Record<string, string | num
   }
   if (e.status === 'confirmed') {
     const m = sql.match(/docs=(\d+)[^,]*tags=(\d+)/)
-    return { kind: 'confirm', ts, sql, detail: m ? tr('kbh.detail.confirm', { docs: m[1], tags: m[2] }) : tr('kbh.detail.confirmPlain') }
+    if (m) return { kind: 'confirm', ts, sql, detail: tr('kbh.detail.confirm', { docs: m[1], tags: m[2] }) }
+    // 审核镜头批量生效：-- kb review applied (batch-review) version=N（此前正则不命中只剩兜底文案）
+    const v = sql.match(/version=(\d+)/)
+    if (v) return { kind: 'confirm', ts, sql, detail: tr('kbh.detail.confirmBatch', { v: v[1] }) }
+    return { kind: 'confirm', ts, sql, detail: tr('kbh.detail.confirmPlain') }
   }
   if (ex.trigger === 'rebuild') {
     return { kind: 'rebuild', ts, sql, detail: ex.include_samples ? tr('kbh.detail.rebuild') : tr('kbh.detail.rebuildPlain') }
@@ -89,11 +93,9 @@ export function KbHistoryDrawer({ open, onClose, connId, connName }: {
     setLoading(true)
     setError(null)
     try {
-      const r = await listAudit(undefined, { origin: 'kb_build', limit: 200 })
-      const mine = (r.entries ?? [])
-        .filter((e) => e.connection === connId)
-        .map((e) => describe(e, t))
-      setRows(mine)
+      // P2-24：服务端按 connection 过滤（此前全局取 200 条再客户端过滤——多连接时本连接历史被挤出）
+      const r = await listAudit(connId, { origin: 'kb_build', limit: 200 })
+      setRows((r.entries ?? []).map((e) => describe(e, t)))
     } catch (e) {
       setError((e as Error).message)
       setRows([])

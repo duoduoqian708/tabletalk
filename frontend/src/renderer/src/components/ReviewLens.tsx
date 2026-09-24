@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useKnowledge } from '@renderer/store/knowledge'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
-import { batchReview, applyRoundTags, reviewFinalize, roundTableBaseline, annotateTable } from '@renderer/api/knowledge'
+import { batchReview, applyRoundTags, reviewFinalize, roundTableBaseline, annotateTable, type EdgeSelector } from '@renderer/api/knowledge'
 import type { GraphDraftEdge, GraphEdge, KbTableView, RoundBaseline, RoundTag } from '@renderer/api/types'
 import { toastMsg } from '@renderer/utils/toast'
 import { IconAlert } from './ui/icons'
@@ -128,11 +128,13 @@ function TableCard(props: {
 function EdgeCard(props: {
   edge: GraphDraftEdge | GraphEdge
   kind: 'new' | 'removed' | 'same'
-  onConfirm: (fromTable: string) => void
-  onReject: (fromTable: string) => void
+  onConfirm: (sel: EdgeSelector) => void
+  onReject: (sel: EdgeSelector) => void
+  /** 红边「保留」（pin）：仅 kind=removed 用 */
+  onPin?: () => void
   busy: boolean
 }): React.JSX.Element {
-  const { edge, kind, onConfirm, onReject, busy } = props
+  const { edge, kind, onConfirm, onReject, onPin, busy } = props
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const dft = edge as GraphDraftEdge
@@ -170,8 +172,15 @@ function EdgeCard(props: {
         {kind === 'same' && <div className="rl-note">{t('kb.review.rlEdgeSameNote')}</div>}
         {kind === 'new' && (
           <div className="rl-eacts">
-            <button className="rl-btn new" disabled={busy} onClick={() => onConfirm(dft.from_table)}>{t('kb.review.accept')}</button>
-            <button className="rl-btn old" disabled={busy} onClick={() => onReject(dft.from_table)}>{t('kb.review.rejectEdge')}</button>
+            <button className="rl-btn new" disabled={busy} onClick={() => onConfirm({ from_table: dft.from_table, to_table: dft.to_table, from_col: dft.from_col ?? null, to_col: dft.to_col ?? null })}>{t('kb.review.accept')}</button>
+            <button className="rl-btn old" disabled={busy} onClick={() => onReject({ from_table: dft.from_table, to_table: dft.to_table, from_col: dft.from_col ?? null, to_col: dft.to_col ?? null })}>{t('kb.review.rejectEdge')}</button>
+          </div>
+        )}
+        {kind === 'removed' && (
+          <div className="rl-eacts">
+            {ge.pinned
+              ? <span className="rl-note">{t('kb.review.rlEdgePinned')}</span>
+              : <button className="rl-btn" disabled={busy} onClick={() => onPin?.()}>{t('kb.review.rlKeepEdge')}</button>}
           </div>
         )}
       </div>
@@ -184,7 +193,7 @@ export function ReviewLens(props: { onClose: () => void }): React.JSX.Element | 
   const currentId = useConnections((s) => s.currentId)
   const { overview, busy, load,
     confirmTag, rejectTag,
-    confirmGraphDraft, rejectGraphDraft } = useKnowledge()
+    confirmGraphDraft, rejectGraphDraft, pinGraphEdge } = useKnowledge()
   const { t } = useI18n()
   /** 表级裁决（暂存）：未出现 = 默认采用新版 */
   const [decisions, setDecisions] = useState<Record<string, Decision>>({})
@@ -520,20 +529,22 @@ export function ReviewLens(props: { onClose: () => void }): React.JSX.Element | 
           )}
           {draftEdges.length > 1 && (
             <div style={{ marginBottom: 8 }}>
-              <button className="rl-btn" disabled={busy} onClick={() => void confirmGraphDraft(currentId, undefined)}>
+              <button className="rl-btn" disabled={busy} onClick={() => void confirmGraphDraft(currentId, {})}>
                 {t('kb.review.acceptAllEdges')}
               </button>
             </div>
           )}
           {draftEdges.map((e) => (
-            <EdgeCard key={`${e.from_table}.${e.from_col}->${e.to_table}`} edge={e} kind="new"
-              onConfirm={(ft) => void confirmGraphDraft(currentId, ft)}
-              onReject={(ft) => void rejectGraphDraft(currentId, ft)}
+            <EdgeCard key={`${e.from_table}.${e.from_col}->${e.to_table}.${e.to_col}`} edge={e} kind="new"
+              onConfirm={(sel) => void confirmGraphDraft(currentId, sel)}
+              onReject={(sel) => void rejectGraphDraft(currentId, sel)}
               busy={busy} />
           ))}
           {delEdges.map((e) => (
-            <EdgeCard key={`${e.from}-${e.to}`} edge={e} kind="removed"
-              onConfirm={() => undefined} onReject={() => undefined} busy={busy} />
+            <EdgeCard key={`${e.from}.${e.from_col}->${e.to}.${e.to_col}`} edge={e} kind="removed"
+              onConfirm={() => undefined} onReject={() => undefined}
+              onPin={() => void pinGraphEdge(currentId, { from_table: e.from, to_table: e.to, from_col: e.from_col ?? null, to_col: e.to_col ?? null })}
+              busy={busy} />
           ))}
           {sameEdges.length > 0 && (
             <div className="rl-same-box">

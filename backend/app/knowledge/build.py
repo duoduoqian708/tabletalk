@@ -127,6 +127,17 @@ class BuildService:
         return renames
 
     @staticmethod
+    def _assert_schema_usable(schema: dict[str, Any]) -> None:
+        """P0-C 空 schema 守卫：结构发现零表 = 上游异常（权限/方言/连接），拒绝构建。
+
+        宁缺勿错——增量/全量共用；照常构建会把全部已确认边判失效、清光表知识后落盘。
+        """
+        if not schema.get("tables"):
+            raise ValueError(
+                "结构发现返回 0 张表（可能是权限/方言/连接问题），已拒绝构建以保护既有知识库；"
+                "请检查连接后重试")
+
+    @staticmethod
     def diff_schema(old: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
         """结构 diff：新增/删除表、列变化（签名含类型/PK/FK/注释）、FK 增删。"""
         def _tables(s: dict) -> dict[str, dict]:
@@ -430,8 +441,12 @@ class BuildService:
         self, facade, conn_id: str, schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
         include_samples: bool | None = None,
+        on_progress: Any | None = None,
     ) -> dict[str, Any]:
-        """增量同步入口：指纹对比 → 无变化零副作用；有变化走 incremental_build。"""
+        """增量同步入口：指纹对比 → 无变化零副作用；有变化走 incremental_build。
+
+        on_progress：job 层进度/取消回调（P1-15）——透传进增量构建的阶段边界。
+        """
         facade.ensure_loaded(conn_id)
         if include_samples is None:
             include_samples = bool(facade._runtime and facade._runtime.get().kb_ai_annotation_samples)
@@ -442,8 +457,13 @@ class BuildService:
             return {"changed": False, "fingerprint": new_fp, "tables_added": 0, "tables_removed": 0, "tables_changed": 0}
         if not facade._auto.get(conn_id):
             logger.warning("[kb.sync] conn=%s 无已构建工件，防御性回退全量构建", conn_id)
-            return await facade.build(conn_id, schema, samples, include_samples=include_samples)
-        result = await facade.incremental_build(conn_id, schema, samples, include_samples=include_samples)
+            result = await facade.build(conn_id, schema, samples, include_samples=include_samples)
+            # P1-12：补 changed 键——apply_sync_result_status 首行判 changed，缺键则后台
+            # 全量重建完成后 pending_review 永不出现（审核入口隐身、草案长期滞留）
+            result.setdefault("changed", True)
+            return result
+        result = await facade.incremental_build(conn_id, schema, samples, include_samples=include_samples,
+                                                on_progress=on_progress)
         result["fingerprint"] = new_fp
         logger.info(
             "[kb.sync] conn=%s 增量同步：+表%s -表%s 变更表%s",
@@ -496,6 +516,10 @@ class BuildService:
         targets = [t for t in tabs if tables is None or t in tabs]
         if not targets:
             return
+        # P1-3：嵌入器按需创建——confirm_all 等路径可能未经 overview/reembed 直接调用
+        # （此前 _emb=None → 每表 AttributeError → 全部 [0.0] 覆盖，检索静默清零）
+        if facade._emb is None:
+            facade._emb = facade.build_service._embedder()
         vecs: dict[str, list[float]] = {}
         skipped = 0
         n = len(targets)
@@ -511,8 +535,10 @@ class BuildService:
             try:
                 vecs[name] = await facade._emb.embed(text)
             except Exception as e:
-                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s：%s", conn_id, name, e)
-                vecs[name] = [0.0]
+                # P1-10：失败保留旧向量（下方 merge 语义）——此前写 [0.0] 覆盖旧值，
+                # 一次嵌入抖动即把该表语义检索通道永久清零（与 docstring 宣称相反）
+                logger.warning("[kb.embed] conn=%s 表级向量失败 table=%s（保留旧向量）：%s",
+                               conn_id, name, e)
         logger.info(
             "[kb.embed] conn=%s 表级嵌入完成 表数=%d 无文本跳过=%d 耗时 %.2fs（串行 for，云端RTT主导，CPU≈0）",
             conn_id, n, skipped, time.monotonic() - _t0,
@@ -597,6 +623,12 @@ class BuildService:
         - "keep"/"anchor"：全量划分注入既有 confirmed 域锚点（anchor 额外允许 AI 提议改名/合并）；
         - "fresh"：先清空标签库与绑定，从零划分。
         """
+        # P0-A：构建前必须恢复磁盘态——重启后内存为空时直接构建会拿空 _tables/_auto
+        # 当"旧库"用（diff 退化 full、壳重建为空、_save_conn 落空快照覆盖全部已确认资产）。
+        facade.ensure_loaded(conn_id)
+        # P0-C：空 schema 一律拒绝（fail-closed）——权限/方言问题导致结构发现返回零表时，
+        # 若照常构建会把每条已确认边判失效、清光表知识后正常落盘（整库静默清空）。
+        self._assert_schema_usable(schema)
         facade.build_service._runtime = facade._runtime
         _t0 = time.monotonic()
         _t_prev = _t0
@@ -640,7 +672,6 @@ class BuildService:
                 touched = {t for t in touched if t not in {r["to"] for r in renames}}
                 logger.info("[kb.build] conn=%s diff 模式检测到表重命名：%s（知识继承，不重新注释）",
                             conn_id, "；".join(f"{r['from']}→{r['to']}" for r in renames))
-        facade.graph_store._llm_graph_edges.pop(conn_id, None)  # 提案队列重置（正式图不动）
         tv = facade.retrieval_service._table_vec.get(conn_id, {})
         for t in removed_tables:
             tv.pop(t, None)
@@ -868,6 +899,13 @@ class BuildService:
         # 按 schema 过滤失效边；LLM 提案合并进同一 draft 队列（全部待人工确认）
         facade.graph_store.filter_confirmed_by_schema(conn_id, schema)
         drafts = facade.graph_store.build_draft_edges(schema)
+        # P0-B：队列重置推迟到新草案就绪——构建中途失败/取消时上一轮待审草案不丢失
+        # （此前在构建一开始就 pop 且阶段一落盘，失败后待审 FK 边永久消失，只能整库重建找回）
+        # P2-7：query_log 草案是 L3 生命周期资产（设计 §6 非构建来源），跨重建保留——
+        # 它们既不由确定性建边重产、也不由 LLM 重提案，重建即清等于静默丢弃挖掘成果
+        _qlog = [e for e in facade.graph_store._llm_graph_edges.get(conn_id, [])
+                 if (e.get("source") or "") == "query_log"]
+        facade.graph_store._llm_graph_edges[conn_id] = _qlog
         n_det = facade.graph_store.merge_draft_edges(conn_id, drafts)
         n_llm = facade.graph_store.merge_draft_edges(
             conn_id,
@@ -960,8 +998,18 @@ class BuildService:
         self, facade, conn_id: str, new_schema: dict[str, Any],
         samples: dict[str, dict[str, list[Any]]] | None = None,
         include_samples: bool | None = None,
+        on_progress: Any | None = None,
     ) -> dict[str, Any]:
-        """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。"""
+        """增量构建：只处理变化表（新增/变更/删除），不重建全部向量。
+
+        on_progress（P1-15）：阶段边界进度 + 协作取消检查点——此前 sync job 无检查点，
+        被新 build 替换后仍跑到底、并发写共享内存。
+        """
+        def _tick(pct: int, detail: str | None = None) -> None:
+            if on_progress:
+                on_progress("增量构建", pct, detail)
+        # P0-C：空 schema 拒绝（与全量构建同守卫——零表会被当"全部删除"清库）
+        self._assert_schema_usable(new_schema)
         if include_samples is None:
             include_samples = bool(facade._runtime and facade._runtime.get().kb_ai_annotation_samples)
         # 审核重构：增量同样快照旧版知识（对比层"旧"侧）
@@ -982,6 +1030,7 @@ class BuildService:
             logger.info("[kb.incr] conn=%s 检测到表重命名：%s（知识继承，不重新注释）",
                         conn_id, "；".join(f"{r['from']}→{r['to']}" for r in renames))
         touched = facade.build_service._touched_from_diff(diff)
+        _tick(40, f"变化表 {len(touched)} 张")
 
         facade.semantic_store._schema[conn_id] = {
             "tables": [
@@ -997,18 +1046,16 @@ class BuildService:
             "foreign_keys": new_schema.get("foreign_keys", []),
         }
         facade.semantic_store._sync_table_shells(conn_id, new_schema, drop=set(diff["removed_tables"]))
+        # 已删表的采样清理（无新采样时同样要清旧采样）
         if samples:
             merged = {**facade.semantic_store._samples.get(conn_id, {}), **samples}
             for t in diff["removed_tables"]:
                 merged.pop(t, None)
             facade.semantic_store._samples[conn_id] = merged
-            all_samples = merged
         else:
-            all_samples = facade.semantic_store._samples.get(conn_id, {})
+            existing = facade.semantic_store._samples.get(conn_id, {})
             for t in diff["removed_tables"]:
-                all_samples.pop(t, None)
-
-        touched = facade.build_service._touched_from_diff(diff)
+                existing.pop(t, None)
 
         auto = facade._auto.get(conn_id, [])
         now = utcnow_iso()
@@ -1139,6 +1186,7 @@ class BuildService:
                 incr_degraded.append("graph")
                 logger.warning("[kb.incr] conn=%s 增量图谱补边异常：%s", conn_id, e)
 
+        _tick(80, "结构/注释完成，落盘")
         facade._schema_fingerprint_map[conn_id] = facade.build_service._schema_fingerprint(new_schema)
         facade._synced_at[conn_id] = now
         # T8：结构变化 → 表级过滤器 draft 候选随增量刷新（confirmed 保留）

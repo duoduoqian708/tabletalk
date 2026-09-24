@@ -37,6 +37,7 @@ class GraphEdge:
     weight: float = 1.0
     reason: str = ""
     metadata: dict = field(default_factory=dict)
+    pinned: bool = False                 # 红边「保留」：人工决策资产，跨重建存活（需落盘）
 
     def __post_init__(self) -> None:
         if not self.cols:
@@ -62,6 +63,7 @@ class GraphEdge:
             "cols": [list(pair) for pair in self.cols],
             "kinds": self.kinds,
             "kind": self.kind,
+            "pinned": self.pinned,
         }
 
     @classmethod
@@ -90,6 +92,7 @@ class GraphEdge:
             weight=float(d.get("weight") or 1.0),
             reason=d.get("reason", ""),
             metadata=dict(d.get("metadata") or {}),
+            pinned=bool(d.get("pinned")),
         )
 
     # ---- join 条件序列化 ----

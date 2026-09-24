@@ -241,6 +241,8 @@ export interface GraphEdge {
   status?: 'draft' | 'confirmed'
   /** 图 diff（2026-09）：removed=本轮未重新提案的已确认边（红） */
   diff?: 'new' | 'modified' | 'removed' | null
+  /** 红边「保留」（pin）：人工决策资产，跨重建存活、豁免确认时自动移除 */
+  pinned?: boolean
 }
 
 export interface GraphDraftEdge {
