@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
-export type View = 'workspace' | 'knowledge' | 'graph' | 'audit' | 'approvals'
-export type MainView = 'graph' | 'table'
+export type View = 'workspace' | 'knowledge' | 'graph' | 'audit' | 'tasks' | 'cost'
+type MainView = 'graph' | 'table'
 
 interface UiState {
   view: View

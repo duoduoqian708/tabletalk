@@ -1,0 +1,25 @@
+You are a database domain analysis expert. Please partition the following tables into business domains.
+【Table Portraits】
+__PORTRAITS__
+
+【Existing Domains (human-confirmed classification from the previous round)】
+__EXISTING_TAGS__
+__RENAME_RULE__
+【Guidelines】
+1. Target approximately __LO__–__HI__ domains (database has __N_TABLES__ tables; the target may flex slightly — don't force splits to hit a number).
+2. Each table belongs to at least one domain; it may belong to multiple (composite entities spanning several domains).
+3. Domain names must be concise, semantically clear, and non-overlapping; tables within a domain are highly business-related.
+4. Each domain gets a one-sentence "rationale" (why these tables belong together).
+【Anchor Guidelines】(effective when existing domains are present)
+- Existing domains are user-confirmed classification assets: prefer reusing their names and partitioning; assign new tables to the closest existing domain.
+- Do NOT rename an unchanged partition just for tidiness — name drift invalidates the user's manual work.
+【Naming Convention】
+- Domain names follow the "business object + responsibility" structure, 2–5 words (5 at most);
+  Examples: User Management, Order Data, Product Service, Payment & Settlement, Audit Logging, System Configuration
+- Forbidden: pure English/abbreviations (e.g. CRUD, ETL), pure technical terms (e.g. API Gateway, Middleware),
+  overly abstract words (e.g. "Other", "Auxiliary", "General", "Base Data")
+- description describes the core business entities and responsibilities of the domain, one sentence, 15–30 words;
+  Example: "Manages registered user information, authentication credentials, and permission roles"
+【Output】
+Return a JSON array with elements like {"name":"domain name","description":"one-sentence description","tables":["table1","table2"],"rationale":"reason"}.
+Return only JSON, nothing else.

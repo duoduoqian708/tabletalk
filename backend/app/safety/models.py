@@ -21,6 +21,7 @@ class Verdict(str, Enum):
 class Origin(str, Enum):
     AI = "ai"
     MANUAL = "manual"
+    SCHEDULED = "scheduled"  # 定时任务脚本身份（经 SDK→sidecar，受同样闸门约束）
 
 
 @dataclass

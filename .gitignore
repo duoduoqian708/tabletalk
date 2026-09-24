@@ -24,9 +24,13 @@ frontend/dist/
 # OS
 .DS_Store
 
+# Local runtime data dir (sandbox: cannot write ~/.tabletalk)
+.tabletalk-data/
+
 # Gate package build artifacts (F2)
 gate/build/
 gate/dist/
 gate/*.egg-info/
 # Brainstorm artifacts
 .superpowers/
+.opencode/

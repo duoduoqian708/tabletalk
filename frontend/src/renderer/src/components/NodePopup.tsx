@@ -1,7 +1,9 @@
 import { useI18n } from '@renderer/store/i18n'
+import { CloseBtn } from './ui/buttons'
 
 interface Props {
   table: string
+  kind?: 'table' | 'view'
   rowCount: number
   columnCount: number
   fkCount: number
@@ -11,13 +13,14 @@ interface Props {
   onOpenData: () => void
 }
 
-export function NodePopup({ table, rowCount, columnCount, fkCount, x, y, onClose, onOpenData }: Props): React.JSX.Element {
+export function NodePopup({ table, kind, rowCount, columnCount, fkCount, x, y, onClose, onOpenData }: Props): React.JSX.Element {
   const { t } = useI18n()
   return (
     <div className="node-pop" style={{ left: x, top: y }}>
       <div className="np-head">
         <span className="np-title">{t('node.tableLabel')} <b>{table}</b></span>
-        <button className="np-x" onClick={onClose} title={t('common.close')}>✕</button>
+        {kind === 'view' && <span className="np-view-badge">view</span>}
+        <CloseBtn className="np-x" title={t('common.close')} onClick={onClose} />
       </div>
       <div className="np-stats">
         <div className="np-stat"><span className="np-num">{rowCount.toLocaleString()}</span><span className="np-lab">{t('node.rowLabel')}</span></div>

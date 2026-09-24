@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core import query as core_query
+from app.knowledge.filters import prepare_query_sql
 from app.safety import gate as safety_gate
 from app.safety.blast import build_blast
 from app.safety.models import Origin, Verdict
@@ -21,9 +22,14 @@ class QueryRequest(BaseModel):
     sql: str
     origin: str = "manual"
     confirm: bool = False
+    # WS4 T4.3：chat 内 DML 确认协议——confirm_token 与 confirm=true 同传；
+    # pending_dml 按 session 寻址，故需 session_id
+    confirm_token: str | None = None
+    session_id: str | None = None
     limit: int | None = None
     offset: int | None = None
     count_total: bool = False
+    dry_run: bool = False
 
 
 class CancelRequest(BaseModel):
@@ -66,9 +72,16 @@ async def _estimate_cost(state, conn_id: str, sql: str, dialect: str) -> int | N
         if isinstance(res, dict) and res.get("is_scan"):
             from app.core.schema import get_schema
             try:
+                # 用 sqlglot 精确抽表名，避免子串误匹配/别名漏匹配
+                try:
+                    _parsed = sqlglot.parse_one(sql, read=dialect) if sql.strip() else None
+                    from sqlglot import exp as _exp
+                    _tables = {t.name.lower() for t in _parsed.find_all(_exp.Table)} if _parsed else set()
+                except Exception:
+                    _tables = set()
                 schema = await get_schema(state, conn_id)
                 for t in schema.get("tables", []):
-                    if t["name"] in sql or t["name"].lower() in sql.lower():
+                    if t["name"].lower() in _tables or t["name"] in sql or t["name"].lower() in sql.lower():
                         rc = int(t.get("row_count", 0) or 0)
                         if rc > 0:
                             return rc
@@ -81,6 +94,19 @@ async def _estimate_cost(state, conn_id: str, sql: str, dialect: str) -> int | N
         return None
 
 
+def _preview_rows(sql: str) -> tuple[str | None, int | None]:
+    """解析 INSERT VALUES 估算受影响行数（用于 dry-run 预览）。"""
+    try:
+        _p = sqlglot.parse_one(sql)
+        if isinstance(_p, sqlglot.exp.Insert):
+            _table = _p.find(sqlglot.exp.Table)
+            _rows = _p.find_all(sqlglot.exp.Tuple)
+            return (_table.name if _table else None), len(list(_rows))
+    except Exception:
+        pass
+    return None, None
+
+
 @router.post("/query")
 async def run_query(req: QueryRequest) -> dict:
     state = get_state()
@@ -90,61 +116,24 @@ async def run_query(req: QueryRequest) -> dict:
             "code": "kb_not_built",
             "message": "该数据源知识库未构建，请先构建并确认启用",
         })
-    origin = Origin.AI if req.origin == "ai" else Origin.MANUAL
-    assessment = safety_gate.assess_sql(req.sql, dialect, origin)
-    # A2 策略即配置：表级/模式级覆盖（热更新，无需重启）
-    try:
-        policy = state.runtime.get().policy
-        # 表级：最高优先生效
-        for tbl in list(assessment.tables):
-            act = policy.table_rules.get(tbl) or policy.table_rules.get(tbl.lower()) if hasattr(policy, "table_rules") else None
-            if act:
-                act = str(act).lower()
-                ver = Verdict.BLOCK if act == "block" else Verdict.REVIEW if act == "review" else Verdict.ALLOW
-                tier = assessment.tier
-                if ver != assessment.verdict:
-                    reason = {
-                        "rule_id": f"policy-table-{tbl}",
-                        "message": f"命中策略 v{getattr(policy, 'version', 1)}：表 “{tbl}” 规则 {act.upper()}",
-                        "message_en": f"Policy v{getattr(policy, 'version', 1)}: table '{tbl}' {act.upper()}",
-                        "objects": [tbl],
-                    }
-                    new_reasons = [reason] + [r for r in assessment.reasons if r.get("rule_id") != f"policy-table-{tbl}"]
-                    if act == "allow" and assessment.verdict != Verdict.ALLOW:
-                        pass
-                    else:
-                        assessment.verdict = ver
-                        assessment.reasons = new_reasons
-                        if ver == Verdict.BLOCK:
-                            assessment.tier = tier
-                        break
-        if assessment.verdict == Verdict.REVIEW and assessment.tables:
-            for pr in getattr(policy, "pattern_rules", []) or []:
-                pid = pr.get("id", "")
-                if pid == "delete-requires-time" and "delete" in req.sql.lower():
-                    has_time = any(kw in req.sql.lower() for kw in ["created_at", "updated_at", "time", "date", "timestamp"])
-                    if not has_time:
-                        reason = {
-                            "rule_id": "policy-pattern-delete-time",
-                            "message": f"命中策略 v{getattr(policy, 'version', 1)}：DELETE 必须 WHERE 带时间范围",
-                            "message_en": f"Policy v{getattr(policy, 'version', 1)}: DELETE requires time predicate",
-                            "objects": assessment.tables,
-                        }
-                        assessment.reasons = [reason] + assessment.reasons
-                        assessment.verdict = Verdict.BLOCK
-                        break
-    except Exception:
-        pass
+    origin = {"ai": Origin.AI, "scheduled": Origin.SCHEDULED, "manual": Origin.MANUAL}.get(req.origin, Origin.MANUAL)
+    # R6/T8：会话变量替换 + 表级过滤器注入（闸门/执行/审计一律用加工后的真实执行 SQL；
+    # confirm-token 校验与 suggest_safe 保持原始 req.sql——token 存的是原文哈希）
+    exec_sql = prepare_query_sql(state, req.connection_id, req.sql)
+    # 统一判定入口：规则阶梯覆盖（gate_rules）+ 策略覆盖（policy）同源生效（A2）
+    assessment = safety_gate.assess_configured(state, exec_sql, dialect, origin)
     t0 = time.monotonic()
     # A5 成本防护：ALLOW 的读若估算超阈值则升 REVIEW；失败放行并审计
+    estimated_rows_for_audit: int | None = None
+    cost_degraded_reason: str | None = None
     if assessment.verdict == Verdict.ALLOW:
         try:
             try:
-                pol_thr = getattr(state.runtime.get().policy, "threshold", None)
-                thr = int(pol_thr) if pol_thr else int(state.runtime.get().gate_review_threshold)
+                thr = int(getattr(state.runtime.get().policy, "threshold", 100000))
             except Exception:
                 thr = 100000
-            est = await _estimate_cost(state, req.connection_id, req.sql, dialect)
+            est = await _estimate_cost(state, req.connection_id, exec_sql, dialect)
+            estimated_rows_for_audit = est
             if est is not None and est > thr:
                 reason = {
                     "rule_id": "cost-threshold",
@@ -155,11 +144,29 @@ async def run_query(req: QueryRequest) -> dict:
                 assessment.verdict = Verdict.REVIEW
                 assessment.reasons = [reason] + assessment.reasons
                 assessment.tier = Tier.READ
+            elif est is None:
+                cost_degraded_reason = "explain_failed"
         except Exception as e:
-            # 失败放行，已在 _estimate_cost 内审计降级
+            cost_degraded_reason = str(e)
             pass
 
-    if cfg.read_only and assessment.verdict != Verdict.ALLOW:
+    # ── dry-run 拦截：定时任务测试模式不真实执行写操作，返回预览 ──
+    if req.dry_run and origin == Origin.SCHEDULED and assessment.tier.value in ("dml", "ddl"):
+        elapsed = round((time.monotonic() - t0) * 1000, 1)
+        table, rows = _preview_rows(exec_sql)
+        state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
+                        verdict="executed", status="dry_run", sql=exec_sql, elapsed_ms=elapsed,
+                        reasons=assessment.reasons, tables=assessment.tables)
+        return {
+            "verdict": "executed", "tier": assessment.tier.value,
+            "reason": "测试模式·未真实写入",
+            "reasons": assessment.reasons,
+            "dry_run": True, "table": table, "affected_rows": rows,
+            "elapsed_ms": elapsed,
+        }
+
+    if cfg.read_only and (assessment.verdict != Verdict.ALLOW or assessment.tier.value in ("dml", "ddl")):
+        # 只读硬边界：不止拦非 ALLOW——定时任务 INSERT（scheduled-insert=allow）也拦，只读连接永不写
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         ro_reasons = [{
             "rule_id": "read-only",
@@ -168,7 +175,7 @@ async def run_query(req: QueryRequest) -> dict:
             "objects": assessment.tables,
         }]
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="block", status="只读连接拦截", sql=req.sql, elapsed_ms=elapsed,
+                        verdict="block", status="只读连接拦截", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=ro_reasons, tables=assessment.tables)
         return {
             "verdict": "block", "tier": assessment.tier.value,
@@ -179,21 +186,32 @@ async def run_query(req: QueryRequest) -> dict:
         }
 
     if assessment.verdict == Verdict.ALLOW:
-        res = await core_query.execute(state, req.connection_id, req.sql, req.limit, req.offset)
+        res = await core_query.execute(state, req.connection_id, exec_sql, req.limit, req.offset)
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         total = None
         if req.count_total:
-            total = await core_query.count_total(state, req.connection_id, req.sql)
+            total = await core_query.count_total(state, req.connection_id, exec_sql)
+        # A5 审计补充成本字段
+        _audit_extra = {}
+        if estimated_rows_for_audit is not None:
+            _audit_extra["estimated_rows"] = estimated_rows_for_audit
+        if cost_degraded_reason:
+            _audit_extra["cost_degraded"] = cost_degraded_reason
         state.audit.log(connection=cfg.name, origin=origin.value, tier="read", verdict="allow",
-                        status="放行", sql=req.sql, elapsed_ms=elapsed,
-                        reasons=[], tables=assessment.tables)
+                        status="放行", sql=exec_sql, elapsed_ms=elapsed,
+                        reasons=[], tables=assessment.tables, **_audit_extra)
+        # R7/T10：手动查询成功也回灌（仅边加权，无 few-shot）；内部已静默降级
+        try:
+            state.knowledge.record_query_success(req.connection_id, exec_sql, None)
+        except Exception:
+            pass
         return {**res, "verdict": "allow", "tier": "read", "reason": "", "reasons": [], "total": total,
-                "suggestions": []}
+                "suggestions": [], **({"estimated_rows": estimated_rows_for_audit} if estimated_rows_for_audit is not None else {})}
 
     if assessment.verdict == Verdict.BLOCK:
         elapsed = round((time.monotonic() - t0) * 1000, 1)
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="block", status="拦截", sql=req.sql, elapsed_ms=elapsed,
+                        verdict="block", status="拦截", sql=exec_sql, elapsed_ms=elapsed,
                         reasons=assessment.reasons, tables=assessment.tables)
         return {
             "verdict": "block", "tier": assessment.tier.value,
@@ -204,29 +222,46 @@ async def run_query(req: QueryRequest) -> dict:
         }
 
     # REVIEW
-    if not req.confirm:
+    if not req.confirm and not req.confirm_token:
         preview = None
         if assessment.tier.value == "dml":
-            preview = await safety_gate.preview_rows(state, req.connection_id, req.sql, dialect)
+            preview = await safety_gate.preview_rows(state, req.connection_id, exec_sql, dialect)
         blast = build_blast(state, req.connection_id, assessment.tables, preview)
-        # A4 回滚剧本
+        # A4 回滚剧本（A4 修复：备份 SQL 同样过闸，避免死代码）
         rollback = None
         if assessment.tier.value == "dml":
             try:
                 from app.safety.rollback import build_rollback
                 rollback = build_rollback(req.sql, dialect)
-                # 剧本自身过闸（若为可执行 SQL，则校验）
-                if rollback and rollback.get("rollback_sql") and not rollback["rollback_sql"].strip().startswith("--"):
-                    rb_assess = safety_gate.assess_sql(rollback["rollback_sql"], dialect, origin)
-                    if rb_assess.verdict == Verdict.BLOCK:
-                        rollback["note"] += "（剧本含高危操作，已标记）"
+                # 剧本自身过闸：备份导出与逆向语句均校验（备份为 SELECT，需放行；逆向为高危时标记）
+                for _key in ("backup_sql", "rollback_sql"):
+                    _sql = rollback.get(_key) if rollback else None
+                    if _sql and not _sql.strip().startswith("--"):
+                        try:
+                            rb_assess = safety_gate.assess_sql(_sql, dialect, origin)
+                            if rb_assess.verdict == Verdict.BLOCK:
+                                rollback["note"] += f"（{_key}含高危操作，已标记）"
+                        except Exception:
+                            pass
             except Exception:
                 rollback = None
         elapsed = round((time.monotonic() - t0) * 1000, 1)
+        _review_extra = {}
+        if estimated_rows_for_audit is not None:
+            _review_extra["estimated_rows"] = estimated_rows_for_audit
+        if cost_degraded_reason:
+            _review_extra["cost_degraded"] = cost_degraded_reason
+        # A4 审计补充 rollback_ref（若有剧本）
+        if rollback and rollback.get("backup_sql"):
+            try:
+                import hashlib as _hl3
+                _review_extra["rollback_ref"] = _hl3.sha256(rollback["backup_sql"].encode()).hexdigest()[:12]
+            except Exception:
+                pass
         state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                        verdict="review", status="需确认", sql=req.sql, elapsed_ms=elapsed,
-                        reasons=assessment.reasons, tables=assessment.tables)
-        return {
+                        verdict="review", status="需确认", sql=exec_sql, elapsed_ms=elapsed,
+                        reasons=assessment.reasons, tables=assessment.tables, **_review_extra)
+        _ret = {
             "verdict": "review", "tier": assessment.tier.value,
             "reason": _reason_text(assessment.reasons),
             "reasons": assessment.reasons,
@@ -235,8 +270,13 @@ async def run_query(req: QueryRequest) -> dict:
             "rollback": rollback,
             "elapsed_ms": elapsed,
         }
+        if estimated_rows_for_audit is not None:
+            _ret["estimated_rows"] = estimated_rows_for_audit
+        if rollback and rollback.get("backup_sql"):
+            _ret["rollback_ref"] = _review_extra.get("rollback_ref")
+        return _ret
 
-    reassess = safety_gate.assess_sql(req.sql, dialect, origin)
+    reassess = safety_gate.assess_configured(state, exec_sql, dialect, origin)
     if reassess.verdict == Verdict.BLOCK:
         return {
             "verdict": "block", "tier": reassess.tier.value,
@@ -244,12 +284,31 @@ async def run_query(req: QueryRequest) -> dict:
             "reasons": reassess.reasons,
             "suggestions": safety_gate.suggest_safe(req.sql, dialect, origin),
         }
-    res = await core_query.execute(state, req.connection_id, req.sql, req.limit, req.offset)
+    # WS4 T4.3：确认执行通路——token 校验（一次性/未过期/SQL 哈希一致，防 TOCTOU）。
+    # 确认不是通行证：上方 assess 已对本次请求重新过闸（BLOCK 已拦截），此处只验"人看过预览"的凭证。
+    _confirm_meta: dict = {}
+    if req.confirm_token:
+        from app.safety.confirm import clear_pending, get_pending, validate_and_consume
+
+        ok, why = validate_and_consume(state.chats, req.session_id or "", req.confirm_token, req.sql)
+        if not ok:
+            raise HTTPException(status_code=409, detail={"code": "confirm_rejected", "message": why})
+        _confirm_meta = get_pending(state.chats, req.session_id or "") or {}
+    res = await core_query.execute(state, req.connection_id, exec_sql, req.limit, req.offset)
     elapsed = round((time.monotonic() - t0) * 1000, 1)
     status = "已确认执行" if assessment.tier.value == "dml" else "已执行"
     state.audit.log(connection=cfg.name, origin=origin.value, tier=assessment.tier.value,
-                    verdict=assessment.verdict.value, status=status, sql=req.sql, elapsed_ms=elapsed,
-                    reasons=assessment.reasons, tables=assessment.tables)
+                    verdict=assessment.verdict.value, status=status, sql=exec_sql, elapsed_ms=elapsed,
+                    reasons=assessment.reasons, tables=assessment.tables,
+                    **({"confirm_token": req.confirm_token,
+                        "turn_id": _confirm_meta.get("turn_id")} if req.confirm_token else {}))
+    if req.confirm_token and req.session_id:
+        # token 已消费，清理 pending（防残留）
+        try:
+            from app.safety.confirm import clear_pending as _cp
+            _cp(state.chats, req.session_id)
+        except Exception:
+            pass
     return {
         "verdict": "executed", "tier": assessment.tier.value,
         "reason": "已确认执行",
@@ -324,9 +383,8 @@ async def lint_sql(req: LintRequest) -> dict:
         schema = await get_schema(state, req.connection_id)
     except Exception:
         schema = {"tables": [], "columns": [], "foreign_keys": []}
-    # Gate 评估（结构化 reasons 复用）
-    from app.safety.models import Origin, Verdict
-    assessment = safety_gate.assess_sql(req.sql, dialect, Origin.MANUAL)
+    # Gate 评估（结构化 reasons 复用；rule 覆盖同源，保持与执行时一致的判定）
+    assessment = safety_gate.assess_configured(state, req.sql, dialect, Origin.MANUAL)
     # 只读连接硬边界（与闸门同源，保持编辑器与执行时一致）
     if cfg.read_only and assessment.verdict != Verdict.ALLOW:
         diagnostics = [{

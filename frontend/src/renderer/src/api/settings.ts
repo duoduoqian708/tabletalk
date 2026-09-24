@@ -3,7 +3,7 @@ import { request } from './client'
 export interface AiModelConfig {
   id: string
   name: string
-  provider: 'mock' | 'cloud' | 'local' | string
+  provider: string
   base_url: string
   api_key: string
   model: string
@@ -42,13 +42,13 @@ export interface SettingsPublic {
   default_ai_model: string
   embedding_models: EmbeddingModelConfig[]
   default_embedding_model: string
-  gate_review_threshold: number
   gate_rules: Record<string, unknown>
   kb_sample_rows: number
   kb_ai_annotation_samples: boolean
   privacy_mode: string
   query_max_rows: number
   pool_size: number
+  default_connection?: string
   runtime?: { data_dir: string; port: number; auth: string }
   // 兼容字段（旧前端仍可读）
   ai_provider: string
@@ -77,13 +77,14 @@ export interface SettingsPatch {
   embedding_base_url?: string
   embedding_api_key?: string
   embedding_model?: string
-  gate_review_threshold?: number
   gate_rules?: Record<string, unknown>
+  policy?: Record<string, unknown>
   kb_sample_rows?: number
   kb_ai_annotation_samples?: boolean
   privacy_mode?: string
   query_max_rows?: number
   pool_size?: number
+  default_connection?: string
 }
 
 export function getSettings(): Promise<SettingsPublic> {

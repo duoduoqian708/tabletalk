@@ -4,10 +4,14 @@
 """
 from __future__ import annotations
 
+import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from app.core.dialects.base import ColumnRef, FKRef, TableRef
+from app.core.dialects.base import ColumnRef
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -19,12 +23,30 @@ _schema_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 async def _discover(state: "AppState", conn_id: str):
     def _work(adapter, conn):
         async def inner():
+            _t0 = time.monotonic()
             tables = await adapter.list_tables(conn)
+            _t_list_tables = time.monotonic() - _t0
+
+            _t1 = time.monotonic()
             columns: list[ColumnRef] = []
             for t in tables:
                 columns += await adapter.list_columns(conn, t.name)
+            _t_list_columns = time.monotonic() - _t1
+
+            _t2 = time.monotonic()
             fks = await adapter.list_foreign_keys(conn)
+            _t_list_fks = time.monotonic() - _t2
+
+            _t3 = time.monotonic()
             row_counts = {t.name: await adapter.count_rows(conn, t.name) for t in tables}
+            _t_count_rows = time.monotonic() - _t3
+
+            logger.info(
+                "[kb.discover] conn=%s 表数=%d 列数=%d 耗时 %.2fs（list_tables %.2fs + list_columns %.2fs(串行×%d) + list_fks %.2fs + count_rows %.2fs(串行×%d)）",
+                conn_id, len(tables), len(columns), time.monotonic() - _t0,
+                _t_list_tables, _t_list_columns, len(tables), _t_list_fks,
+                _t_count_rows, len(tables),
+            )
             return tables, columns, fks, row_counts
 
         return inner()
@@ -59,16 +81,13 @@ async def get_schema(state: "AppState", conn_id: str, refresh: bool = False) -> 
             for c in columns
         ],
         "foreign_keys": [
-            {"table": fk.table, "column": fk.column, "ref_table": fk.ref_table, "ref_column": fk.ref_column}
+            {"table": fk.table, "column": fk.column, "ref_table": fk.ref_table,
+             "ref_column": fk.ref_column, "constraint_id": fk.constraint_id}
             for fk in fks
         ],
     }
     _schema_cache[conn_id] = (time.monotonic(), result)
     return result
-
-
-def invalidate_schema(conn_id: str) -> None:
-    _schema_cache.pop(conn_id, None)
 
 
 async def describe_table(state: "AppState", conn_id: str, table: str) -> dict[str, Any]:
@@ -99,23 +118,150 @@ async def preview_table(state: "AppState", conn_id: str, table: str, limit: int 
     return {"columns": columns, "types": types, "rows": rows, "total": total}
 
 
+def _looks_like_enum(col: Any) -> bool:
+    """枚举列启发式判定（T5 采样分列）：
+
+    信号（满足任一即倾向枚举）：
+    - 类型 bool/boolean
+    - 列名含 status/type/kind/state/category/flag/is_
+    - 类型为短 char/varchar（长度 ≤ 20）
+    反信号（度量/时间列，直接排除）：
+    - 列名含 _at/_time/date/amount/price/qty/count/num
+    """
+    name = (getattr(col, "name", "") or "").lower()
+    ctype = (getattr(col, "data_type", "") or "").upper()
+    if name.endswith(("_at", "_time")) or "date" in name or "time" in name:
+        return False
+    if any(tok in name for tok in ("amount", "price", "qty", "count", "num")):
+        return False
+    if ctype.startswith(("BOOL", "BOOLEAN")):
+        return True
+    if name.startswith("is_") or name in ("deleted", "active", "enabled", "valid"):
+        return True  # 布尔标志列（is_deleted/is_active...）
+    if any(tok in name for tok in ("status", "type", "kind", "state", "category", "flag")):
+        return True
+    if ctype.startswith(("CHAR", "VARCHAR", "NCHAR", "NVARCHAR")):
+        # 短 char/varchar（length ≤ 20）倾向枚举；带长度且 >20（如 VARCHAR(255)）更可能是
+        # ID/描述，走最近行路径；裸类型（无长度信息）保守判枚举（DISTINCT 对 ID 类无害，T5 §4#5）
+        m = re.search(r"\((\d+)\)", ctype)
+        return m is None or int(m.group(1)) <= 20
+    return False
+
+
 async def sample_values(state: "AppState", conn_id: str, table: str, per_column: int = 10) -> dict[str, list[Any]]:
-    """每列取前 K 个不同的样本值（只读，本地）。供图谱值重叠边与 AI 注释使用。"""
+    """分列抽样（T5）：枚举/低基数列走 SELECT DISTINCT（不按时间偏置，覆盖历史值），
+    度量/时间列走整行主键倒序（最近样本）。返回 {列名: [该列值]}。
+
+    供图谱值重叠边（T4）、AI 注释、概念字典防漂移（T7）使用。
+    """
+    import logging
+
+    logger = logging.getLogger("core.schema")
     from app.core.query import serialize_value
 
     def _work(adapter, conn):
         async def inner():
             quote = adapter.quote_ident
             cols = await adapter.list_columns(conn, table)
+            enum_cols = [c.name for c in cols if _looks_like_enum(c)]
+            pk_cols = [c.name for c in cols if getattr(c, "is_pk", False)]
+
             out: dict[str, list[Any]] = {}
-            for c in cols:
+
+            # R4：小表（行数 ≤ 50）全表 DISTINCT（不按时间偏置，覆盖全部历史值）；
+            # 行数未知（count 失败）→ 跳过该信号，保持既有分列策略
+            small_table = False
+            try:
+                n_rows = await adapter.count_rows(conn, table)
+                small_table = n_rows <= 50
+            except Exception:  # pragma: no cover - count 失败退化为分列采样
+                small_table = False
+
+            # 1. 枚举列：SELECT DISTINCT（历史值不被时间偏置吞掉；NULL 剔除，T4 消费层同语义）
+            for cname in enum_cols:
                 try:
                     raw = await adapter.execute(
-                        conn, f"SELECT DISTINCT {quote(c.name)} FROM {quote(table)} LIMIT {per_column}"
+                        conn, f"SELECT DISTINCT {quote(cname)} FROM {quote(table)} LIMIT {int(per_column)}"
                     )
-                    out[c.name] = [serialize_value(r[0]) for r in raw.rows] if raw.rows else []
-                except Exception:
-                    out[c.name] = []
+                    out[cname] = [serialize_value(r[0]) for r in raw.rows or [] if r and r[0] is not None]
+                except Exception as e:  # pragma: no cover - 方言兼容
+                    logger.warning("[schema.sample] conn=%s table=%s DISTINCT 采样失败 %s：%s",
+                                   conn_id, table, cname, e)
+                    out[cname] = []
+
+            if small_table:
+                # R4：小表全表 DISTINCT——所有非枚举列同样取全量去重值（不限行，行数本身 ≤50）
+                for c in cols:
+                    cname = c.name
+                    if cname in enum_cols:
+                        continue
+                    try:
+                        raw = await adapter.execute(
+                            conn, f"SELECT DISTINCT {quote(cname)} FROM {quote(table)}"
+                        )
+                        out[cname] = [serialize_value(r[0]) for r in raw.rows or [] if r and r[0] is not None]
+                    except Exception as e:  # pragma: no cover - 方言兼容
+                        logger.warning("[schema.sample] conn=%s table=%s 小表 DISTINCT 失败 %s：%s",
+                                       conn_id, table, cname, e)
+                        out[cname] = []
+                logger.debug("[schema.sample] conn=%s table=%s 小表全表 DISTINCT（%d 列）",
+                             conn_id, table, len(cols))
+            else:
+                # 2. 度量/时间/其他列：整行主键倒序（最近样本）——仅大表路径
+                order = ""
+                if pk_cols:
+                    order = " ORDER BY " + ", ".join(f"{quote(c)} DESC" for c in pk_cols)
+                try:
+                    raw = await adapter.execute(
+                        conn, f"SELECT * FROM {quote(table)}{order} LIMIT {int(per_column)}"
+                    )
+                except Exception as e:  # T5 §4#6：采样失败返回 {}（已采到的枚举值保留），不炸构建
+                    logger.warning("[schema.sample] conn=%s table=%s 采样失败：%s", conn_id, table, e)
+                    return out
+                names = list(raw.columns) if raw.columns else [c.name for c in cols]
+                for n in names:
+                    out.setdefault(n, [])
+                for row in raw.rows or []:
+                    for n, v in zip(names, row):
+                        if n not in enum_cols:
+                            out[n].append(serialize_value(v))
+
+            # 3. 判别器分组采样（R2/§3.4）：低基数 type/_type/kind + 引用列（_id/_code 后缀）
+            #    → out["_grouped"] = {"type": {"__ref__": "ref_id", 1: [...], 2: [...]}}
+            try:
+                disc_cols = [c.name for c in cols
+                             if c.name.lower() in ("type", "_type", "kind") and c.name not in pk_cols]
+                if disc_cols:
+                    ref_cols = [c.name for c in cols
+                                if (c.name.lower().endswith("_id") or c.name.lower().endswith("_code"))
+                                and c.name not in pk_cols]
+                    if ref_cols:
+                        disc = disc_cols[0]
+                        ref = ref_cols[0]
+                        raw_g = await adapter.execute(
+                            conn, f"SELECT {quote(disc)}, {quote(ref)} FROM {quote(table)}"
+                                 f" LIMIT {int(per_column) * 10}"
+                        )
+                        groups: dict[str, Any] = {"__ref__": ref}
+                        if raw_g.rows:
+                            for row in raw_g.rows:
+                                if len(row) < 2:
+                                    continue
+                                dval, rval = row[0], row[1]
+                                gkey = serialize_value(dval) if dval is not None else None
+                                if gkey is None:
+                                    continue
+                                lst = groups.setdefault(gkey, [])
+                                if len(lst) < int(per_column):
+                                    lst.append(serialize_value(rval))
+                            if len([k for k in groups if k != "__ref__"]) <= 20:
+                                out["_grouped"] = {disc: groups}
+            except Exception as e:  # pragma: no cover - 分组采样失败静默降级
+                logger.debug("[schema.sample] conn=%s table=%s 判别器分组采样失败：%s",
+                             conn_id, table, e)
+
+            logger.debug("[schema.sample] conn=%s table=%s enum_cols=%d metric_cols=%d total=%d",
+                         conn_id, table, len(enum_cols), len(cols) - len(enum_cols), len(cols))
             return out
 
         return inner()

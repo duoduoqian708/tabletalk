@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import time
+from app.core.timeutil import utcnow_iso
 from typing import Any
 
 
@@ -44,9 +45,9 @@ def build_manifest(
         mode = state.runtime.get().privacy_mode
     except Exception:
         pass
-    if mode not in ("strict", "standard", "open"):
+    if mode not in ("strict", "standard", "open", "custom"):
         mode = "standard"
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    ts = utcnow_iso()
     model = provider_cfg.get("model") or ""
     provider = provider_cfg.get("provider") or "mock"
     # redactions：B1 为空（B2 填充确定性 token 列表）
@@ -63,25 +64,3 @@ def build_manifest(
         "provider": provider,
     }
 
-
-def manifest_to_human(m: dict[str, Any], locale: str = "zh-CN") -> str:
-    """可读文案：3 张表结构 · 2 条知识库注释 · 6 轮历史 · 无行数据"""
-    is_zh = locale.startswith("zh")
-    parts: list[str] = []
-    n_tables = len(m.get("tables") or [])
-    if is_zh:
-        parts.append(f"{n_tables} 张表结构")
-        parts.append(f"{m.get('kb_docs', 0)} 条知识库注释")
-        parts.append(f"{m.get('history_turns', 0)} 轮历史")
-        parts.append("含聚合行数据" if m.get("include_data") else "无行数据")
-        if m.get("mode"):
-            mode_map = {"strict": "严格", "standard": "标准", "open": "开放"}
-            parts.append(f"{mode_map.get(m['mode'], m['mode'])}模式")
-    else:
-        parts.append(f"{n_tables} tables")
-        parts.append(f"{m.get('kb_docs', 0)} KB docs")
-        parts.append(f"{m.get('history_turns', 0)} turns")
-        parts.append("with rows" if m.get("include_data") else "no rows")
-        if m.get("mode"):
-            parts.append(f"{m['mode']} mode")
-    return " · ".join(parts)

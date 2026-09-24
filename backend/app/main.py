@@ -5,15 +5,16 @@
 from __future__ import annotations
 
 import hmac
+import logging
+import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import ai, approvals, audit, auth, connections, health, knowledge, query, questions, schema, settings, skills, usage
+from app.api import ai, approvals, audit, auth, connections, cost, health, knowledge, query, questions, safety, schema, settings, suggestions, system, tasks, usage
 from app.config import get_env, get_token
 from app.state import get_state
 
@@ -31,22 +32,46 @@ def _ensure_demo_db() -> None:
         db = get_env().data_dir / "demo.db"
         if not db.exists():
             build_demo_db(db)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).warning("演示库播种失败（不阻塞启动）：%s", e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state = get_state()
+    # 进程启动标记（观测用）：与 uvicorn 的 restart 行配对——构建中断排查时，
+    # 若「连接断开时刻」附近出现本行，即进程被重启（如 --reload 热重载）杀掉了任务/连接
+    logging.getLogger(__name__).info(
+        "[lifespan] sidecar 启动 pid=%s port=%s data_dir=%s",
+        os.getpid(), get_env().port, get_env().data_dir,
+    )
     get_token()  # 启动即生成/读取鉴权 token，写入 data_dir/tabletalk.token，供 /bootstrap 读取
     _ensure_demo_db()
+    from app.ai.tools import validate_registry
+    validate_registry()  # WS7 T7.1：工具 trust 元数据启动自检
+    # 启动时清理过期 LLM 日志和成本日志（默认保留30天）
+    try:
+        from app.ai.llm_log import LlmCallLog
+        from app.ai.cost_tracker import CostTracker
+        LlmCallLog(get_env().data_dir).cleanup(keep_days=30)
+        CostTracker(get_env().data_dir).cleanup(keep_days=30)
+    except Exception:
+        pass
     state.sync_loop.start()  # 知识库增量同步周期任务（kb_sync_minutes）
+    state.job_scheduler.start()  # 脚本任务调度（jobs/ 扫描，cron 触发）
     yield
+    state.job_scheduler.stop()
     state.sync_loop.stop()
     await state.pools.close_all()
 
 
 def create_app() -> FastAPI:
+    # 根日志无 handler 时配置一次（幂等守卫）：否则模块 logger 的 INFO 不会显示
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=os.environ.get("TABLETALK_LOG_LEVEL", "INFO"),
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
     env = get_env()
     app = FastAPI(title="tabletalk sidecar", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
@@ -67,33 +92,34 @@ def create_app() -> FastAPI:
         return resp
 
     @app.middleware("http")
+    async def locale_middleware(request: Request, call_next):
+        """从 X-Locale 头读取语言偏好，写入 contextvar 供 prompts.render() 使用。"""
+        from app.ai.prompts import _LOCALE
+        locale = request.headers.get("X-Locale", "")
+        old = _LOCALE.set(locale if locale else None)
+        try:
+            return await call_next(request)
+        finally:
+            _LOCALE.reset(old)
+
+    @app.middleware("http")
     async def sidecar_token_guard(request: Request, call_next):
-        """本机鉴权：仅守 /api/*；health 免鉴权，bootstrap 在单机免鉴权、团队模式需本地或已鉴权。"""
+        """全接口强鉴权：除 health 与 POST /auth/login 外均需登录（为企业版预留 per-user 钩子）。"""
         path = request.url.path
         if request.method == "OPTIONS":
             return await call_next(request)
         if not path.startswith("/api/"):
             return await call_next(request)
-        # health 始终免鉴权
         if path == "/api/v1/health":
             return await call_next(request)
-        # auth 的 login/register 免鉴权（登录即为获取 token 的入口）
-        if path in ("/api/v1/auth/login", "/api/v1/auth/register"):
+        if path == "/api/v1/auth/login":
             return await call_next(request)
-        # bootstrap：单机免鉴权，团队模式仅本机 127.0.0.1 可免鉴权（防 LAN 窃取）
+        # 个人版：bootstrap 首次用于取 token 以便 login，允许免鉴权（后续所有业务接口均需 JWT）
         if path == "/api/v1/bootstrap":
-            try:
-                from app.state import get_state as _gs
-                is_team = _gs().auth.is_team_mode()
-            except Exception:
-                is_team = False
-            if not is_team:
-                return await call_next(request)
-            # 团队模式：仅本机回环可免鉴权
-            host = request.client.host if request.client else ""
-            if host in ("127.0.0.1", "::1", "localhost"):
-                return await call_next(request)
-            # 否则走正常鉴权（需已登录）
+            return await call_next(request)
+        # 兼容：auth/register/change-password 免鉴权（首个用户/改密）
+        if path in ("/api/v1/auth/register", "/api/v1/auth/change-password"):
+            return await call_next(request)
         # 兼容：X-TableTalk-Token 单共享密钥（单机） + Bearer JWT（团队）
         supplied = request.headers.get("X-TableTalk-Token", "") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
         # 单机 token
@@ -113,13 +139,24 @@ def create_app() -> FastAPI:
             pass
         return JSONResponse(status_code=401, content={"detail": "missing or invalid sidecar token"})
 
+    from app.api import results as results_api
+    from app.api import plans as plans_api
+
     for r in (health.router, connections.router, schema.router, query.router,
-              audit.router, settings.router, ai.router, knowledge.router, skills.router, questions.router, auth.router, approvals.router, usage.router):
+              audit.router, settings.router, ai.router, knowledge.router, questions.router, auth.router, approvals.router, usage.router,
+              tasks.router, cost.router, suggestions.router, safety.router, system.router,
+              results_api.router, plans_api.router):
         app.include_router(r)
 
     # 同源托管前端 SPA（路由先注册先匹配；StaticFiles 兜底未匹配路径）
     web_dist = get_env().web_dist
     if web_dist.is_dir():
+        # /assets/ 单独挂载（2026-09 修复）：无 html=True → 旧 hash 资源请求真 404，
+        # 不再被 SPA fallback 用 index.html 冒充 JS（浏览器执行 HTML → 白屏 → 全站 fetch 失败）。
+        # 重 build 清空 assets 后，持旧 index.html 的客户端会拿到干净的 404 而非假 200。
+        assets_dir = web_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="web-assets")
         app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
     else:
 

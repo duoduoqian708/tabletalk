@@ -32,8 +32,11 @@ class PostgresAdapter(DialectAdapter):
             connect_timeout=cfg.timeout,
             row_factory=tuple_row,
         )
-        conn.read_only = cfg.read_only
         return conn
+
+    async def set_read_only(self, conn: Any, flag: bool) -> None:
+        # psycopg3 async 连接的 read_only 是只读属性，必须用 set_read_only()
+        await conn.set_read_only(flag)
 
     async def close(self, conn: Any) -> None:
         try:
@@ -111,7 +114,8 @@ class PostgresAdapter(DialectAdapter):
             SELECT conrelid::regclass::text AS tbl,
                    a.attname AS col,
                    confrelid::regclass::text AS ref_tbl,
-                   af.attname AS ref_col
+                   af.attname AS ref_col,
+                   con.oid AS constraint_id
             FROM pg_constraint con
             JOIN pg_attribute a  ON a.attnum = ANY(con.conkey) AND a.attrelid = con.conrelid
             JOIN pg_attribute af ON af.attnum = ANY(con.confkey) AND af.attrelid = con.confrelid
@@ -119,7 +123,8 @@ class PostgresAdapter(DialectAdapter):
         """
         async with conn.cursor() as cur:
             await cur.execute(sql)
-            return [FKRef(table=r[0], column=r[1], ref_table=r[2], ref_column=r[3]) for r in await cur.fetchall()]
+            return [FKRef(table=r[0], column=r[1], ref_table=r[2],
+                          ref_column=r[3], constraint_id=r[4]) for r in await cur.fetchall()]
 
     async def count_rows(self, conn: Any, table: str) -> int:
         from psycopg.rows import dict_row

@@ -2,31 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { pageSize, selectRows, useResults } from '@renderer/store/results'
 import { toastMsg } from '@renderer/utils/toast'
 import { useI18n } from '@renderer/store/i18n'
-
-/* 三个列头操作 icon（北欧极简细线） */
-function IconUp(): React.JSX.Element {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-      <path d="M5 1 L8.2 4.4 H6.4 V9 H3.6 V4.4 H1.8 Z" fill="currentColor" />
-    </svg>
-  )
-}
-
-function IconDown(): React.JSX.Element {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-      <path d="M5 9 L1.8 5.6 H3.6 V1 H6.4 V5.6 H8.2 Z" fill="currentColor" />
-    </svg>
-  )
-}
-
-function IconFilter(): React.JSX.Element {
-  return (
-    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" aria-hidden="true">
-      <path d="M1 1.6 H9 L6 5.4 V8.2 L4 7.2 V5.4 Z" />
-    </svg>
-  )
-}
+import { IconUp, IconDown, IconFilter } from './ui/icons'
+import { CloseBtn } from './ui/buttons'
 
 /** JSON 语法高亮（key/字符串/数字/布尔/null）。非法 JSON 返回转义原文。 */
 function highlightJson(text: string): string {
@@ -131,7 +108,7 @@ function CellPop({ pop, onClose }: { pop: PopState; onClose: () => void }): Reac
                 {t('ws.format')}
               </button>
           )}
-          <button className="cp-btn" onClick={onClose}>✕</button>
+          <CloseBtn className="cp-btn" onClick={onClose} />
         </span>
       </div>
       <div className="cp-body" dangerouslySetInnerHTML={{ __html: fmt ? highlightJson(fmt.pretty) : highlightJson(pop.value) }} />
@@ -260,7 +237,7 @@ export function DataTable(): React.JSX.Element {
             onChange={(e) => setFilter({ col: filterCol, text: e.target.value })}
             onKeyDown={(e) => { if (e.key === 'Escape') toggleColFilter(filterCol) }}
           />
-          <button className="cf-x" onClick={() => toggleColFilter(filterCol)}>✕</button>
+          <CloseBtn className="cf-x" onClick={() => toggleColFilter(filterCol)} />
         </div>
       )}
       <div className="scroll" ref={scrollRef}>
@@ -345,23 +322,12 @@ export function DataTable(): React.JSX.Element {
   )
 }
 
-/** 「⋯」按钮：内容被截断时显示；点击打开预览（不触发行复制）。 */
+/** 「⋯」按钮：hover 时显现（免 JS 测量，批量渲染无回流） */
 function CellMore({ onOpen }: { onOpen: (td: HTMLTableCellElement) => void }): React.JSX.Element {
   const { t } = useI18n()
-  const [truncated, setTruncated] = useState(false)
-  const btnRef = useRef<HTMLButtonElement>(null)
-
-  useEffect(() => {
-    const td = btnRef.current?.closest('td')
-    const span = td?.querySelector<HTMLElement>('.c-text')
-    if (!td || !span) return
-    setTruncated(span.scrollWidth > span.clientWidth + 1)
-  }, [])
-
   return (
     <button
-      ref={btnRef}
-      className={`c-more${truncated ? '' : ' hidden'}`}
+      className="c-more"
       title={t('table.viewFull')}
       onClick={(e) => {
         e.stopPropagation()

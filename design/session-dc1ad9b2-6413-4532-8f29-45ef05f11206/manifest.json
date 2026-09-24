@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "ipollowork.deepseek-harness.design",
+  "version": "1.0.0",
+  "kind": "design",
+  "category": "site",
+  "subcategory": "website",
+  "style": "dark",
+  "tags": [
+    "deepseek-harness",
+    "studio"
+  ],
+  "surface": "design",
+  "title": "Tabletalk · 关系星网 (星海深空)",
+  "description": "可编辑的 Tabletalk 关系星网 demo——深空星网图谱 + 右侧 AI 动态组件区。由 DeepSeek Harness 托管。",
+  "cover": "index.html",
+  "entry": "index.html",
+  "source": {
+    "name": "iPolloWork",
+    "license": "MIT"
+  },
+  "designSystem": {
+    "tokenVersion": 1,
+    "editableGroups": [
+      "theme",
+      "background",
+      "typography",
+      "components"
+    ],
+    "tokens": "design-tokens.css",
+    "variables": []
+  },
+  "applyChecklist": [
+    "Preserve the current document structure and linked design token contract."
+  ],
+  "minimumAppVersion": "0.21.2"
+}

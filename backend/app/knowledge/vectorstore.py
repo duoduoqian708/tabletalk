@@ -10,7 +10,7 @@ Pydantic 契约：VectorChunk / SearchQuery / SearchHit —— 跨后端的唯�
 """
 from __future__ import annotations
 
-import time
+from app.core.timeutil import utcnow_iso
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -18,21 +18,19 @@ from pydantic import BaseModel, Field
 
 
 class VectorChunk(BaseModel):
-    """一条向量 chunk：用途由 collection 区分，metadata 为自由过滤区。"""
+    """一条向量 chunk：collection 区分用途，metadata 为过滤区，payload 为结构化信息。
+
+    v3（spec §4）：单一表级体系，collection="table"；payload 存
+    {ddl, tags, layout, draft_count, updated_at} 结构化表信息。
+    """
     id: str
-    collection: str = "doc"          # doc | table | enum | intent | alias | ...
-    text: str = ""                   # 内容原文（可展示 / 关键词融合）
+    collection: str = "table"          # 单体系：table（表级知识卡，一表一 chunk）
+    text: str = ""                     # 内容原文（可读表描述，可展示 / 关键词融合）
     metadata: dict[str, Any] = Field(default_factory=dict)   # 自由元数据区，可过滤
+    payload: dict[str, Any] = Field(default_factory=dict)    # 结构化信息区（ddl/tags/layout/...）
     vector: list[float] = Field(default_factory=list)
     fingerprint: str = ""            # 嵌入指纹（模型变化 → 全量重嵌）
     updated_at: str = ""
-
-
-class SearchQuery(BaseModel):
-    qvec: list[float]
-    collection: str | None = None            # 精确匹配 collection
-    filter: dict[str, Any] | None = None     # metadata 子集匹配（所有键值都须命中）
-    k: int = 10
 
 
 class SearchHit(BaseModel):
@@ -118,6 +116,3 @@ class NumpyVectorStore(VectorStore):
         top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:max(1, k)]
         return [SearchHit(chunk=self._chunks[cid], score=round(s, 4)) for cid, s in top]
 
-
-def now_ts() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")

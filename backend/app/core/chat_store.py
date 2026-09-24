@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -32,6 +33,34 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_msgs_conv ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conv_conn ON conversations(connection_id);
+-- WS3 T3.2 结果工件：每张 sql_card 的 result_id → 结果数据（本地落盘，非出网；load_result 按 id 取）
+CREATE TABLE IF NOT EXISTS artifacts (
+  result_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id);
+-- WS4 T4.1：每会话一份待确认 DML（token 一次性/10 分钟过期/绑 SQL 哈希）。瞬态状态，非历史。
+CREATE TABLE IF NOT EXISTS pending_dmls (
+  session_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+-- Harness 受控流：模型提议的执行计划（propose_plan → 人审 confirm/reject）。瞬态状态。
+CREATE TABLE IF NOT EXISTS pending_plans (
+  plan_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT,
+  steps TEXT NOT NULL,
+  evidence TEXT,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  done_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_plans_session ON pending_plans(session_id);
 """
 
 
@@ -45,6 +74,11 @@ class ChatStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(_SCHEMA)
+            # 旧库迁移：pending_plans 补 done_count 列
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(pending_plans)").fetchall()}
+            if "pending_plans" in cols and "done_count" not in cols:
+                c.execute("ALTER TABLE pending_plans ADD COLUMN done_count INTEGER NOT NULL DEFAULT 0")
+                c.commit()
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
@@ -95,6 +129,42 @@ class ChatStore:
             cur = c.execute("UPDATE conversations SET title=? WHERE id=?", (title, session_id))
             return cur.rowcount > 0
 
+    def save_artifact(self, session_id: str, result_id: str, data: dict) -> None:
+        """WS3 T3.2：结果工件落盘（本地，非出网）。按 result_id 去重覆盖。"""
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO artifacts (result_id, session_id, data, created_at) VALUES (?,?,?,?)",
+                (result_id, session_id, json.dumps(data, ensure_ascii=False), _now()),
+            )
+
+    def get_artifact(self, session_id: str, result_id: str) -> dict | None:
+        """WS3 T3.2/T3.3：按 id 取工件；跨 session 拒绝（T3.3 必查）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT session_id, data FROM artifacts WHERE result_id=?", (result_id,)).fetchone()
+            if row is None or row["session_id"] != session_id:
+                return None
+            try:
+                return json.loads(row["data"])
+            except Exception:
+                return None
+
+    def list_artifacts(self, session_id: str) -> list[dict]:
+        """WS3 T3.2：sesssion 内全部工件（id + 元数据部分），供压缩骨架/诊断。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT result_id, data, created_at FROM artifacts WHERE session_id=? ORDER BY created_at",
+                (session_id,),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            d = {}
+            try:
+                d = json.loads(r["data"])
+            except Exception:
+                pass
+            out.append({"result_id": r["result_id"], "data": d, "created_at": r["created_at"]})
+        return out
+
     def list(self, connection_id: str | None = None, limit: int = 50) -> list[dict]:
         """只读列表：按 updated_at 倒序，附消息数。"""
         q = """
@@ -110,6 +180,88 @@ class ChatStore:
         with self._conn() as c:
             rows = c.execute(q.format(where=where), params).fetchall()
         return [dict(r) for r in rows]
+
+    def get_messages(self, session_id: str) -> list[dict]:
+        """WS3 T3.1：读会话消息（含 kind 元数据），供服务端历史组装。只读，不刷新 updated_at。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT role, kind, content, sql, verdict FROM messages WHERE conversation_id=? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_connection(self, session_id: str) -> str | None:
+        """WS3 T3.5：查会话归属的数据源 id；不存在返回 None（供切库跨 session 校验）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT connection_id FROM conversations WHERE id=?", (session_id,)).fetchone()
+            return row["connection_id"] if row else None
+
+    def set_pending_dml(self, session_id: str, data: dict) -> None:
+        """WS4 T4.1：落一份待确认 DML（按会话一份，覆盖）。data 含 token/sql_hash/preview/rollback/expires_at/consumed。"""
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO pending_dmls (session_id, data, updated_at) VALUES (?,?,?)",
+                (session_id, json.dumps(data), _now()),
+            )
+
+    # ── Harness 受控流：pending_plans（propose_plan → 人审） ──
+
+    def create_pending_plan(self, plan_id: str, session_id: str, ptype: str,
+                            title: str, steps: list[dict], evidence: str,
+                            ttl_seconds: int = 1800, done_count: int = 0) -> dict:
+        """创建待确认计划（同 plan_id 覆盖 = 续段写回）。返回含 expires_at 的载荷。"""
+        import time as _t
+
+        expires_at = _t.time() + ttl_seconds
+        with self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO pending_plans"
+                " (plan_id, session_id, type, title, steps, evidence, status, created_at, expires_at, done_count)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (plan_id, session_id, ptype, title, json.dumps(steps, ensure_ascii=False),
+                 evidence, "pending", _now(), expires_at, max(0, int(done_count))),
+            )
+        return {"plan_id": plan_id, "expires_at": expires_at,
+                "expires_in": max(0, int(expires_at - _t.time()))}
+
+    def get_pending_plan(self, plan_id: str) -> dict | None:
+        """取计划（过期的惰性标记 expired 并返回 None 语义 → 调用方判 status）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM pending_plans WHERE plan_id=?", (plan_id,)).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["steps"] = json.loads(d.get("steps") or "[]")
+        except (ValueError, TypeError):
+            d["steps"] = []
+        import time as _t
+
+        if d["status"] == "pending" and d.get("expires_at", 0) < _t.time():
+            self.set_plan_status(plan_id, "expired")
+            d["status"] = "expired"
+        return d
+
+    def set_plan_status(self, plan_id: str, status: str) -> bool:
+        with self._conn() as c:
+            cur = c.execute("UPDATE pending_plans SET status=? WHERE plan_id=?", (status, plan_id))
+            return cur.rowcount > 0
+
+    def get_pending_dml(self, session_id: str) -> dict | None:
+        """WS4 T4.1：读待确认 DML；无则 None。"""
+        with self._conn() as c:
+            row = c.execute("SELECT data FROM pending_dmls WHERE session_id=?", (session_id,)).fetchone()
+            if row is None:
+                return None
+            try:
+                return json.loads(row["data"])
+            except Exception:
+                return None
+
+    def clear_pending_dml(self, session_id: str) -> None:
+        """WS4 T4.1：清除待确认 DML（消费后 / 用户取消 / 过期）。"""
+        with self._conn() as c:
+            c.execute("DELETE FROM pending_dmls WHERE session_id=?", (session_id,))
 
     def get(self, session_id: str) -> dict | None:
         """只读详情：会话 + 全部消息。"""

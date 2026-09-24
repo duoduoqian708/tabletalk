@@ -1,16 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { HealthStatus } from '@shared/types'
 import { getRuntime } from '@renderer/api/client'
+import { getSettings } from '@renderer/api/settings'
+import { tags as fetchTags } from '@renderer/api/knowledge'
+import { assignUniqueColors } from '@renderer/utils/tagColors'
+import { tagColorForTable } from '@renderer/lib/colors'
 import { useConnections } from '@renderer/store/connections'
 import { useResults } from '@renderer/store/results'
 import { useSchema } from '@renderer/store/schema'
-import { useUi, type MainView, type View } from '@renderer/store/ui'
+import { useUi, type View } from '@renderer/store/ui'
 import { useI18n } from '@renderer/store/i18n'
 import { previewTable } from '@renderer/api/schema'
+import { useAuditSignal } from '@renderer/store/auditSignal'
+import { CloseBtn } from './ui/buttons'
+import { IconGear } from './ui/icons'
 import { ConnectionMenu } from './ConnectionMenu'
 import { ConnectionModal } from './ConnectionModal'
 import { KbBuildGate } from './KbBuildGate'
+import { KbBuildConfirmDialog } from './KbBuildConfirmDialog'
+import { useKbGateBusy } from './kbBusy'
 import { Graph3D } from './Graph3D'
+import { GraphSearch } from './GraphSearch'
+import { TagBar } from './TagBar'
 import { NodePopup } from './NodePopup'
 import { TableDataView } from './TableDataView'
 import { DataTable } from './DataTable'
@@ -18,8 +29,11 @@ import { ReportCard } from './ReportCard'
 import { AiRail } from './AiRail'
 import { KnowledgeReview } from './KnowledgeReview'
 import { AuditPage } from './ModulePages'
-import { ApprovalPage } from './ApprovalPage'
+import { TasksConsole } from './TasksConsole'
+import { CostDashboard } from './CostDashboard'
 import { SettingsDrawer } from './SettingsDrawer'
+import { LoginDialog } from './LoginDialog'
+import { setLoginRuntime } from '@renderer/hooks/useBootstrap'
 interface Props {
   health: HealthStatus | null
 }
@@ -28,7 +42,8 @@ const TABS: { key: View; labelKey: string }[] = [
   { key: 'workspace', labelKey: 'nav.workspace' },
   { key: 'knowledge', labelKey: 'nav.knowledge' },
   { key: 'audit', labelKey: 'nav.securityAudit' },
-  { key: 'approvals', labelKey: 'nav.approvals' }
+  { key: 'tasks', labelKey: 'nav.tasks' },
+  { key: 'cost', labelKey: 'nav.cost' },
 ]
 
 /** 表格视图顶部：关联表快速跳转（替代旧 40px 左缘微条，水平化融入工具栏）。 */
@@ -82,7 +97,10 @@ function RelStrip(): React.JSX.Element | null {
 
 export function AppLayout({ health }: Props): React.JSX.Element {
   const [modalOpen, setModalOpen] = useState(false)
+  const [editingConnId, setEditingConnId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 设置抽屉打开时落到的分区：sys-btn 默认数据源管理；知识库引导等可指定 'llm' */
+  const [settingsSec, setSettingsSec] = useState('dsm')
   const list = useConnections((s) => s.list)
   const currentId = useConnections((s) => s.currentId)
   const create = useConnections((s) => s.create)
@@ -94,26 +112,96 @@ export function AppLayout({ health }: Props): React.JSX.Element {
   const schemaData = useSchema((s) => s.data)
   const view = useUi((s) => s.view)
   const setView = useUi((s) => s.setView)
+  const auditUnread = useAuditSignal((s) => s.unread)
   const mainView = useUi((s) => s.mainView)
   const setMainView = useUi((s) => s.setMainView)
   const { t } = useI18n()
   const rt = getRuntime()
+  const [loginIsInitial, setLoginIsInitial] = useState(false)
+  const showLogin = !rt?.token
+  // 首启大模型引导：chat/emb 任一未配置 → 弹一次提示
+  const [aiMiss, setAiMiss] = useState(false)
+  useEffect(() => {
+    if (!rt?.token) return
+    let alive = true
+    void getSettings().then((s) => {
+      if (!alive) return
+      const ok = (m?: { provider?: string; base_url?: string }): boolean =>
+        !!m && !!String(m.provider ?? '').trim() && (String(m.provider) === 'mock' || !!String(m.base_url ?? '').trim())
+      const chat = s.ai_models.find((m) => m.id === s.default_ai_model) ?? s.ai_models[0]
+      const emb = s.embedding_models.find((m) => m.id === s.default_embedding_model) ?? s.embedding_models[0]
+      if (!ok(chat) || !ok(emb)) setAiMiss(true)
+    }).catch(() => undefined)
+    return () => { alive = false }
+  }, [rt?.token])
 
   const active = tabs.find((t) => t.id === activeId) ?? null
   const activeReport = active?.kind === 'report' ? active.report : null
 
   // 沉浸式 3D 图谱数据
   const graphNodes = useMemo(
-    () => schemaData?.tables.map((t) => ({ name: t.name, row_count: t.row_count, column_count: t.column_count })) ?? [],
+    () => schemaData?.tables.map((t) => ({ name: t.name, row_count: t.row_count, column_count: t.column_count, kind: t.kind as 'table' | 'view' })) ?? [],
     [schemaData]
   )
   const graphEdges = useMemo(
-    () => schemaData?.foreign_keys.map((f) => ({ table: f.table, ref_table: f.ref_table })) ?? [],
+    () => schemaData?.foreign_keys.map((f) => ({ from: f.table, to: f.ref_table, from_col: f.column, to_col: f.ref_column, source: 'fk' as const })) ?? [],
     [schemaData]
   )
   const [nodeSel, setNodeSel] = useState<string | null>(null)
   const [nodeData, setNodeData] = useState<string | null>(null)
+  const [closingNode, setClosingNode] = useState<string | null>(null)
   const [nodePos, setNodePos] = useState<{ x: number; y: number } | null>(null)
+  /** 工作台标签过滤：选中的标签名 → 非匹配表变暗 */
+  const [dimmedTag, setDimmedTag] = useState<string | null>(null)
+  const [tagTableMap, setTagTableMap] = useState<Record<string, string[]>>({})
+  const [tagLib, setTagLib] = useState<{ name: string; color: string }[]>([])
+  useEffect(() => {
+    if (!currentId) { setTagTableMap({}); setTagLib([]); return }
+    let alive = true
+    void fetchTags(currentId)
+      .then((r) => { if (alive) { setTagTableMap(r.tables ?? {}); setTagLib(r.library ?? []) } })
+      .catch(() => { if (alive) { setTagTableMap({}); setTagLib([]) } })
+    return () => { alive = false }
+  }, [currentId])
+  /** 节点颜色：标签色驱动（数据色优先，缺省哈希），无标签=基准灰，多标签=混色；与知识库页同源 */
+  const nodeColorMap = useMemo(() => {
+    const base = assignUniqueColors(tagLib.map((x) => x.name))
+    const fromData: Record<string, string> = {}
+    for (const tg of tagLib) if (tg.color) fromData[tg.name] = tg.color
+    const colorByTag = { ...base, ...fromData }
+    const m: Record<string, string> = {}
+    for (const [tbl, names] of Object.entries(tagTableMap)) {
+      m[tbl] = tagColorForTable({ tags: names.map((name) => ({ name })) }, colorByTag)
+    }
+    return m
+  }, [tagLib, tagTableMap])
+  const dimmedTables = useMemo(() => {
+    if (!dimmedTag) return undefined
+    const allTables = new Set(graphNodes.map((n) => n.name))
+    const matching = new Set<string>()
+    for (const [tbl, tags] of Object.entries(tagTableMap)) {
+      if (tags.includes(dimmedTag)) matching.add(tbl)
+    }
+    return new Set([...allTables].filter((n) => !matching.has(n)))
+  }, [dimmedTag, tagTableMap, graphNodes])
+  const handleCloseTable = (): void => {
+    if (!nodeData) return
+    setClosingNode(nodeData)
+    setNodeData(null)
+    window.setTimeout(() => setClosingNode(null), 420)
+  }
+  const displayNode = nodeData || closingNode
+  const isTableClosing = !!closingNode
+  // 启停由外层控制，避免按钮随 g3d-wrap 位移动画
+  const [graphPaused, setGraphPaused] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('tabletalk-graph-paused') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    try { sessionStorage.setItem('tabletalk-graph-paused', graphPaused ? '1' : '0') } catch {}
+  }, [graphPaused])
+  // 知识库构建进行中 → 图谱自动暂停（canvas 60fps 渲染与构建进度 UI 叠加是卡顿主因）
+  const kbBusy = useKbGateBusy()
+  const effectiveGraphPaused = graphPaused || kbBusy
   // 左右分栏：右轨宽度（px），默认 1/4
   const wsRef = useRef<HTMLDivElement>(null)
   const g3dWrapRef = useRef<HTMLDivElement>(null)
@@ -148,26 +236,9 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     ? (() => {
         const t = schemaData?.tables.find((x) => x.name === nodeSel)
         const fk = schemaData?.foreign_keys.filter((f) => f.table === nodeSel || f.ref_table === nodeSel).length ?? 0
-        return t ? { rowCount: t.row_count, columnCount: t.column_count, fkCount: fk } : null
+        return t ? { rowCount: t.row_count, columnCount: t.column_count, fkCount: fk, kind: t.kind as 'table' | 'view' } : null
       })()
     : null
-  const [pendingApprovals, setPendingApprovals] = useState(0)
-  useEffect(() => {
-    if (!rt?.token) return
-    let alive = true
-    const load = async (): Promise<void> => {
-      try {
-        const r = await fetch('/api/v1/approvals?status=pending', { headers: { 'X-TableTalk-Token': rt.token } })
-        if (r.ok && alive) {
-          const j = await r.json()
-          setPendingApprovals((j.items || []).length)
-        }
-      } catch {}
-    }
-    void load()
-    const id = window.setInterval(() => void load(), 15000)
-    return () => { alive = false; window.clearInterval(id) }
-  }, [rt?.token, view])
 
   // 新标签到达（AI 查询 / 预览 / 报告）→ 自动切到表格视图；标签清空 → 回图谱
   useEffect(() => {
@@ -208,23 +279,24 @@ export function AppLayout({ health }: Props): React.JSX.Element {
     return () => window.removeEventListener('tabletalk:locate', h as EventListener)
   }, [setView, setMainView])
 
+  // 安全徽章轮询启停（随应用生命周期）
+  useEffect(() => {
+    useAuditSignal.getState().start()
+    return () => useAuditSignal.getState().stop()
+  }, [])
+
+  // 切换数据源 → 立即按新数据源重查未读异常
+  useEffect(() => {
+    if (currentId) void useAuditSignal.getState().refresh()
+  }, [currentId])
+
   // 当前展示的表名（顶栏上下文指示）
   const subject = active ? active.title.replace(new RegExp('^' + t('ws.titleAsk').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), '').replace(/^schema · /, '') : selectedTable ?? '—'
 
   async function useDemo(): Promise<void> {
     if (!rt) return
-    await create({ name: '演示库', dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
+    await create({ name: t('conn.demoName'), dialect: 'sqlite', file: `${rt.dataDir}/demo.db`, read_only: true })
   }
-
-  const MainToggle = ({ target }: { target: MainView }): React.JSX.Element => (
-    <button
-      className={`ws-tb${mainView === target ? ' on' : ''}`}
-      onClick={() => setMainView(target)}
-      title={target === 'graph' ? t('nav.graphTitle') : t('nav.tableTitle')}
-    >
-      {target === 'graph' ? t('nav.graph') : t('nav.table')}
-    </button>
-  )
 
   return (
     <div className="app">
@@ -232,7 +304,7 @@ export function AppLayout({ health }: Props): React.JSX.Element {
         <span className="wordmark">
           <span className="dot" />
           <b className="wm-t">tabletalk</b>
-          <small>AI DATABASE TERMINAL</small>
+          <small>{t('ui.tagline')}</small>
         </span>
         <ConnectionMenu onNew={() => setModalOpen(true)} />
         <nav className="nav">
@@ -243,31 +315,23 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               onClick={() => setView(tab.key)}
             >
               {t(tab.labelKey)}
-              {tab.key === 'approvals' && pendingApprovals > 0 && (
-                <span className="tab-badge mono" style={{ marginLeft: 6, background: 'var(--amber-dim)', color: 'var(--amber)', padding: '1px 6px', borderRadius: 'var(--r-full)', fontSize: 10 }}>{pendingApprovals}</span>
+              {tab.key === 'audit' && auditUnread > 0 && (
+                <span className="tab-badge" title={t('audit.unreadN', { n: auditUnread })}>
+                  {auditUnread > 99 ? '99+' : auditUnread}
+                </span>
               )}
             </button>
           ))}
         </nav>
         <span className="cur-table mono" title={t('ui.currentView')}>{subject}</span>
         <span className="spacer" />
-        <div className="gw mono">
-          <span className="gw-provider">{health?.ai_provider_name ?? '—'}</span>
-          <span className="gw-divider" />
-          <span>{health?.ai_model ?? '—'}</span>
-          {health?.ai_mock_downgraded && (
-            <span className="gw-warn" title={t('app.mockDowngradedTitle')}>· {t('app.mockDowngraded')}</span>
-          )}
-        </div>
-        <button className="sys-btn" title={t('settings.title')} onClick={() => setSettingsOpen(true)}>
-          <span className="gear">⚙</span>
+        <button className="sys-btn" title={t('settings.title')} onClick={() => { setSettingsSec('dsm'); setSettingsOpen(true) }}>
+          <span className="gear"><IconGear size={14} /></span>
         </button>
       </header>
 
       <main className="stage" key={view}>
-        {view === 'approvals' ? (
-          <ApprovalPage />
-        ) : view === 'workspace' ? (
+        {view === 'workspace' ? (
           <>
             <section
               className="workspace"
@@ -292,9 +356,11 @@ export function AppLayout({ health }: Props): React.JSX.Element {
               ) : (
                 <div className="ws-left">
                   <div className="ws-toolbar">
-                    <MainToggle target="graph" />
-                    <MainToggle target="table" />
-                    <span className="ws-crumb mono">{subject}</span>
+                    <GraphSearch
+                      tables={graphNodes}
+                      onPick={(name) => { setMainView('graph'); window.dispatchEvent(new CustomEvent('tabletalk:do-locate', { detail: { table: name } })) }}
+                    />
+                    <TagBar connId={currentId} onSelect={setDimmedTag} />
                     <span className="spacer" />
                     {mainView === 'table' && tabs.length === 0 && (
                       <span className="ws-empty-hint">{t('app.emptyHint')}</span>
@@ -302,36 +368,54 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                   </div>
                   <div className="ws-canvas-area">
                   {mainView === 'graph' ? (
-                    <div className={`g3d-wrap${nodeData ? ' mini' : ''}`} ref={g3dWrapRef}>
-                      <Graph3D
-                        tables={graphNodes}
-                        foreignKeys={graphEdges}
-                        selectedName={nodeSel}
-                        onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
-                        onClearSelection={() => { setNodeSel(null); setNodePos(null) }}
-                      />
-                      {nodeSel && nodeInfo && nodePos && !nodeData && (() => {
-                        const POP_W = 296
-                        const POP_H = 196
-                        const wrap = g3dWrapRef.current
-                        const w = wrap ? wrap.clientWidth : 0
-                        const h = wrap ? wrap.clientHeight : 0
-                        const px = Math.min(Math.max(8, nodePos.x + 16), Math.max(8, w - POP_W - 8))
-                        const py = Math.min(Math.max(8, nodePos.y - 24), Math.max(8, h - POP_H - 8))
-                        return (
-                          <NodePopup
-                            table={nodeSel}
-                            rowCount={nodeInfo.rowCount}
-                            columnCount={nodeInfo.columnCount}
-                            fkCount={nodeInfo.fkCount}
-                            x={px}
-                            y={py}
-                            onClose={() => { setNodeSel(null); setNodePos(null) }}
-                            onOpenData={() => { setNodeData(nodeSel); setNodeSel(null); setNodePos(null) }}
-                          />
-                        )
-                      })()}
-                    </div>
+                    <>
+                      <div className={`g3d-wrap${nodeData ? ' mini' : ''}`} ref={g3dWrapRef}>
+                        <Graph3D
+                          tables={graphNodes}
+                          foreignKeys={graphEdges}
+                          colorOverride={nodeColorMap}
+                          selectedName={nodeSel}
+                          mini={!!nodeData}
+                          dimmedTables={dimmedTables}
+                          paused={effectiveGraphPaused}
+                          onTogglePause={() => setGraphPaused((v) => !v)}
+                          onSelectNode={(name, x, y) => { setNodeSel(name); setNodePos({ x, y }) }}
+                          onClearSelection={() => { setNodeSel(null); setNodePos(null) }}
+                          onOpenData={(name) => { setNodeData(name); setNodeSel(name); setNodePos(null) }}
+                        />
+                        {nodeSel && nodeInfo && nodePos && !nodeData && (() => {
+                          const POP_W = 296
+                          const POP_H = 196
+                          const wrap = g3dWrapRef.current
+                          const w = wrap ? wrap.clientWidth : 0
+                          const h = wrap ? wrap.clientHeight : 0
+                          const px = Math.min(Math.max(8, nodePos.x + 16), Math.max(8, w - POP_W - 8))
+                          const py = Math.min(Math.max(8, nodePos.y - 24), Math.max(8, h - POP_H - 8))
+                          return (
+                            <NodePopup
+                              table={nodeSel}
+                              kind={nodeInfo.kind}
+                              rowCount={nodeInfo.rowCount}
+                              columnCount={nodeInfo.columnCount}
+                              fkCount={nodeInfo.fkCount}
+                              x={px}
+                              y={py}
+                              onClose={() => { setNodeSel(null); setNodePos(null) }}
+                              onOpenData={() => { setNodeData(nodeSel!); setNodePos(null) }}
+                            />
+                          )
+                        })()}
+                      </div>
+                      <button
+                        className={`g3d-pause g3d-pause-external ${effectiveGraphPaused ? 'is-paused' : ''}`}
+                        title={kbBusy ? t('graph.kbBuilding') : (effectiveGraphPaused ? t('graph.resume') : t('graph.pause'))}
+                        onClick={() => { if (!kbBusy) setGraphPaused((v) => !v) }}
+                        aria-label={kbBusy ? t('graph.kbBuilding') : (effectiveGraphPaused ? t('graph.resume') : t('graph.pause'))}
+                        style={kbBusy ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+                      >
+                        {effectiveGraphPaused ? '▶' : '⏸'}
+                      </button>
+                    </>
                   ) : (
                     <div className="ws-data">
                       {tabs.length > 0 && (
@@ -340,14 +424,10 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                             <span key={tab.id} className={`ws-tab${tab.id === activeId ? ' on' : ''}`} onClick={() => activate(tab.id)}>
                               <span className="ws-tab-ic">{tab.kind === 'report' ? '▤' : '◈'}</span>
                               <span className="ws-tab-t">{tab.kind === 'report' ? `${t('app.tab.report')} · ${tab.title}` : tab.name ? `${t('app.tab.data')} · ${tab.name}` : tab.title}</span>
-                              <button
-                                className="ws-tab-x"
-                                title={t('common.close')}
-                                onClick={(e) => {
+                              <CloseBtn className="ws-tab-x" title={t('common.close')} onClick={(e) => {
                                   e.stopPropagation()
                                   closeTab(tab.id)
-                                }}
-                              >✕</button>
+                                }} />
                             </span>
                           ))}
                         </div>
@@ -367,21 +447,22 @@ export function AppLayout({ health }: Props): React.JSX.Element {
                       </div>
                     </div>
                   )}
-                  {nodeData && currentId && (
-                    <TableDataView connId={currentId} table={nodeData} onClose={() => setNodeData(null)} />
+                  {(displayNode) && currentId && (
+                    <TableDataView connId={currentId} table={displayNode} closing={isTableClosing} onClose={handleCloseTable} />
                   )}
                   </div>
                 </div>
               )}
               <div className="ws-splitter" onPointerDown={onSplitterDown} title={t('app.splitterTitle')} />
-              <AiRail
-                providerName={health?.ai_provider_name}
-                modelLabel={health?.ai_model}
-              />
+              <AiRail />
             </section>
           </>
         ) : view === 'knowledge' || view === 'graph' ? (
           <KnowledgeReview />
+        ) : view === 'tasks' ? (
+          <TasksConsole />
+        ) : view === 'cost' ? (
+          <CostDashboard />
         ) : (
           <AuditPage />
         )}
@@ -389,19 +470,80 @@ export function AppLayout({ health }: Props): React.JSX.Element {
 
       {/* 航电状态栏：gate 状态 + 连接 + AI 网关 */}
       <footer className="statusline deck-status">
-        <span className="guard"><span className="led" />gate&nbsp;:&nbsp;{health?.gate ?? '…'}</span>
         <span className="mid">
-          <span>conn&nbsp;:&nbsp;<b>{list.find((c) => c.id === currentId)?.name ?? '—'}</b></span>
-          <span>dialect&nbsp;:&nbsp;<b>{list.find((c) => c.id === currentId)?.dialect ?? '—'}</b></span>
-          <span>provider&nbsp;:&nbsp;<b>{health?.ai_provider_name ?? '—'}</b></span>
-          <span>model&nbsp;:&nbsp;<b>{health?.ai_model ?? '—'}</b></span>
-          {health?.ai_mock_downgraded && <span className="warn">{t('app.mockDowngraded')}</span>}
+          <span className="mid-item">
+            <span className="led" />
+            <b>{list.find((c) => c.id === currentId)?.name ?? '—'}</b>
+            <span className="mid-sep">|</span>
+            <b>{health?.ai_provider_name ?? '—'}-{health?.ai_model ?? '—'}</b>
+          </span>
         </span>
       </footer>
 
-      <ConnectionModal open={modalOpen} onClose={() => setModalOpen(false)} />
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} onNewConnection={() => { setSettingsOpen(false); setModalOpen(true) }} />
-      <KbBuildGate />
+      <ConnectionModal open={modalOpen} editId={editingConnId} onClose={() => { setModalOpen(false); setEditingConnId(null) }} />
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        initialSec={settingsSec as 'dsm' | 'llm' | 'privacy' | 'general'}
+        // 编辑/新建弹窗盖在抽屉上（modal z-index 高于抽屉）：保存后回到设置页
+        onNewConnection={() => { setEditingConnId(null); setModalOpen(true) }}
+        onEditConnection={(id) => { setEditingConnId(id); setModalOpen(true) }}
+        // 默认向量模型切换后「现在重构」：关抽屉进知识库页（overview 加载即自动 reembed）
+        onNavigateToKnowledge={() => { setSettingsOpen(false); setView('knowledge') }}
+      />
+      <KbBuildGate
+        onOpenSettings={(sec) => { setSettingsSec(sec); setSettingsOpen(true) }}
+      />
+      {aiMiss && (
+        <div className="modal-mask open" onClick={(e) => { if (e.target === e.currentTarget) setAiMiss(false) }}>
+          <div className="modal confirm" style={{ width: 420 }}>
+            <div className="mh">
+              <span className="t">⚠ {t('app.aiRequired.title')}</span>
+              <CloseBtn className="close" title={t('common.close')} onClick={() => setAiMiss(false)} />
+            </div>
+            <div className="mb">
+              <div className="del-text">{t('app.aiRequired.desc')}</div>
+            </div>
+            <div className="mf">
+              <button className="btn" onClick={() => setAiMiss(false)}>{t('app.aiRequired.later')}</button>
+              <button className="btn save" onClick={() => { setAiMiss(false); setSettingsSec('llm'); setSettingsOpen(true) }}>{t('app.aiRequired.go')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <KbBuildConfirmDialog />
+      <LoginDialog
+        open={showLogin}
+        isInitial={loginIsInitial}
+        onLogin={async (username, password) => {
+          try {
+            const r = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
+            const j = await r.json()
+            if (!r.ok) return { ok: false, error: j.detail || t('login.fail') }
+            setLoginIsInitial(!!j.user?.is_initial)
+            // 取 dataDir 用于后续
+            const b = await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))
+            setLoginRuntime(j.token, b.dataDir || '')
+            // 强制刷新以使 getRuntime 生效
+            window.location.reload()
+            return { ok: true, is_initial: !!j.user?.is_initial }
+          } catch (e) {
+            return { ok: false, error: (e as Error).message }
+          }
+        }}
+        onChangePassword={async (username, oldPwd, newPwd) => {
+          try {
+            const r = await fetch('/api/v1/auth/change-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, old_password: oldPwd, new_password: newPwd }) })
+            const j = await r.json()
+            if (!r.ok) return { ok: false, error: j.detail || t('login.changeFail') }
+            setLoginRuntime(j.token, (await (await fetch('/api/v1/bootstrap')).json().catch(() => ({ dataDir: '' }))).dataDir || '')
+            setLoginIsInitial(false)
+            return { ok: true }
+          } catch (e) {
+            return { ok: false, error: (e as Error).message }
+          }
+        }}
+      />
     </div>
   )
 }

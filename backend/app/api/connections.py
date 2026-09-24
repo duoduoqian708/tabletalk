@@ -1,6 +1,8 @@
 """连接 CRUD + 测试。统一配置模型：dialect 字段映射到方言注册表。"""
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -22,7 +24,13 @@ class ConnectionCreate(BaseModel):
     read_only: bool = False
     timeout: int = 10
     credential_ref: str | None = None
-    sensitive: list[str] = Field(default_factory=list)  # 敏感表/列 glob 名单（不进模型上下文与知识库）
+    sensitive: list[str | dict[str, Any]] = Field(default_factory=list)  # 敏感表/列名单（不进模型上下文与知识库）：字符串=旧 glob；dict{table,columns[]} 精确名
+    session_vars: dict[str, Any] | None = None  # T8 连接级会话变量默认值（:current_tenant 等）
+
+
+class TestDraftBody(ConnectionCreate):
+    """编辑模式测试：密码留空 + saved_conn_id → 用已存密码填充（旧密码永不出网，前端只见 *** 占位）。"""
+    saved_conn_id: str | None = None
 
 
 class ConnectionUpdate(BaseModel):
@@ -38,7 +46,8 @@ class ConnectionUpdate(BaseModel):
     read_only: bool | None = None
     timeout: int | None = None
     credential_ref: str | None = None
-    sensitive: list[str] | None = None
+    sensitive: list[str | dict[str, Any]] | None = None
+    session_vars: dict[str, Any] | None = None
 
 
 def _get_cfg(state, conn_id):
@@ -83,13 +92,20 @@ async def delete_connection(conn_id: str) -> dict:
 
 
 @router.post("/test-draft")
-async def test_draft_connection(body: ConnectionCreate) -> dict:
+async def test_draft_connection(body: TestDraftBody) -> dict:
     """接入流程前置：测试连接配置（不落盘）。通过后才允许 POST /connections 保存。
 
-    SQLite 无"库"概念 → 文件可读 + 能列出表即通过；其余方言真实连库。
+    编辑模式（saved_conn_id 且密码留空）→ 用已存密码填充后测试；
+    未知 saved_conn_id 按无密码测（不泄露存在性）。SQLite 无"库"概念 → 文件可读即可。
     """
     state = get_state()
-    return await state.pools.test_draft(body.model_dump())
+    data = body.model_dump(exclude={"saved_conn_id"})
+    if not data.get("password") and body.saved_conn_id:
+        try:
+            data["password"] = state.connections.get(body.saved_conn_id).password
+        except KeyError:
+            pass
+    return await state.pools.test_draft(data)
 
 
 @router.post("/{conn_id}/test")

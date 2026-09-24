@@ -1,8 +1,7 @@
-"""报告模式 generator：澄清 → 计划 → 逐章执行 → 汇总成文。
+"""报告模式管线：澄清 → 计划 → 逐章执行 → 汇总成文（引擎合一后为纯管线非循环）。
 
-复用现有 function-calling 底座（provider.chat + execute_tool），但：
-- 工具集只读（TOOL_SCHEMAS_READONLY：结构发现 + 只读查询），物理写不了。
-- system prompt 用 report_system_prompt（章节三件套 + 数字回溯 + 聚合优先）。
+- 三次单发 LLM 调用（澄清/规划/成文）+ 直接执行 SQL（不经工具循环）；逐章 SQL
+  由 LLM 在规划阶段直接产出，物理上无写路径（闸门 + 只读检查每章照过）。
 - 澄清流：欠定义时 yield 一个 clarify 事件后结束当前 SSE（done）；前端答完
   用新一次请求把完整"报告历史"（含已答的澄清）重传，后端 replay 到断点继续。
 - 逐章查询每条都过安全闸门 + 写审计（挂 report_id），与手动查询一样可回溯。
@@ -15,52 +14,36 @@ from __future__ import annotations
 
 import json
 import time
+from app.core.timeutil import utcnow_iso
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from app.ai import gateway as gw
 from app.ai.provider_cfg import resolve_provider_cfg
 from app.ai.context import (
-    assemble_context,
     assemble_context_full,
     report_system_prompt,
 )
 from app.ai.manifest import build_manifest
-from app.ai.intent import classify_tags
 from app.ai.dto import ChatRequest
-from app.ai.tools import TOOL_SCHEMAS_READONLY, execute_tool
-from app.core.schema import get_schema
 from app.safety import gate as safety_gate
 from app.safety.models import Origin, Verdict
 
 if TYPE_CHECKING:
     from app.state import AppState
 
-MAX_REPORT_TURNS = 10        # 报告比单查询多几轮：澄清 + 计划 + 多章
 CLARIFY_MAX_QUESTIONS = 3    # 一轮澄清最多 3 个问题
 
 
 def _normalize_messages(messages: list) -> list[dict]:
-    out: list[dict] = []
-    for m in messages:
-        if isinstance(m.content, list):
-            content = " ".join(p.get("text", "") for p in m.content if isinstance(p, dict))
-        else:
-            content = m.content
-        out.append({
-            "role": m.role,
-            "content": content,
-            **({"name": m.name} if m.name else {}),
-            **({"tool_call_id": m.tool_call_id} if m.tool_call_id else {}),
-        })
-    return out
+    # loop 的同名助手是唯一实现（测试与 harness 共用）；函数级导入规避 loop→report 循环依赖
+    from app.ai.loop import _normalize_messages as _impl
+    return _impl(messages)
 
 
 def _last_user_text(messages: list[dict]) -> str:
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            return m.get("content", "")
-    return ""
+    from app.ai.loop import _last_user_text as _impl
+    return _impl(messages)
 
 
 def _extract_clarify_answers(messages: list[dict]) -> list[dict]:
@@ -84,6 +67,37 @@ def _extract_clarify_answers(messages: list[dict]) -> list[dict]:
             continue
         i += 1
     return ans
+
+
+def _server_history_to_report_messages(rows: list[dict]) -> list[dict]:
+    """chat.db 服务端历史 → report_stream 期望的消息格式（历史统一：服务端为唯一来源）。
+
+    转换规则：
+    - kind=clarify（assistant 澄清问题）→ {"role":"system","name":"clarify"}，
+      与其后第一条 user 回答配对（前端重放语义：多个澄清共享一次作答）
+    - assistant text → assistant（供 manifest 历史计数/脱敏）
+    - think/stage/sql_card/report 工件行不进报告上下文（与前端回放等价）
+    """
+    out: list[dict] = []
+    pending_clarifies: list[str] = []
+    for r in rows:
+        role = r.get("role")
+        kind = r.get("kind") or "text"
+        content = r.get("content") or ""
+        if role == "user":
+            for q in pending_clarifies:
+                out.append({"role": "system", "name": "clarify", "content": q})
+            pending_clarifies = []
+            if content:
+                out.append({"role": "user", "content": content})
+        elif role == "assistant":
+            if kind == "clarify":
+                pending_clarifies.append(content)
+            elif kind == "text" and content:
+                out.append({"role": "assistant", "content": content})
+    for q in pending_clarifies:
+        out.append({"role": "system", "name": "clarify", "content": q})
+    return out
 
 
 # ---- mock 报告计划：无 key 也能跑通，确定性按关键词规划章节 ----
@@ -197,6 +211,29 @@ async def _run_report_query(
     """
     cfg = state.connections.get(conn_id)
     dialect = safety_gate.sqlglot_dialect_for(cfg.dialect)
+    # R6/T8：会话变量替换 + 表级过滤器注入（闸门/审计用真实执行 SQL）
+    try:
+        from app.knowledge.filters import prepare_query_sql
+        sql = prepare_query_sql(state, conn_id, sql)
+    except Exception:
+        pass
+    # R1/P2-11：图校验（与 run_query 同一校验器）——report 子查询 JOIN 也必须命中知识库图
+    try:
+        from app.ai.tools.sql import plausibility_check
+        _ok, _miss, _ = plausibility_check(state, conn_id, sql)
+        if not _ok:
+            _desc = "、".join(f"{ft}.{fc} = {tt}.{tc}" for ft, fc, tt, tc in _miss)
+            _reason = f"JOIN 条件 {_desc} 不在知识库图内（幻觉 join）"
+            try:
+                state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier="read",
+                                verdict="block", status="报告查询拦截（图校验）", sql=sql,
+                                report_id=report_id, source="report", tables=None)
+            except Exception:
+                pass
+            return {"ok": False, "result_id": result_id, "sql": sql,
+                    "reason": _reason, "plausibility": _miss}
+    except Exception:
+        pass  # 校验器异常不阻塞报告（与 run_query 一致）
     assessment = safety_gate.assess_sql(sql, dialect, Origin.AI)
     # 报告只读：闸门非 ALLOW 直接转 block 记录（工具集本就只读，理论不会出现写）
     if assessment.verdict != Verdict.ALLOW:
@@ -208,10 +245,40 @@ async def _run_report_query(
                 "reasons": assessment.reasons}
     from app.core.query import execute as run_query
 
+    # B4 严格档：行数据不出网（include_data 硬拦在 sql.py B4 实现），报告聚合的 include_data=true 已由 report 模式保证
+    try:
+        _mode = state.runtime.get().privacy_mode
+    except Exception:
+        _mode = "standard"
+    if _mode == "strict":
+        # 严格模式下报告查询仍执行供卡片展示，后续 _llm_narration 正常调用
+        pass
+
     res = await run_query(state, conn_id, sql, max_rows=200)   # 报告聚合，200 行足够
+    # B2 脱敏：报告聚合行在出网前脱敏（标准档 token 化，开放档明文，严格档仍 token 化作为 defense-in-depth）
+    redacted_rows = res["rows"]
+    _redactions: list[str] = []
+    if res.get("rows"):
+        if _mode != "open":
+            try:
+                from app.safety.redact import get_salt as _grs, redact_rows as _rr
+                from app.config import get_env as _ge
+                _salt = _grs(_ge().data_dir)
+                try:
+                    _sens = state.connections.get(conn_id).sensitive
+                except Exception:
+                    _sens = []
+                _tbl = assessment.tables[0] if assessment.tables else ""
+                redacted_rows, _mp = _rr(res["rows"], res["columns"], _tbl, _salt, _sens)
+                _redactions = list(_mp.keys())[:5]
+            except Exception:
+                # fail-closed
+                redacted_rows = []
+                _redactions = ["redact-failed"]
     state.audit.log(connection=cfg.name, origin=Origin.AI.value, tier="read", verdict="allow",
                     status="报告查询", sql=sql, elapsed_ms=res.get("elapsed_ms"),
                     report_id=report_id, source="report")
+    # 存原始 rows 供前端图表/卡片展示，redacted_rows 供模型
     return {
         "ok": True,
         "result_id": result_id,
@@ -219,6 +286,8 @@ async def _run_report_query(
         "columns": res["columns"],
         "types": res["types"],
         "rows": res["rows"],
+        "redacted_rows": redacted_rows,
+        "redactions": _redactions,
         "row_count": res["row_count"],
         "elapsed_ms": res["elapsed_ms"],
     }
@@ -229,73 +298,119 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
     provider = gw.build_provider(resolve_provider_cfg(state, req))
     conn_id = req.connection_id
     report_id = f"rep_{uuid.uuid4().hex[:14]}"
-    snapshot_ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-    # 知识库：未构建过才构建（与 chat_stream 一致）
-    if not state.knowledge.is_built(conn_id):
-        try:
-            schema = await get_schema(state, conn_id)
-            await state.knowledge.build(conn_id, schema)
-        except Exception:
-            pass
+    snapshot_ts = utcnow_iso()
 
     user_text = _last_user_text(_normalize_messages(req.messages))
+    # B2: 报告请求的用户文本亦脱敏
+    _report_text_redactions: list[str] = []
+    try:
+        from app.safety.redact import get_salt as _rgrs, redact_text as _rrt
+        from app.config import get_env as _rge
+        _rsalt = _rgrs(_rge().data_dir)
+        try:
+            _rsens = state.connections.get(conn_id).sensitive
+        except Exception:
+            _rsens = []
+        _rtext, _rmp = _rrt(user_text, _rsalt, _rsens)
+        if _rmp:
+            _report_text_redactions = list(_rmp.keys())[:5]
+            user_text = _rtext
+    except Exception:
+        pass
     context, meta = await assemble_context_full(state, conn_id, req.table, user_text)
+
+    # 历史统一：服务端历史优先（stream() 已加载并压缩）；前端回放仅作无历史时的兼容通道
+    _server_hist = getattr(req, "_server_history", None) or []
+    if _server_hist:
+        report_msgs = _server_history_to_report_messages(_server_hist)
+        _new_q = _last_user_text(_normalize_messages(req.messages))
+        if _new_q and (not report_msgs or report_msgs[-1].get("role") != "user"
+                       or report_msgs[-1].get("content") != _new_q):
+            report_msgs.append({"role": "user", "content": _new_q})
+    else:
+        report_msgs = _normalize_messages(req.messages)
 
     # B1 出网清单（报告模式：强制 include_data=true，聚合结果）
     try:
         provider_cfg_for_manifest = resolve_provider_cfg(state, req)
+        # 历史消息同样脱敏
+        _hist_norm = [dict(m) for m in report_msgs]
+        try:
+            from app.safety.redact import get_salt as _hgs, redact_text as _hrt
+            from app.config import get_env as _hge
+            _hsalt = _hgs(_hge().data_dir)
+            try:
+                _hsens = state.connections.get(conn_id).sensitive
+            except Exception:
+                _hsens = []
+            for _hm in _hist_norm:
+                if _hm.get("role") == "user" and _hm.get("content"):
+                    _hrc, _hmp = _hrt(_hm["content"], _hsalt, _hsens)
+                    if _hmp:
+                        for _hk in _hmp.keys():
+                            if _hk not in _report_text_redactions and len(_report_text_redactions) < 5:
+                                _report_text_redactions.append(_hk)
+                        _hm["content"] = _hrc
+        except Exception:
+            pass
         # 报告的 messages 包含历史 + 当前上下文
         _msgs_for_manifest = [
             {"role": "system", "content": report_system_prompt()},
             {"role": "system", "content": context},
-            *_normalize_messages(req.messages),
+            *_hist_norm,
         ]
         manifest = build_manifest(state, conn_id, meta, _msgs_for_manifest, True, provider_cfg_for_manifest, context)
-        # 审计（经 logger 加锁，不带 report_id 避免与章节计数混淆）
-        try:
-            conn_name = state.connections.get(conn_id).name
-        except Exception:
-            conn_name = conn_id
-        try:
-            state.audit.log(
-                connection=conn_name,
-                origin="ai",
-                tier="read",
-                verdict="egress",
-                status="egress",
-                sql=f"[manifest] {user_text[:60]}",
-                source="egress",
-                tables=manifest.get("tables"),
-                manifest=manifest,
-            )
-        except Exception:
-            pass
+        if _report_text_redactions:
+            manifest["redactions"] = _report_text_redactions[:5]
+        # 出网清单审计改由中央记账拦截器（gateway）按每次 LLM 调用统一写；SSE 的 manifest 事件仍下发
     except Exception:
-        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": "standard", "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "model": "", "provider": "mock"}
+        # B1 修复：兜底 manifest 亦需读取真实 privacy_mode 而非硬编码 standard
+        try:
+            _fallback_mode = state.runtime.get().privacy_mode
+        except Exception:
+            _fallback_mode = "standard"
+        manifest = {"tables": meta.get("candidate_tables") or [], "kb_docs": meta.get("kb_docs", 0), "history_turns": len(req.messages), "include_data": True, "redactions": [], "mode": _fallback_mode, "ts": utcnow_iso(), "model": "", "provider": "mock"}
+    # 中央记账 ctx（gateway 拦截器按每次 LLM 调用写；叙述轮带 include_data=True）
+    try:
+        _rc_reds = _report_text_redactions[:5]
+    except Exception:
+        _rc_reds = []
+    _report_ctx = {
+        "conn_id": conn_id, "connection": conn_id, "skill": "report",
+        "session_id": req.session_id, "source": "egress", "status": "egress",
+        "include_data": False, "redactions": _rc_reds, "context_meta": meta,
+        "manifest": manifest,
+    }
     yield {"type": "report_start", "connection": conn_id,
            "report_id": report_id, "snapshot_ts": snapshot_ts}
     yield {"type": "manifest", "manifest": manifest}
 
     # ---- 1) 澄清：若历史里没有澄清问答且问题欠定义 → yield clarify 后结束本轮 ----
-    answered = _extract_clarify_answers(_normalize_messages(req.messages))
+    answered = _extract_clarify_answers(report_msgs)
     is_mock = resolve_provider_cfg(state, req)["provider"] == "mock"
 
     need_clarify: list[dict] = []
     if len(answered) == 0 and not any(
-        m.get("name") == "clarify" for m in _normalize_messages(req.messages)
+        m.get("name") == "clarify" for m in report_msgs
     ):
-        need_clarify = _mock_clarify(user_text) if is_mock else await _llm_clarify(provider, user_text)
+        need_clarify = _mock_clarify(user_text) if is_mock else await _llm_clarify(provider, user_text, ctx=_report_ctx)
 
     if need_clarify:
         # 把澄清问题作为一条带 name=clarify 的 system 消息记下（前端答完回传时凭借它判断 replay）
+        _cl_ev: list[dict] = []
         for q in need_clarify:
-            yield {"type": "clarify", "question": q["question"], "field": q.get("field", "")}
+            ev = {"type": "clarify", "origin": "report", "question": q["question"], "field": q.get("field", "")}
+            yield ev
+            _cl_ev.append(ev)
+        # 澄清问题必须先落库（用户回答的下一轮依赖服务端历史重建问答对）
+        from app.ai.events_codec import ai_messages_from_events as _amfe
+
+        yield {"type": "_commit", "messages": _amfe(_cl_ev)}
         yield {"type": "done"}
         return
 
     # ---- 2) 计划：mock 下确定性 → plan 事件 ----
-    plan = _mock_plan(user_text) if is_mock else await _llm_plan(provider, user_text, context)
+    plan = _mock_plan(user_text) if is_mock else await _llm_plan(provider, user_text, context, ctx=_report_ctx)
     if not plan:
         # 真实路径规划失败：报错而非生成空壳报告（零定制，不注入演示数据）
         yield {"type": "error", "message": "报告章节规划失败，请稍后重试或换个问法。"}
@@ -333,26 +448,77 @@ async def report_stream(state: "AppState", req: ChatRequest) -> AsyncIterator[di
 
     # ---- 4) 汇总成文：把各章聚合数据集喂模型，产出引用 result_id 的叙述 ----
     narration = _mock_narration(user_text, plan, section_results) if is_mock \
-        else await _llm_narration(provider, user_text, plan, section_results)
+        else await _llm_narration(provider, user_text, plan, section_results, ctx={**_report_ctx, "include_data": True})
     # 一个 narration 事件叙述整份报告的结论（含各章数字 + 来源标注）
     yield {"type": "narration", "section_id": None, "text": narration,
            "refs": _collect_refs(plan, section_results)}
+
+    # ---- 5) 报告落库（results.db，source='chat'）：正文 markdown，失败静默不影响对话 ----
+    try:
+        _save_chat_report(state, req, conn_id, report_id, user_text, plan, section_results, narration)
+    except Exception:  # noqa: BLE001
+        pass
+    # 报告工件逐事件落会话历史（committed-turn）
+    from app.ai.events_codec import ai_messages_from_events as _amfe
+
+    _rep_ev: list[dict] = [{"type": "plan", "sections": plan}]
+    for sec in plan:
+        qr = next((q for q in section_results if q.get("result_id") == sec.get("id")), None)
+        _rep_ev.append({
+            "type": "section", "id": sec["id"], "title": sec["title"],
+            "result_id": sec.get("id"), "ok": bool(qr),
+            "sql": sec.get("sql", ""),
+            "chart": {"kind": sec.get("chart_hint", "bar"), "data": (qr or {}).get("rows") or []},
+            "rows": (qr or {}).get("rows") or [], "columns": (qr or {}).get("columns") or [],
+        })
+    _rep_ev.append({"type": "narration", "section_id": None, "text": narration,
+                    "refs": _collect_refs(plan, section_results)})
+    yield {"type": "_commit", "messages": _amfe(_rep_ev)}
     yield {"type": "report_done", "report_id": report_id, "section_count": len(plan)}
     yield {"type": "done"}
 
 
 # ---- LLM 版澄清/计划/叙述（真实网关下走；mock 下不走） ----
-async def _llm_clarify(provider, question: str) -> list[dict]:
+def _save_chat_report(state, req, conn_id: str, report_id: str, question: str,
+                      plan: list[dict], section_results: list[dict], narration: str) -> None:
+    """报告结果落库（results.db）。source_id=<session_id>#<report_id>，每份唯一、可回溯审计。"""
+    lines: list[str] = [f"# {question[:80] or '分析报告'}", ""]
     try:
-        prompt = (
-            "你是 tabletalk 分析副驾。用户想要一份报告，判断问题是否需要澄清口径。\n"
-            f"用户问题：{question}\n"
-            "若欠定义（如时间范围/口径/维度不明），提不超过 3 个澄清问题。\n"
-            '若已足够清楚，返回 JSON：{"questions": []}。\n'
-            '否则返回 JSON：{"questions": [{"field":"time_range","question":"..."}]}。\n'
-            "只返回 JSON。"
-        )
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        conn_name = state.connections.get(conn_id).name
+    except Exception:
+        conn_name = conn_id
+    lines += [f"- 数据源：{conn_name}", f"- report_id：`{report_id}`", ""]
+    for sec in plan:
+        lines.append(f"## {sec.get('title', sec.get('id', ''))}")
+        sql = (sec.get("sql") or "").strip()
+        if sql:
+            lines += ["", "```sql", sql, "```", ""]
+        qr = next((q for q in section_results if q.get("result_id") == sec.get("id")), None)
+        if qr and qr.get("columns"):
+            cols = qr["columns"]
+            rows = (qr.get("rows") or [])[:12]
+            lines.append("| " + " | ".join(str(c) for c in cols) + " |")
+            lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+            for r in rows:
+                lines.append("| " + " | ".join(str(v) for v in r) + " |")
+            lines.append("")
+    lines += ["## 结论", "", narration or "", ""]
+    content = "\n".join(lines)
+    session_id = (req.session_id or "").strip() or "anon"
+    state.results.save_result(
+        source="chat", group_id=session_id, source_id=f"{session_id}#{report_id}",
+        content=content, title=(question[:80] or "分析报告"), connection_id=conn_id or "",
+        fmt="md",
+        meta={"session_id": session_id, "report_id": report_id,
+              "question": question[:200], "section_count": len(plan)},
+    )
+
+
+async def _llm_clarify(provider, question: str, ctx: dict | None = None) -> list[dict]:
+    try:
+        from app.ai.prompts import render
+        prompt = render("report_clarify", question=question)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         text = (resp.content or "").strip()
         text = __import__("re").sub(r"^```(?:json)?\s*|\s*```$", "", text)
         data = json.loads(text)
@@ -361,17 +527,11 @@ async def _llm_clarify(provider, question: str) -> list[dict]:
         return []   # 拿不准就不澄清，直接出计划
 
 
-async def _llm_plan(provider, question: str, context: str) -> list[dict]:
+async def _llm_plan(provider, question: str, context: str, ctx: dict | None = None) -> list[dict]:
     try:
-        prompt = (
-            "根据以下数据库结构与用户分析目标，规划 2~4 个报告章节，每章一个聚合只读查询。\n"
-            f"{context}\n"
-            f"用户分析目标：{question}\n"
-            "返回 JSON：{\"sections\":[{\"id\":\"r1\",\"title\":\"\",\"intent\":\"\","
-            "\"chart_hint\":\"bar|line|pie\",\"sql\":\"只读 SELECT\"}]}。\n"
-            "只返回 JSON。chart_hint 仅 bar/line/pie。SQL 必须是有 GROUP BY 或 LIMIT 的聚合查询。"
-        )
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        from app.ai.prompts import render
+        prompt = render("report_plan", context=context, question=question)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         text = (resp.content or "").strip()
         text = __import__("re").sub(r"^```(?:json)?\s*|\s*```$", "", text)
         data = json.loads(text)
@@ -393,21 +553,31 @@ async def _llm_plan(provider, question: str, context: str) -> list[dict]:
         return []
 
 
-async def _llm_narration(provider, question, plan, section_results) -> str:
+async def _llm_narration(provider, question, plan, section_results, ctx: dict | None = None) -> str:
     try:
+        # B2: 聚合行使用脱敏后 redacted_rows 出网。
+        # M22 降级：行数据未出网（严格模式脱敏失败 fail-closed / 空 redacted_rows 但有行数）→
+        # 明确告知模型只有结构信息，定性描述，禁止编造数字。
+        def _sec_body(qr: dict) -> str:
+            rows = qr.get("redacted_rows", qr.get("rows", []))
+            if not rows:
+                cols = qr.get("columns") or []
+                n = qr.get("row_count") or qr.get("rowcount")
+                if n:
+                    return (f"（行数据未出网：{len(cols)} 列 × {n} 行。"
+                            "请基于列名与行数做定性描述，不要编造具体数字。）")
+                return "（本章节无结果行。）"
+            return _summarize_results(rows, qr.get("columns", []))
+
         blocks = "\n\n".join(
             f"## {s['title']}（result_id={s['id']}）\n"
             f"SQL：{s['sql']}\n"
-            f"结果：\n{_summarize_results(qr.get('rows', []), qr.get('columns', []))}"
+            f"结果：\n{_sec_body(qr)}"
             for s, qr in zip(plan, section_results) if qr.get("ok")
         )
-        prompt = (
-            "基于以下各章聚合查询结果，写这份报告的中文总结叙述。\n"
-            "叙述里每个数字必须来自下面的真实结果，并在数字后用 [r<id>] 标注来源。\n"
-            f"分析目标：{question}\n{blocks}\n"
-            "直接输出 2~4 段中文叙述，不要复述表格。"
-        )
-        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None)
+        from app.ai.prompts import render
+        prompt = render("report_narrate", question=question, blocks=blocks)
+        resp = await provider.chat([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         return (resp.content or "").strip() or "（无法生成叙述）"
     except Exception:  # noqa: BLE001
         # 真实路径异常时不回填 mock 演示叙述（零定制红线），返回明确占位

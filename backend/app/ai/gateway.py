@@ -1,15 +1,21 @@
 """LLM 网关：统一 OpenAI 兼容协议（云端 API / 本地 Ollama / vLLM 私有网关）。
 
 内置 MockProvider：无 key 也能跑通全流程，复刻原型的读/写/DDL 意图。
+思考等协议差异由 app/ai/providers/ 适配层收编：上层只说统一方言
+（thinking: off/low/medium/high/auto），各家字段/枚举/降级矩阵在 adapter 内。
 """
 from __future__ import annotations
 
 import json
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+from app.ai.providers import get_adapter
+from app.ai.providers.base import normalize_thinking
 
 
 @dataclass
@@ -23,12 +29,14 @@ class ToolCall:
 class ChatResponse:
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: dict[str, int] | None = None  # OpenAI 兼容: {"prompt_tokens": N, "completion_tokens": N, "total_tokens": N}
 
 
 @dataclass
 class StreamChunk:
-    """流式增量：delta=文本增量；content=非流式最终文本（mock）；tool_calls=最终工具调用。"""
+    """流式增量：delta=文本增量；reasoning=思考链增量（推理模型）；content=非流式最终文本（mock）；tool_calls=最终工具调用。"""
     delta: str | None = None
+    reasoning: str | None = None
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
 
@@ -37,9 +45,30 @@ def build_provider(cfg: dict) -> "LLMGateway":
     return LLMGateway(cfg)
 
 
+def _sanitize_payload(payload: dict) -> dict:
+    """精简请求 payload 用于日志：截断 messages 内容，移除 api_key 等敏感字段。"""
+    import copy
+    out = copy.deepcopy(payload)
+    # 截断每条 message 的 content（防超大上下文撑爆磁盘，保留前2KB）
+    for m in out.get("messages", []):
+        if isinstance(m.get("content"), str) and len(m["content"]) > 2048:
+            m["content"] = m["content"][:2048] + f"...(truncated, total {len(m['content'])} chars)"
+    # 工具列表只保留名字
+    if "tools" in out:
+        out["tools"] = [t.get("function", {}).get("name", "?") for t in out["tools"]]
+    return out
+
+
 def is_effective_mock(cfg: dict) -> bool:
-    """是否实际走 mock 行为：显式 mock，或开箱默认 cloud 模型无 key 时的降级。"""
-    return cfg.get("provider") == "mock" or (cfg.get("provider") == "cloud" and not cfg.get("api_key"))
+    """是否实际走 mock 行为：provider 字段为 "mock"（内置模拟，无 key 可跑通全流程）。"""
+    return cfg.get("provider") == "mock"
+
+
+def _last_user_text(messages: list[dict]) -> str:
+    for m in reversed(messages):
+        if m.get("role") == "user" and isinstance(m.get("content"), str):
+            return m["content"].replace("\n", " ")
+    return ""
 
 
 class LLMGateway:
@@ -50,8 +79,13 @@ class LLMGateway:
         self.model = cfg.get("model") or ""
         self.temperature = cfg.get("temperature", 0.2)
         self.timeout = cfg.get("timeout", 120)
-        # 推理强度：off/low/medium/high（None/空/False 视为 off；True 视为 high）
+        # 统一思考方言（归一后 ∈ off/low/medium/high/auto；True/False/None 等历史形态在归一层兼容）
         self.reasoning = cfg.get("reasoning")
+        # 适配器：协议差异（思考字段/枚举/流式思考字段/回填约束）全部收编于此
+        self.adapter = get_adapter(self.provider, self.model)
+        # 工具循环内本实例存活复用：累积上一轮流式思考链，供 DeepSeek 等强制回传的厂商回填
+        self._last_reasoning: str | None = None
+        self._degrade_notes: list[str] = []
 
     def _request(self, messages: list[dict], tools: list[dict] | None, stream: bool) -> tuple[str, dict, dict]:
         """构造 POST /chat/completions 的 url / payload / headers（chat 与 chat_stream 共用）。"""
@@ -59,110 +93,232 @@ class LLMGateway:
             raise ValueError("AI 网关未配置 base_url（provider 非 mock 时必填）")
         url = self.base_url + "/chat/completions"
         payload: dict = {"messages": messages, "temperature": self.temperature, "stream": stream}
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
         if self.model:
             payload["model"] = self.model
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # 思考强度（OpenAI 兼容统一用 reasoning_effort）
-        # 归一：布尔能力标志也兼容（True→high, False→off）；off/None/空 → 不追加参数
-        r = self.reasoning
-        if r is True:
-            r = "high"
-        elif r is False or r in (None, ""):
-            r = "off"
-        if r != "off" and self.reasoning_supports_param():
-            effort = {"low": "low", "medium": "medium", "high": "high"}.get(r)
-            if effort:
-                payload["reasoning_effort"] = effort
-            else:
-                # 不支持 effort 档位的推理模型：仅启用思考
-                payload["thinking"] = {"type": "enabled"}
+        # 统一思考方言 → 各家参数（适配层内完成映射与降级；降级说明进 last_meta 供审计）
+        thinking = normalize_thinking(self.reasoning)
+        has_tools = bool(tools)
+        notes = self.adapter.apply_thinking(payload, thinking, self.model, has_tools)
+        notes += self.adapter.patch_messages(messages, thinking, has_tools, self._last_reasoning)
+        self._degrade_notes = [n.as_note() for n in notes]
         headers: dict = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return url, payload, headers
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True) -> ChatResponse:
-        # 开箱默认 cloud 模型无 key 时静默降级 mock，保住无 key demo；
+    async def chat(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True, ctx: dict | None = None) -> ChatResponse:
+        # 显式 mock（测试/演示）走内置模拟；真实 provider 需配置 base_url
         # 测试连接传 allow_fallback=False 保持真实（无 key/坏 URL 即真实报错）
-        if self.provider == "mock" or (allow_fallback and self.provider == "cloud" and not self.api_key):
-            return await MockProvider.chat(messages, tools)
-        url, payload, headers = self._request(messages, tools, stream=False)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
-            data = r.json()
-        msg = data["choices"][0]["message"]
-        content = msg.get("content")
-        # 带思考链的模型返回 reasoning_content（思考内容本身不展示，仅取正式回答）
-        tool_calls: list[ToolCall] = []
-        for tc in msg.get("tool_calls") or []:
-            try:
-                args = json.loads(tc["function"].get("arguments") or "{}")
-            except Exception:
-                args = {}
-            tool_calls.append(
-                ToolCall(
-                    id=tc.get("id") or f"call_{int(time.time()*1000)}",
-                    name=tc["function"].get("name", ""),
-                    arguments=args,
-                )
-            )
-        return ChatResponse(content=content, tool_calls=tool_calls)
-
-    async def chat_stream(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True) -> "AsyncIterator[StreamChunk]":
-        """SSE 流式：逐 token 产出 StreamChunk(delta)；工具调用在流末一次性产出。"""
-        if self.provider == "mock" or (allow_fallback and self.provider == "cloud" and not self.api_key):
-            resp = await MockProvider.chat(messages, tools)
-            if resp.tool_calls:
-                yield StreamChunk(tool_calls=resp.tool_calls)
-            else:
-                yield StreamChunk(content=resp.content)
-            return
-        url, payload, headers = self._request(messages, tools, stream=True)
-        acc: dict[int, dict] = {}
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream("POST", url, json=payload, headers=headers) as r:
+        _t0 = time.monotonic()
+        try:
+            if self.provider == "mock":
+                self._record_egress(ctx, messages)  # 出网清单先行
+                resp = await MockProvider.chat(messages, tools)
+                self._record_llm(ctx, messages, {"messages": messages}, None, time.monotonic() - _t0, ok=True)
+                return resp
+            url, payload, headers = self._request(messages, tools, stream=False)
+            self._record_egress(ctx, messages)  # 出网清单先于模型调用落审计
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                r = await client.post(url, json=payload, headers=headers)
                 r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line or not line.startswith("data:"):
-                        continue
-                    data = line[len("data:"):].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        obj = json.loads(data)
-                    except Exception:
-                        continue
-                    choice = (obj.get("choices") or [{}])[0]
-                    delta = choice.get("delta", {})
-                    for t in delta.get("tool_calls") or []:
-                        idx = t.get("index", 0)
-                        slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
-                        if t.get("id"):
-                            slot["id"] = t["id"]
-                        fn = t.get("function", {})
-                        if fn.get("name"):
-                            slot["name"] = fn["name"]
-                        slot["arguments"] += fn.get("arguments") or ""
-                    text = delta.get("content")
-                    if text:
-                        yield StreamChunk(delta=text)
-        if acc:
-            calls: list[ToolCall] = []
-            for i in sorted(acc):
-                slot = acc[i]
+                data = r.json()
+            msg = data["choices"][0]["message"]
+            content = msg.get("content")
+            # 累积思考链（供多轮工具循环回填 DeepSeek 等强制回传的厂商；思考内容本身不展示）
+            rc = msg.get(self.adapter.reasoning_field)
+            if rc:
+                self._last_reasoning = rc
+            # 带思考链的模型返回 reasoning_content（思考内容本身不展示，仅取正式回答）
+            tool_calls: list[ToolCall] = []
+            for tc in msg.get("tool_calls") or []:
                 try:
-                    args = json.loads(slot["arguments"] or "{}")
+                    args = json.loads(tc["function"].get("arguments") or "{}")
                 except Exception:
                     args = {}
-                calls.append(ToolCall(id=slot["id"] or f"call_{i}", name=slot["name"], arguments=args))
-            yield StreamChunk(tool_calls=calls)
+                tool_calls.append(
+                    ToolCall(
+                        id=tc.get("id") or f"call_{int(time.time()*1000)}",
+                        name=tc["function"].get("name", ""),
+                        arguments=args,
+                    )
+                )
+            usage = data.get("usage")
+            # 存 last_meta 供调用方写 LLM 日志（请求 payload + 响应用量 + 协议降级说明）
+            self.last_meta: dict = {
+                "request_payload": _sanitize_payload(payload),
+                "response_usage": usage,
+                "response_model": data.get("model", self.model),
+                "degrade": self._degrade_notes,
+            }
+            self._record_llm(ctx, messages, payload, usage, time.monotonic() - _t0, ok=True)
+            return ChatResponse(content=content, tool_calls=tool_calls, usage=usage)
+        except Exception as _exc:  # noqa: BLE001
+            # 失败也记（token=0，可追溯），绝不漏记
+            self._record_llm(ctx, messages, None, None, time.monotonic() - _t0, ok=False, note=str(_exc) or type(_exc).__name__)
+            raise
 
-    def reasoning_supports_param(self) -> bool:
-        """本项目仅走 OpenAI 兼容协议；非 mock 模型即视为可接收 reasoning_effort/thinking 参数。"""
-        return self.provider != "mock"
+    async def chat_stream(self, messages: list[dict], tools: list[dict] | None = None, allow_fallback: bool = True, ctx: dict | None = None) -> "AsyncIterator[StreamChunk]":
+        """SSE 流式：逐 token 产出 StreamChunk(delta)；工具调用在流末一次性产出。
+        ctx 提供时在 finally 记账：流完成/被中断/异常都不漏（已累积的 usage 一并落）。"""
+        _t0 = time.monotonic()
+        _payload: dict | None = None
+        _usage: dict | None = None
+        try:
+            if self.provider == "mock":
+                self._record_egress(ctx, messages)  # 出网清单先行
+                resp = await MockProvider.chat(messages, tools)
+                if resp.tool_calls:
+                    yield StreamChunk(tool_calls=resp.tool_calls)
+                else:
+                    yield StreamChunk(content=resp.content)
+                return
+            url, payload, headers = self._request(messages, tools, stream=True)
+            self._record_egress(ctx, messages)  # 出网清单先于流式发送落审计
+            _payload = payload
+            acc: dict[int, dict] = {}
+            _stream_usage: dict | None = None
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as r:
+                    r.raise_for_status()
+                    async for line in r.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            obj = json.loads(data)
+                        except Exception:
+                            continue
+                        # OpenAI 兼容：stream_options.include_usage=True 时，usage 在最后一条 chunk
+                        chunk_usage = obj.get("usage")
+                        if chunk_usage:
+                            _stream_usage = chunk_usage
+                        choice = (obj.get("choices") or [{}])[0]
+                        delta = choice.get("delta", {})
+                        for t in delta.get("tool_calls") or []:
+                            idx = t.get("index", 0)
+                            slot = acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
+                            if t.get("id"):
+                                slot["id"] = t["id"]
+                            fn = t.get("function", {})
+                            if fn.get("name"):
+                                slot["name"] = fn["name"]
+                            slot["arguments"] += fn.get("arguments") or ""
+                        text = delta.get("content")
+                        reasoning = delta.get(self.adapter.reasoning_field)
+                        if reasoning:
+                            # 累积思考链：同实例下一次请求回填（DeepSeek 思考+tools 强制）
+                            self._last_reasoning = (self._last_reasoning or "") + reasoning
+                        if reasoning or text:
+                            yield StreamChunk(delta=text, reasoning=reasoning)
+            _usage = _stream_usage
+            # 流结束后存 last_meta（铁律：流完成再写，不丢信息）+ 协议降级说明
+            self.last_meta = {
+                "request_payload": _sanitize_payload(payload),
+                "response_usage": _stream_usage,
+                "response_model": _stream_usage.get("model") if _stream_usage else self.model,
+                "degrade": self._degrade_notes,
+            }
+            if acc:
+                calls: list[ToolCall] = []
+                for i in sorted(acc):
+                    slot = acc[i]
+                    try:
+                        args = json.loads(slot["arguments"] or "{}")
+                    except Exception:
+                        args = {}
+                    calls.append(ToolCall(id=slot["id"] or f"call_{i}", name=slot["name"], arguments=args))
+                yield StreamChunk(tool_calls=calls)
+        finally:
+            # 无条件记账：流完成/被中断/异常都不漏（已累积 usage 一并落）。
+            # 按退出状态记 ok：正常完成 ok=True；异常（HTTP/解析）ok=False + note；
+            # 客户端提前 aclose（GeneratorExit）→ ok=False + note="interrupted"（与 chat 的 except 语义一致）。
+            _exc = sys.exc_info()[0]
+            if _exc is None:
+                _ok, _note = True, ""
+            elif _exc is GeneratorExit:
+                _ok, _note = False, "interrupted"
+            else:
+                _ok, _note = False, str(_exc) or _exc.__name__
+            self._record_llm(ctx, messages, _payload, _usage, time.monotonic() - _t0, ok=_ok, note=_note)
+
+    # ---------------------------------------------------------------- 中央记账拦截器
+    # 一次请求/响应只记一组（llm_log 成本 + cost_tracker 摘要 + egress 出网清单审计）。
+    # 由调用方传 ctx 开启（conn_id/skill/source/candidate_tables…）；后续全站点迁移后改为必记。
+
+    def _record_llm(self, ctx: dict | None, messages: list[dict], payload: dict | None,
+                    usage: dict | None, elapsed_ms: float, ok: bool = True, note: str = "") -> None:
+        """LLM 调用记账（无条件拦截器）：llm_log + cost_tracker + egress 清单审计。
+        ctx 缺省时用通用默认（skill=llm / connection=unknown），保证任何调用点都不漏。失败也记。"""
+        try:
+            from app.config import get_env
+            from app.ai.llm_log import LlmCallLog
+            from app.ai.cost_tracker import CostTracker
+
+            env = get_env()
+            cid = ctx.get("conn_id") if ctx else None
+            skill = ctx.get("skill") if ctx else "llm"
+            model = ctx.get("model") or self.model or ""
+            provider = ctx.get("provider") or self.provider
+            sid = ctx.get("session_id") if ctx else None
+            in_t = int((usage or {}).get("prompt_tokens") or 0)
+            out_t = int((usage or {}).get("completion_tokens") or 0)
+            elapsed = round(float(elapsed_ms), 1)
+
+            LlmCallLog(env.data_dir).log(
+                conn_id=cid, skill=skill, model=model, provider=provider, session_id=sid,
+                request_json=_sanitize_payload(payload) if payload else None,
+                response_json=usage if ok else {"error": (note or "error")[:300]},
+                input_tokens=in_t, output_tokens=out_t, elapsed_ms=elapsed,
+            )
+            CostTracker(env.data_dir).log(
+                connection=cid, skill=skill, model=model, provider=provider,
+                input_tokens=in_t, output_tokens=out_t, elapsed_ms=elapsed,
+            )
+        except Exception:  # noqa: BLE001 - 记账失败绝不影响主流程
+            pass
+
+    def _record_egress(self, ctx: dict | None, messages: list[dict]) -> None:
+        """出网清单审计行（verdict=egress + manifest）。在模型发送前调用（清单先于出网）。
+        站点已建权威清单时经 ctx['manifest'] 原样审计（内容逐字一致）；否则按 build_manifest 重建。"""
+        try:
+            from app.state import get_state  # noqa: PLC0415 - 延迟导入避免循环
+
+            cid = ctx.get("conn_id") if ctx else None
+            skill = ctx.get("skill") if ctx else "llm"
+            model = ctx.get("model") or self.model or ""
+            provider = ctx.get("provider") or self.provider
+            state = get_state()
+            context_meta = (ctx.get("context_meta") if ctx else None) or {}
+            conn_label = (ctx.get("connection") if ctx else None) or cid or "unknown"
+            prebuilt = ctx.get("manifest") if ctx else None
+            if prebuilt and isinstance(prebuilt, dict):
+                m = prebuilt
+            else:
+                provider_cfg = {"model": model, "provider": provider}
+                try:
+                    from app.ai.manifest import build_manifest  # noqa: PLC0415
+                    m = build_manifest(state, conn_label, context_meta, messages, bool((ctx or {}).get("include_data")), provider_cfg)
+                except Exception:  # noqa: BLE001
+                    import time as _t  # noqa: PLC0415
+                    m = {"model": model, "provider": provider, "ts": _t.strftime("%Y-%m-%dT%H:%M:%S"), "tables": list(context_meta.get("candidate_tables") or []), "kb_docs": 0, "history_turns": 0, "include_data": False, "redactions": [], "mode": "standard"}
+                if (ctx or {}).get("redactions"):
+                    m["redactions"] = ctx["redactions"][:5]
+            state.audit.log(
+                connection=conn_label, origin="ai", tier="read", verdict="egress",
+                status=(ctx.get("status") if ctx else None) or "egress",
+                source=(ctx.get("source") if ctx else None) or "llm",
+                sql=f"[{skill}] {_last_user_text(messages)[:64]}",
+                manifest=m,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class MockProvider:
@@ -248,18 +404,14 @@ def resolve_provider_cfg(state, req) -> dict[str, Any]:
     """解析生效的 AI provider 配置：model_id 命中 ai_models 优先，支持逐次覆盖与 reasoning。
 
     loop（查询）与 report（报告）共用，保证两模式对「按对话切模型 + 思考强度」行为一致。
-    B4 严格档：强制 mock，可完全离线（销售演示 30 秒）。
     """
     rs = state.runtime.get()
-    try:
-        if getattr(rs, "privacy_mode", "standard") == "strict":
-            return {"provider": "mock", "base_url": "", "api_key": "", "model": "mock", "temperature": 0.2, "timeout": 30, "reasoning": None}
-    except Exception:
-        pass
     mid = getattr(req, "model_id", None)
     if mid:
         target = next((m for m in rs.ai_models if m.id == mid), None)
         if target is not None:
+            from app.core.settings import reasoning_for_model
+
             cfg = {
                 "provider": target.provider,
                 "base_url": target.base_url,
@@ -267,7 +419,7 @@ def resolve_provider_cfg(state, req) -> dict[str, Any]:
                 "model": target.model,
                 "temperature": target.temperature,
                 "timeout": target.timeout,
-                "reasoning": target.reasoning,
+                "reasoning": reasoning_for_model(target),
             }
         else:
             cfg = rs.provider_config()

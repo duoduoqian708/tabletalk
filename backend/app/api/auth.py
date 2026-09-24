@@ -17,29 +17,41 @@ class RegisterRequest(BaseModel):
     password: str
     role: str = "member"
 
+class ChangePasswordRequest(BaseModel):
+    username: str
+    old_password: str
+    new_password: str
+
 @router.post("/auth/login")
 async def login(req: LoginRequest):
     state = get_state()
-    # 单机模式：无用户时，仍允许用 sidecar token（由中间件处理），但此接口返回 404 提示
-    if not state.auth.is_team_mode():
-        # 单机模式下，login 仅用于团队模式提示
-        raise HTTPException(status_code=400, detail="single mode: use X-TableTalk-Token")
     user = state.auth.verify_password(req.username, req.password)
     if not user:
         raise HTTPException(status_code=401, detail="invalid credentials")
     token = state.auth.issue_token(user)
-    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role, "is_initial": getattr(user, "is_initial", False)}}
 
 @router.post("/auth/register")
 async def register(req: RegisterRequest):
     state = get_state()
-    # 单机模式：首个用户注册即切换为团队模式
     try:
         user = state.auth.create_user(req.username, req.password, req.role)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     token = state.auth.issue_token(user)
-    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role, "is_initial": getattr(user, "is_initial", False)}}
+
+@router.post("/auth/change-password")
+async def change_password(req: ChangePasswordRequest):
+    state = get_state()
+    try:
+        user = state.auth.change_password(req.username, req.old_password, req.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    token = state.auth.issue_token(user)
+    return {"token": token, "user": {"id": user.id, "username": user.username, "role": user.role, "is_initial": False}}
 
 @router.get("/auth/me")
 async def me():

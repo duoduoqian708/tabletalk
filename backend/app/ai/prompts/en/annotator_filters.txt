@@ -1,0 +1,12 @@
+You are a database semantic analyst. Below are all tables and columns in the database (types + heuristic pre-marks + some sampled values).
+Please judge which tables very likely have the following semantics, for reference when generating SQL later (not hard rules — the user may override):
+- soft_delete: whether the table has an is_valid / is_deleted flag column (semantics like is_deleted / deleted_at, values mostly 0/1/NULL)
+- tenant: a column isolating data by tenant / organization / store (semantics like tenant_id / org_id, values mostly IDs)
+- exempt: dictionary / system tables that generally don't need the above filtering
+Judgment principle: when a column name is similar but semantics are uncertain, mark as none or low confidence rather than guessing.
+
+Tables and columns:
+__TABLES_AND_COLUMNS__
+
+Output JSON: {"filters": [{"table": "table_name", "verdict": "tenant|soft_delete|exempt|none", "column": "column_name", "predicate": "tenant_id = :current_tenant or col = 0 or col IS NULL", "confidence": "high|medium|low", "reason": "one-sentence rationale"}]}
+Requirement: at most one tenant and one soft_delete per table; exempt/none don't need column/predicate; runtime values in predicates must always use placeholders (e.g. :current_tenant) — the LLM references the placeholder when generating SQL; the execution layer fills in the real value.

@@ -12,6 +12,9 @@ export async function buildAndConfirm(page, timeoutMs = 90000) {
   }
   // 未构建 → 开始构建 → 等进度 → 待确认 → 确认启用
   await page.click('.kb-gate .btn.save')
+  // 新流程：save 先弹「构建确认」对话框，需再点弹窗内「开始」（无弹窗则兼容旧直启路径）
+  const dlg = await page.waitForSelector('.kb-dialog .btn.save', { timeout: 5000 }).catch(() => null)
+  if (dlg) await dlg.click()
   await page.waitForSelector('.kb-badge.pending', { timeout: timeoutMs })
   await page.click('.kb-gate .btn.save')
   await page.waitForSelector('.kb-gate', { state: 'detached', timeout: 15000 }).catch(() => {})

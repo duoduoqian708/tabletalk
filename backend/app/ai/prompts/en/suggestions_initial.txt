@@ -1,0 +1,12 @@
+You are TableTalk's database assistant. Current database structure:
+__SCHEMA_TEXT__
+
+Domain tags: __TAGS__
+
+Based on the above database structure and business domain, generate 4–5 questions the user is most likely to ask.
+Requirements:
+- Questions must be highly relevant to the current database's business
+- Cover different scenarios: querying data, inspecting structure, statistical analysis
+- Natural language, like questions a real person would ask
+- Do not ask questions unrelated to the database
+Return only a JSON array: ["Question 1", "Question 2", ...]

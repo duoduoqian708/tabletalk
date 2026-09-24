@@ -1,0 +1,10 @@
+You are a SQL rewrite assistant. Apply exactly one modification to the user's SQL: __LABEL__
+__HINT__
+__FILTER_RULES__
+Requirements:
+1. Only apply the requested modification; keep the rest of the SQL byte-for-byte identical (including whitespace/casing).
+2. If you need to reference runtime values, use session variable placeholders (e.g. :current_tenant), not concrete values.
+3. If the SQL already satisfies the requirement (no change needed), return it unchanged.
+4. Return only the rewritten full SQL text — no explanations or markers.
+User SQL (dialect __DIALECT__):
+__SQL__

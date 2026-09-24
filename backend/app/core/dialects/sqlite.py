@@ -90,7 +90,8 @@ class SQLiteAdapter(DialectAdapter):
             cur = await conn.execute(f'PRAGMA foreign_key_list("{t}")')
             for _id, _seq, ref_table, from_col, to_col, *_rest in await cur.fetchall():
                 fks.append(
-                    FKRef(table=t, column=from_col, ref_table=ref_table, ref_column=to_col or "id")
+                    FKRef(table=t, column=from_col, ref_table=ref_table,
+                          ref_column=to_col or "id", constraint_id=_id)
                 )
         return fks
 

@@ -1,7 +1,5 @@
-"""文本嵌入：异步 Embedder 协议 + 哈希(离线默认) + OpenAI 兼容 API（真语义）。
+"""文本嵌入：异步 Embedder 协议 + OpenAI 兼容 API。
 
-- HashingEmbedder：字符 unigram/bigram 哈希，离线、确定性、零依赖。只桥接"表面重叠"，
-  中文"退货率" ↔ 英文 return_rate 这类**语义**桥接需要真嵌入。
 - ApiEmbedder：调用任意 OpenAI 兼容 /embeddings 端点（Ollama / vLLM / bge-m3 网关 / 云端），
   由运行时设置决定。数据流向由配置决定：本地端点不出内网。
 
@@ -9,35 +7,17 @@
 """
 from __future__ import annotations
 
+import logging
 import math
-import zlib
 from typing import Protocol
 
 import httpx
 
-DIM = 256
+logger = logging.getLogger(__name__)
 
 
 class Embedder(Protocol):
     async def embed(self, text: str) -> list[float]: ...
-
-
-def _grams(text: str) -> list[str]:
-    """bigram 为主（权重 2），unigram 兜底（权重 1，CJK 单字重叠）。"""
-    chars = [c for c in text.lower() if not c.isspace()]
-    return [chars[i] + chars[i + 1] for i in range(len(chars) - 1)] + chars
-
-
-class HashingEmbedder:
-    """字符 n-gram 哈希到 DIM 维，L2 归一化。离线、零依赖、确定性。"""
-
-    async def embed(self, text: str) -> list[float]:
-        vec = [0.0] * DIM
-        for g in _grams(text):
-            idx = zlib.crc32(g.encode("utf-8")) % DIM
-            vec[idx] += 2.0 if len(g) == 2 else 1.0
-        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-        return [v / norm for v in vec]
 
 
 class ApiEmbedder:
@@ -47,31 +27,49 @@ class ApiEmbedder:
         self.base_url = base_url.rstrip("/")
         self.model = model or "bge-m3"
         self.api_key = api_key
+        self.last_usage: dict[str, int] | None = None  # 每次调用后的 usage（OpenAI 兼容）
+        self.total_usage: dict[str, int] = {"prompt_tokens": 0, "total_tokens": 0}  # 累计
 
     async def embed(self, text: str) -> list[float]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{self.base_url}/embeddings",
-                headers=headers,
-                json={"model": self.model, "input": [text]},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/embeddings",
+                    headers=headers,
+                    json={"model": self.model, "input": [text]},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except httpx.HTTPError as e:
+                status = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else None
+                logger.warning(
+                    "[kb.embedding] embed 请求失败 model=%s base=%s status=%s：%s",
+                    self.model, self.base_url, status, e,
+                )
+                raise
         vec = data["data"][0]["embedding"]
+        # 解析 usage（OpenAI 兼容 /embeddings 响应含 usage 字段）
+        usage = data.get("usage")
+        if usage and isinstance(usage, dict):
+            self.last_usage = {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "total_tokens": usage.get("total_tokens", usage.get("prompt_tokens", 0)),
+            }
+            self.total_usage["prompt_tokens"] += self.last_usage["prompt_tokens"]
+            self.total_usage["total_tokens"] += self.last_usage["total_tokens"]
+        else:
+            self.last_usage = None
+        logger.debug("[kb.embedding] model=%s tokens=%s", self.model, self.total_usage["total_tokens"])
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
 
 
 def make_embedder(provider: str, base_url: str = "", model: str = "", api_key: str = "") -> Embedder:
-    """按运行时设置选择嵌入实现：hash（默认，离线）或 api（真语义，可本地/云端）。"""
-    if provider == "api" and base_url:
-        return ApiEmbedder(base_url, model, api_key)
-    return HashingEmbedder()
+    """按运行时设置创建嵌入实现。base_url 为空时抛出 ValueError。"""
+    if not base_url:
+        raise ValueError("向量模型未配置（base_url 为空）。请在「系统设置 → 向量模型接入」配置 base_url、model、api_key 后重试。")
+    return ApiEmbedder(base_url, model, api_key)
 
-
-def cosine(a: list[float], b: list[float]) -> float:
-    """两个 L2 归一化向量的余弦相似度（即点积）。"""
-    return sum(x * y for x, y in zip(a, b))

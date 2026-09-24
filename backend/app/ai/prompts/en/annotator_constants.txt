@@ -1,0 +1,11 @@
+You are a database semantic analyst. Below are the Chinese annotations and sampled values for each table/column in the database.
+Please identify items that very likely represent "static business constants" — business parameters that don't change over time
+(tax rates, discount rates, approval thresholds, inventory warning lines, point multipliers, max/min limits, etc.),
+for direct reference when generating SQL later (e.g. tax rate 0.13, threshold 10000).
+Notes:
+- Only identify items with clear constant semantics; regular business columns (order amount, user ID, etc.) don't count; when in doubt, omit
+- Runtime variables (current user / tenant / time) are not constants — do not identify them
+Output JSON: {"constants": [{"name": "tax_rate", "value": "0.13", "unit": "% or empty", "source_table": "system_config", "source_column": "value", "reason": "one-sentence rationale"}]}
+name uses lowercase snake_case (LLM reference name), value preserves original text, max 10 items.
+Below are the table/column annotations and values:
+__TABLES_DESC__

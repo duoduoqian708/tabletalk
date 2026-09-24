@@ -56,6 +56,30 @@ async def test_connection_crud_and_schema(client):
     assert d.status_code == 200
 
 
+async def test_connection_sensitive_structured_roundtrip(client):
+    """段8：敏感名单支持精确名结构 {table, columns[]}，与旧 glob 字符串混排。"""
+    r = await client.post("/api/v1/connections", json={
+        "name": "sens", "dialect": "sqlite", "file": "/tmp/sens.db",
+        "sensitive": [
+            {"table": "secret_log"},
+            {"table": "customers", "columns": ["phone", "email"]},
+            "legacy_*",
+        ],
+    })
+    assert r.status_code == 201
+    cfg = r.json()
+    assert {"table": "secret_log"} in cfg["sensitive"]
+    assert {"table": "customers", "columns": ["phone", "email"]} in cfg["sensitive"]
+    assert "legacy_*" in cfg["sensitive"]
+    # 更新：整表排除（columns 空）+ glob 混排
+    u = await client.put(
+        f"/api/v1/connections/{cfg['id']}",
+        json={"sensitive": [{"table": "orders", "columns": []}, "payroll_*"]},
+    )
+    assert u.status_code == 200
+    assert u.json()["sensitive"] == [{"table": "orders", "columns": []}, "payroll_*"]
+
+
 async def test_query_gate_flow(client, conn_id):
     # 只读 → 放行
     r = await client.post("/api/v1/query", json={"connection_id": conn_id, "sql": "SELECT * FROM orders LIMIT 3"})
@@ -187,13 +211,21 @@ async def test_query_run_does_not_touch_sessions(client, conn_id):
 
 
 async def test_ai_test_gateway_bad_url(client):
-    # 无效 base_url（显式 local 走真实网络验证）→ ok=False + error
-    r = await client.post("/api/v1/ai/test", params={"provider": "local",
+    # 无效 base_url（显式 local 走真实网络验证）→ ok=False + error（SSE 格式）
+    r = await client.post("/api/v1/ai/test", params={"provider": "deepseek",
                                                      "base_url": "http://127.0.0.1:1/v1",
                                                      "api_key": "x", "model": "y"})
-    body = r.json()
-    assert body["ok"] is False
-    assert body["error"]
+    assert r.status_code == 200
+    # SSE 响应：取最后一个 data: 行的 done 事件
+    lines = r.text.strip().splitlines()
+    done_event = None
+    for line in lines:
+        if line.startswith("data: "):
+            done_event = json.loads(line[6:])
+    assert done_event is not None
+    assert done_event["step"] == "done"
+    assert done_event["ok"] is False
+    assert done_event["error"]
 
 
 async def test_query_readonly_conn_blocks_writes(client, app_state, demo_db):
@@ -233,17 +265,32 @@ async def test_audit_logged(client, conn_id):
 async def test_settings_update(client, app_state):
     # 默认不再内置模型 → 先塞一条，再测兼容字段代理与旧格式 PUT
     app_state.runtime.update({"ai_models": [{
-        "id": "llm_t", "name": "测试模型", "provider": "cloud",
+        "id": "llm_t", "name": "测试模型", "provider": "deepseek",
         "base_url": "https://x/v1", "model": "gpt-test", "api_key": "k",
     }], "default_ai_model": "llm_t"})
     r = await client.get("/api/v1/settings")
     body = r.json()
     # 兼容字段 ai_provider 代理到当前默认模型
     assert body["ai_provider"] == next(m["provider"] for m in body["ai_models"] if m["id"] == body["default_ai_model"])
-    r = await client.put("/api/v1/settings", json={"ai_provider": "local", "ai_base_url": "http://localhost:11434/v1"})
+    r = await client.put("/api/v1/settings", json={"ai_provider": "deepseek", "ai_base_url": "http://localhost:11434/v1"})
     body = r.json()
-    assert body["ai_provider"] == "local"
+    assert body["ai_provider"] == "deepseek"
     assert "•••" in body["ai_api_key"] or body["ai_api_key"] == ""
+
+
+async def test_settings_kb_build_reasoning_effort_validation(client, app_state):
+    """KB 构建推理档位：合法值可存；非法值拒绝并保留原值。"""
+    r = await client.get("/api/v1/settings")
+    assert r.json()["kb_build_reasoning_effort"] == "low", "默认浅推理"
+    # 合法升档
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "high"})
+    assert r.json()["kb_build_reasoning_effort"] == "high"
+    # 非法值拒绝 → 保留 high
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "max"})
+    assert r.json()["kb_build_reasoning_effort"] == "high"
+    # 可关
+    r = await client.put("/api/v1/settings", json={"kb_build_reasoning_effort": "off"})
+    assert r.json()["kb_build_reasoning_effort"] == "off"
 
 
 async def _build_and_wait(client, conn_id):
@@ -280,37 +327,49 @@ async def test_knowledge_build_retrieve_annotate(client, conn_id):
 
 async def test_knowledge_graph_and_overview(client, conn_id):
     await _build_and_wait(client, conn_id)
+    # 2026-08-31 修订：边默认 draft，确认后才进正式图
+    await client.post(f"/api/v1/knowledge/{conn_id}/confirm-all")
     # 图谱：FK 边存在
     g = await client.get(f"/api/v1/knowledge/{conn_id}/graph")
     assert g.json()["built"] is True
-    assert any(e["kind"] == "fk" for e in g.json()["edges"])
-    # 审查视图：表/列 + 确认状态字段
+    assert any(e["source"] == "fk" for e in g.json()["edges"])
+    # 审查视图（v2 按表组织）：表块含列数组与确认状态字段
     ov = await client.get(f"/api/v1/knowledge/{conn_id}/overview")
     o = ov.json()
     assert o["built"] is True
     assert len(o["tables"]) > 0
     assert "comment_status" in o["tables"][0]
     assert "tags" in o["tables"][0]
-    assert "type" in o["columns"][0]
+    assert "columns" in o["tables"][0]
+    assert "type" in o["tables"][0]["columns"][0]
+    assert "values" in o["tables"][0]["columns"][0] and "example" in o["tables"][0]["columns"][0]
 
 
 async def test_knowledge_tags_flow(client, conn_id):
     await _build_and_wait(client, conn_id)
     # AI 生成领域标签（mock 网关：按表名关键词）
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate-tags")
-    assert r.json()["tables"] > 0
-    # 标签库：全 draft，订单相关表共享"订单"标签
-    r = await client.get(f"/api/v1/knowledge/{conn_id}/tags")
     body = r.json()
-    assert len(body["library"]) > 0
-    assert all(t["status"] == "draft" for t in body["library"])
-    order_tables = [t for t, tags in body["tables"].items() if "订单" in tags]
+    assert body["tables"] > 0
+    assert body["domains"] > 0
+    new_names = [d["name"] for d in body["domain_list"]]
+    assert len(new_names) > 0
+    # 2026-09 版本制：全量构建标签不落库（不叠加）——library 为空，全集挂 round
+    r = await client.get(f"/api/v1/knowledge/{conn_id}/tags")
+    assert len(r.json()["library"]) == 0
+    ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    assert [t["name"] for t in ov["round"]["tags_new"]] == new_names
+    # 审核应用：全部采纳 → 标签库 confirmed + 订单相关表绑定（按新划分）
+    ap = await client.post(f"/api/v1/knowledge/{conn_id}/tags/apply-round",
+                           json={"keep_old": [], "adopt_new": new_names})
+    assert ap.json()["adopted"] == len(new_names)
+    lib = (await client.get(f"/api/v1/knowledge/{conn_id}/tags")).json()
+    assert len(lib["library"]) == len(new_names)
+    assert all(t["status"] == "confirmed" for t in lib["library"])
+    order_tables = [t for t, tags in lib["tables"].items() if "订单" in tags]
     assert any("order" in t.lower() for t in order_tables)
-    # 确认一个标签 → 可路由
-    name = body["library"][0]["name"]
-    c = await client.post(f"/api/v1/knowledge/{conn_id}/tags/confirm", json={"name": name})
-    assert c.json()["confirmed"] is True
     # 路由候选表
+    name = new_names[0]
     rt = await client.post(f"/api/v1/knowledge/{conn_id}/route", json={"table": "x", "tags": [name]})
     assert len(rt.json()["tables"]) >= 1
     # 拒绝一个标签
@@ -319,17 +378,18 @@ async def test_knowledge_tags_flow(client, conn_id):
     d = await client.post(f"/api/v1/knowledge/{conn_id}/tags/reject", json={"name": other})
     assert d.json()["rejected"] is True
     r = await client.post(f"/api/v1/knowledge/{conn_id}/annotate", json={"include_samples": False})
-    assert r.json()["added"] > 0
-    # 草案状态 = draft
-    docs = await client.get(f"/api/v1/knowledge/{conn_id}/docs")
-    drafts = [d for d in docs.json()["docs"] if d["source"] == "ai_draft"]
-    assert drafts and all(d["status"] == "draft" for d in drafts)
-    # 确认全部 → 变 confirmed
+    assert r.json()["items"] > 0  # items 可能为0（build 已创建全部 draft），重点是后续状态检查
+    # 2026-09 修订：草案 = 提案（proposed_*），当前 status 不受影响
+    ov = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    proposals = [c for t in ov["tables"] for c in t["columns"] if c.get("proposed_comment")]
+    assert proposals
+    # 确认全部 -> 提案提升为当前（confirmed）
     c = await client.post(f"/api/v1/knowledge/{conn_id}/confirm", json={})
     assert c.json()["confirmed"] >= 1
-    docs2 = await client.get(f"/api/v1/knowledge/{conn_id}/docs")
-    confirmed = [d for d in docs2.json()["docs"] if d["source"] == "ai_draft"]
-    assert all(d["status"] == "confirmed" for d in confirmed)
+    ov2 = (await client.get(f"/api/v1/knowledge/{conn_id}/overview")).json()
+    confirmed_cols = [c for t in ov2["tables"] for c in t["columns"]]
+    assert all(c["status"] == "confirmed" for c in confirmed_cols)
+    assert all(not c.get("proposed_comment") for c in confirmed_cols)
 
 
 async def test_sql_format(client):

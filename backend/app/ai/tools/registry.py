@@ -5,8 +5,25 @@ execute_tool 按工具名派发。这是 skill 框架的底层积木——任一
 """
 from __future__ import annotations
 
+import contextvars
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+# 当前会话（T3.3 load_result 按 session 隔离工件；跨 session 拒绝）。
+# loop 在每次 execute_tool 前设置，工具内读取；不进 handler 参数，避免扩大全量签名。
+_ACTIVE_SESSION: contextvars.ContextVar[str | None] = contextvars.ContextVar("active_session", default=None)
+
+
+def set_active_session(session_id: str | None):
+    return _ACTIVE_SESSION.set(session_id)
+
+
+def reset_active_session(token):
+    _ACTIVE_SESSION.reset(token)
+
+
+def get_active_session() -> str | None:
+    return _ACTIVE_SESSION.get()
 
 if TYPE_CHECKING:
     from app.state import AppState
@@ -21,7 +38,11 @@ class ToolOutcome:
 
 ToolHandler = Callable[..., Awaitable[ToolOutcome]]
 
+TRUST_LEVELS = ("readonly", "mutating", "destructive")
+CONFIRM_MODES = ("none", "card", "admin")
+
 TOOL_SCHEMAS: list[dict] = []
+TOOL_META: dict[str, dict] = {}
 _TOOL_HANDLERS: dict[str, ToolHandler] = {}
 
 
@@ -42,16 +63,30 @@ def register_tool(
     props: dict,
     required: list[str],
     handler: ToolHandler,
+    *,
+    trust: str | None = None,
+    confirm: str = "none",
+    audit_source: str | None = None,
 ) -> None:
+    # 铁律 3：能力"不能做"的最强保证是 tool 不存在；trust 元数据是注册强制项
+    if trust not in TRUST_LEVELS:
+        raise ValueError(f"tool '{name}' 缺少合法 trust（{TRUST_LEVELS}），拒绝注册")
+    if confirm not in CONFIRM_MODES:
+        raise ValueError(f"tool '{name}' confirm 必须为 {CONFIRM_MODES}")
     TOOL_SCHEMAS.append(_tool(name, description, props, required))
     _TOOL_HANDLERS[name] = handler
+    TOOL_META[name] = {"trust": trust, "confirm": confirm, "audit_source": audit_source}
 
 
-def tool_schemas(readonly: bool = False) -> list[dict]:
-    if not readonly:
-        return list(TOOL_SCHEMAS)
-    allow = {"get_schema", "describe_table", "run_query"}
-    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in allow]
+def validate_registry() -> None:
+    missing = [n for n in _TOOL_HANDLERS if n not in TOOL_META]
+    if missing:
+        raise ValueError(f"工具缺 trust 元数据，启动自检失败: {missing}")
+
+
+def tool_schemas() -> list[dict]:
+    """全量工具 schema（工具面收窄由调用方按 trust 元数据过滤，见 harness.py）。"""
+    return list(TOOL_SCHEMAS)
 
 
 async def execute_tool(

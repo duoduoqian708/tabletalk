@@ -1,8 +1,13 @@
 """审计日志路由。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import datetime as _dt
+import sqlite3
 
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+
+from app.core.timeutil import utc_from_local_midnight
 from app.state import get_state
 
 router = APIRouter(prefix="/api/v1", tags=["audit"])
@@ -20,8 +25,23 @@ async def audit_log(
     to_ts: str | None = None,
     report_id: str | None = None,
     source: str | None = None,
+    q: str | None = None,
+    exception: bool = False,
+    unread_only: bool = False,
+    cursor: int | None = None,
 ) -> dict:
     state = get_state()
+    cursor_mode = cursor is not None or bool(q) or exception or unread_only
+    if cursor_mode:
+        res = state.audit.page(
+            connection=connection, origin=origin, tier=tier, verdict=verdict,
+            q=q, exception=exception, unread_only=unread_only,
+            from_ts=from_ts, to_ts=to_ts,
+            before_id=int(cursor) if cursor and cursor > 0 else None,
+            limit=min(limit, 200),
+        )
+        next_cursor = res["items"][-1]["_id"] if res["has_more"] and res["items"] else None
+        return {"items": res["items"], "next_cursor": next_cursor}
     full = state.audit.list(
         connection=connection, origin=origin, tier=tier, verdict=verdict,
         from_ts=from_ts, to_ts=to_ts, report_id=report_id, source=source,
@@ -53,34 +73,38 @@ async def audit_egress(
 @router.get("/audit/weekly")
 async def audit_weekly(
     connection: str | None = None,
+    from_ts: str | None = None,
+    to_ts: str | None = None,
 ) -> dict:
     """周报摘要：按周聚合写操作、Top 表、异常提示。"""
     state = get_state()
-    full = state.audit.list(connection=connection)
-    # 按周分组（ts 前 10 为 YYYY-MM-DD，取周）
+    full = state.audit.list(connection=connection, from_ts=from_ts, to_ts=to_ts)
+    # 按周分组（ts 解析为本地时区后取周）
     from collections import Counter, defaultdict
-    import datetime
     weekly: dict[str, int] = defaultdict(int)
     top_tables: Counter = Counter()
     for e in full:
-        ts = e.get("ts", "")[:10]
+        raw = e.get("ts", "")
         try:
-            dt = datetime.datetime.strptime(ts, "%Y-%m-%d")
-            week = dt.strftime("%Y-W%V")
-            weekly[week] += 1
+            dt = _dt.datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            weekly[dt.strftime("%Y-W%V")] += 1
         except Exception:
             weekly["unknown"] += 1
         for t in e.get("tables") or []:
             top_tables[t] += 1
-    # 异常模式：深夜批量 UPDATE（22:00-05:00 且 verdict=review/block 且 tier=dml）
+    # 异常模式：本地深夜批量 UPDATE（22:00-05:00 且 verdict=review/block 且 tier=dml）
     anomalies: list[dict] = []
     for e in full:
-        ts = e.get("ts", "")
+        raw = e.get("ts", "")
         try:
-            hour = int(ts[11:13]) if len(ts) >= 13 else 12
-            if hour >= 22 or hour <= 5:
+            dt = _dt.datetime.fromisoformat(raw)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone()
+            if dt.hour >= 22 or dt.hour <= 5:
                 if e.get("tier") == "dml" and e.get("verdict") in ("review", "block"):
-                    anomalies.append({"ts": ts, "sql": e.get("sql", "")[:80], "verdict": e.get("verdict")})
+                    anomalies.append({"ts": raw, "sql": e.get("sql", "")[:80], "verdict": e.get("verdict")})
                     if len(anomalies) >= 5:
                         break
         except Exception:
@@ -128,3 +152,46 @@ async def audit_summary(
         "ai_ddl_count": ai_ddl,
         "review_count": review,
     }
+
+
+@router.get("/audit/signal")
+async def audit_signal(connection: str | None = None) -> dict:
+    """状态栏徽章轮询：未读异常 / 待审审批 / 今日拦截与待确认。极轻量。"""
+    state = get_state()
+    unread = state.audit.unread_exception_count(connection)
+    pending = len(state.approvals.list(status="pending"))
+    today_start = utc_from_local_midnight()
+    rows = state.audit.list(connection=connection, from_ts=today_start)
+    blocked = sum(1 for e in rows if e.get("verdict") == "block")
+    review = sum(1 for e in rows if e.get("verdict") == "review")
+    return {
+        "unread_exceptions": unread,
+        "pending_approvals": pending,
+        "today": {"blocked": blocked, "review": review},
+    }
+
+
+@router.get("/audit/stats")
+async def audit_stats(scope: str = "30d", connection: str | None = None) -> dict:
+    """三档统计：today=小时桶(当日0点起)；7d/30d=天桶。口径=本地时区日。"""
+    if scope == "today":
+        since = utc_from_local_midnight(); fmt = "%Y-%m-%dT%H:00:00"; gran = "hour"
+    elif scope == "7d":
+        since = utc_from_local_midnight(days_ago=6); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+    else:
+        since = utc_from_local_midnight(days_ago=29); fmt = "%Y-%m-%dT00:00:00"; gran = "day"
+    buckets = get_state().audit.stats_buckets(connection, since, fmt)
+    return {"scope": scope, "granularity": gran, "buckets": buckets}
+
+
+class AckRequest(BaseModel):
+    state: str = "ack"
+
+
+@router.post("/audit/{audit_id}/ack")
+async def ack_audit(audit_id: int, req: AckRequest) -> dict:
+    try:
+        get_state().audit.ack(int(audit_id))
+    except sqlite3.IntegrityError:
+        pass
+    return {"ok": True}

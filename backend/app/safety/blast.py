@@ -17,16 +17,19 @@ def build_blast(
 ) -> dict[str, Any] | None:
     if not direct_tables:
         return None
-    # 无知识库时仅返回直接表
+    # 无知识库时仅返回直接表（优先公共接口，兼容测试替身）
     try:
-        raw_graph = getattr(state.knowledge, "_graph", {})
-        if isinstance(raw_graph, dict) and "edges" in raw_graph:
-            # 测试替身直接为 {"edges": [...]}
-            graph = raw_graph
+        if hasattr(state.knowledge, "graph") and callable(getattr(state.knowledge, "graph")):
+            graph = state.knowledge.graph(conn_id)
         else:
-            graph = raw_graph.get(conn_id, {}) if isinstance(raw_graph, dict) else {}
+            raw_graph = getattr(state.knowledge, "_graph", {})
+            if isinstance(raw_graph, dict) and "edges" in raw_graph:
+                # 测试替身直接为 {"edges": [...]}
+                graph = raw_graph
+            else:
+                graph = raw_graph.get(conn_id, {}) if isinstance(raw_graph, dict) else {}
         edges = graph.get("edges", []) if isinstance(graph, dict) else []
-        fk_edges = [e for e in edges if e.get("kind") == "fk"]
+        fk_edges = [e for e in edges if e.get("source") == "fk"]
     except Exception:
         fk_edges = []
 
@@ -37,7 +40,6 @@ def build_blast(
     cascade: list[dict[str, Any]] = []
     try:
         seeds = set(direct_tables)
-        # 构建邻接表（带边信息）
         adj: dict[str, list[dict[str, Any]]] = {}
         for e in fk_edges:
             adj.setdefault(e["from"], []).append(e)

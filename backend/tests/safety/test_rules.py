@@ -99,3 +99,108 @@ def test_reason_bilingual():
     assert r.get("message") and r.get("message_en")
     assert any("\u4e00" <= ch <= "\u9fff" for ch in r["message"])  # 中文
     assert all(ord(ch) < 128 or ch.isspace() or ch in "—·" for ch in r["message_en"][:1]) or "Failed" in r["message_en"] or "missing" in r["message_en"].lower()
+
+
+# ── 规则覆盖（严格度阶梯：只许更严，floor 不可放宽） ────────────────────────
+
+def _ovr(sql, ov=None, origin=Origin.MANUAL):
+    infos = parse_sql(sql, "sqlite")
+    rules = run_rules(infos, origin, ov)
+    return aggregate(infos, rules)
+
+
+def test_override_tightens_dml_confirm_to_block():
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1", {"dml-confirm": "block"})
+    assert agg["verdict"] == Verdict.BLOCK
+    r = next(x for x in agg["rules"] if x.rule == "dml-confirm")
+    assert r.verdict == Verdict.BLOCK
+    assert "配置收严" in r.reason  # A1 可解释：reasons 留痕 override 来源
+
+
+def test_override_loosening_rejected():
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1", {"dml-confirm": "allow"})
+    assert agg["verdict"] == Verdict.REVIEW  # 放宽被忽略
+    r = next(x for x in agg["rules"] if x.rule == "dml-confirm")
+    assert r.verdict == Verdict.REVIEW and "配置收严" not in r.reason
+
+
+def test_floor_rule_cannot_relax():
+    # dml-no-where 默认 BLOCK → 覆盖 allow 被忽略
+    agg = _ovr("UPDATE orders SET status='paid'", {"dml-no-where": "allow"})
+    assert agg["verdict"] == Verdict.BLOCK
+
+
+def test_floor_rule_can_tighten_but_not_relax():
+    # parse-failure 默认 REVIEW → 可收严为 block
+    agg = _ovr("SELECT * FROM WHERE", {"parse-failure": "block"})
+    assert agg["verdict"] == Verdict.BLOCK
+    # 放宽回 allow 被忽略
+    agg2 = _ovr("SELECT * FROM WHERE", {"parse-failure": "allow"})
+    assert agg2["verdict"] == Verdict.REVIEW
+
+
+def test_override_invalid_or_unknown_values_dropped():
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1", {"dml-confirm": "banana", "not-a-rule": "block"})
+    assert agg["verdict"] == Verdict.REVIEW
+    assert all(x.rule != "not-a-rule" for x in agg["rules"])
+
+
+def test_read_no_limit_overridden_to_review():
+    agg = _ovr("SELECT * FROM orders", {"read-no-limit": "review"})
+    assert agg["verdict"] == Verdict.REVIEW
+    r = next(x for x in agg["rules"] if x.rule == "read-no-limit")
+    assert "配置收严" in r.reason
+
+
+def test_override_none_is_backward_compatible():
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1")
+    r = next(x for x in agg["rules"] if x.rule == "dml-confirm")
+    assert r.verdict == Verdict.REVIEW and "配置收严" not in r.reason
+
+
+def test_normalize_gate_rules_contract():
+    from app.safety.rules import normalize_gate_rules
+
+    # 只保留「已知 + 合法 + 严格更严」；旧 bool 语义丢弃
+    out = normalize_gate_rules({"dml-confirm": "block", "read-no-limit": "review",
+                                "parse-failure": "allow", "dml-no-where": "allow",
+                                "fake": "block", "tcl-confirm": True})
+    assert out.get("dml-confirm") == "block"
+    assert out.get("read-no-limit") == "review"
+    assert "parse-failure" not in out  # 放宽
+    assert "dml-no-where" not in out    # 放宽
+    assert "fake" not in out            # 未知规则
+    assert isinstance(normalize_gate_rules(None), dict) and isinstance(normalize_gate_rules("x"), dict)
+
+
+# ── 定时任务身份（Origin.SCHEDULED）：INSERT 放行，其余 DML / DDL 仍被拦 ──
+
+def test_scheduled_insert_allowed():
+    agg = _ovr("INSERT INTO orders (id, region) VALUES (1, 'n')", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.ALLOW
+    r = next(x for x in agg["rules"] if x.rule == "scheduled-insert")
+    assert r.verdict == Verdict.ALLOW
+
+
+def test_scheduled_update_with_where_still_review():
+    # 无人确认 → 实际不会执行
+    agg = _ovr("UPDATE orders SET status='paid' WHERE id=1", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.REVIEW
+    assert all(x.rule != "scheduled-insert" for x in agg["rules"])
+
+
+def test_scheduled_no_where_update_blocked():
+    agg = _ovr("UPDATE orders SET status='paid'", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.BLOCK
+    assert any(x.rule == "dml-no-where" for x in agg["rules"])
+
+
+def test_scheduled_ddl_blocked():
+    agg = _ovr("DROP TABLE orders", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.BLOCK
+    assert any(x.rule == "ddl-scheduled" for x in agg["rules"])
+
+
+def test_scheduled_read_allowed():
+    agg = _ovr("SELECT * FROM orders", None, origin=Origin.SCHEDULED)
+    assert agg["verdict"] == Verdict.ALLOW

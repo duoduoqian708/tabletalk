@@ -27,6 +27,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     ...((init.headers as Record<string, string>) ?? {})
   }
   if (r.token) headers['X-TableTalk-Token'] = r.token
+  // 注入语言偏好：后端 contextvar → prompts.render() 根据 locale 选 zh/en 模板
+  const locale = useI18n.getState().locale
+  if (locale) headers['X-Locale'] = locale
   const dbgStart = import.meta.env.DEV ? performance.now() : 0
   if (import.meta.env.DEV) console.log(`[tabletalk][api] ${init.method ?? 'GET'} ${path}`)
   const res = await fetch(`${r.baseUrl}${path}`, { ...init, headers })

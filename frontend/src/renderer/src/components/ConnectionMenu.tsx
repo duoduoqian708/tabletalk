@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConnections } from '@renderer/store/connections'
 import { useI18n } from '@renderer/store/i18n'
+import { IconCheck, IconPlus } from './ui/icons'
 
 interface Props {
   onNew: () => void
@@ -46,13 +47,13 @@ export function ConnectionMenu({ onNew }: Props): React.JSX.Element {
                 {c.dialect}
                 {c.read_only ? ' · ' + t('conn.readOnly') : ''}
               </span>
-              {c.id === currentId && <span className="m-check">✓</span>}
+              {c.id === currentId && <span className="m-check"><IconCheck size={9} /></span>}
             </button>
           ))}
           <div className="sep" />
           <button className="mi" onClick={() => { setOpen(false); onNew() }}>
             <span style={{ width: 7 }} />
-            <span>＋ {t('conn.menu.newConnection')}</span>
+            <span><IconPlus size={9} /> {t('conn.menu.newConnection')}</span>
           </button>
         </div>
       )}

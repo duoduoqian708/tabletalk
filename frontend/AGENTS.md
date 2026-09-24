@@ -8,7 +8,7 @@ State = **zustand 4.5 only**. No router library, no chart/graph lib (all hand-ro
 ## Critical non-obvious behaviors
 
 - **No router.** "Pages" are a zustand enum `useUi.view`
-  (`'workspace'|'gate'|'knowledge'|'graph'|'audit'`). No URLs/deep-links; refresh
+  (`'workspace'|'knowledge'|'graph'|'audit'|'tasks'|'cost'`). No URLs/deep-links; refresh
   returns to `workspace`. First run with no connections → onboarding → "使用演示库".
 - **Token lives in a module singleton** `rt` in `src/renderer/src/api/client.ts`
   (NOT a store). `useBootstrap` polls `GET /api/v1/bootstrap` **untokened** every

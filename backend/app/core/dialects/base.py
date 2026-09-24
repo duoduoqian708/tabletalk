@@ -54,6 +54,7 @@ class FKRef:
     column: str
     ref_table: str
     ref_column: str
+    constraint_id: int | None = None  # 同一复合 FK 的多列对共享；None=未知（不合并）
 
 
 class DialectAdapter(ABC):
@@ -103,3 +104,11 @@ class DialectAdapter(ABC):
     async def explain(self, conn: Any, sql: str) -> dict[str, Any]:
         """估算查询成本（行数、上界）。默认不实现，返回空，由调用方降级为不做成本检查。"""
         return {"estimated_rows": None, "is_scan": False, "detail": "not implemented"}
+
+    async def set_read_only(self, conn: Any, flag: bool) -> None:
+        """连通测试**通过后**才把"是否只读"应用到数据库会话（标记/强化）。
+
+        设计约定：connect() 一律裸连接，不做任何会话设置——read_only 是应用层标记
+        （闸门用它拦截写操作），数据库会话级只读仅在测试通过后按需补设。
+        默认 no-op；PG/MySQL 各自实现。
+        """
